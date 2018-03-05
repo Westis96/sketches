@@ -1,7 +1,7 @@
 function Ball() {
-  this.pos = createVector(width / 2, height / 2);
+  this.pos = createVector((pgWidth / 3) + random(-10, 100) , (pgHeight / 2));
 
-  this.r = 30;
+  this.r = 10;
   this.vel = createVector(1, 1).mult(4);
   this.direction = createVector(1, 1);
 
@@ -11,11 +11,11 @@ function Ball() {
   }
 
   this.display = function() {
-    ellipse(this.pos.x, this.pos.y, this.r * 2, this.r * 2);
+    pg.ellipse(this.pos.x, this.pos.y, this.r * 2, this.r * 2);
   }
 
   this.checkEdges = function() {
-    if (this.pos.x > width - this.r && this.direction.x > 0) {
+    if (this.pos.x > pgWidth - this.r && this.direction.x > 0) {
       this.direction.x *= -1;
     }
     if (this.pos.x < this.r && this.direction.x < 0) {

@@ -5,9 +5,13 @@ var bricks = [];
 var playingGame = false;
 var youWin = false;
 var winText;
+var pg;
+var pgWidth = 400;
+var pgHeight = 400;
 
 function setup() {
-  createCanvas(windowWidth, windowHeight);
+  createCanvas(windowWidth, windowHeight, WEBGL);
+  pg = createGraphics(pgWidth, pgHeight);
 
   paddle = new Paddle();
   ball = new Ball();
@@ -19,7 +23,8 @@ function setup() {
 }
 
 function draw() {
-  background(255);
+  background(0);
+  pg.background(50);
 
   // bricks
   for (var i = 0; i < bricks.length; i++) {
@@ -39,6 +44,7 @@ function draw() {
   if (playingGame) paddle.checkEdges();
   if (playingGame) paddle.update();
 
+
   // ball
   if (ball.meets(paddle)) {
     if (ball.direction.y > 0) ball.direction.y *= -1;
@@ -47,9 +53,10 @@ function draw() {
   if (playingGame) ball.checkEdges();
   if (playingGame) ball.update();
 
+
   // game logics
-  if (ball.pos.y > height) {
-    ball.pos = createVector(width / 2, height / 2);
+  if (ball.pos.y > pgHeight) {
+    ball.pos = createVector(pgWidth / 2, pgHeight / 2);
     playingGame = false;
   }
 
@@ -63,6 +70,17 @@ function draw() {
   } else {
     winText.style('display', 'none');
   }
+
+  rotateZ(frameCount * 0.01);
+  rotateX(frameCount * 0.01);
+  rotateY(frameCount * 0.01);
+  texture(pg);
+  box(400, 400, 400);
+
+
+
+
+
 }
 
 function keyReleased() {
