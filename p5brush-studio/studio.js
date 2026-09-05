@@ -70,9 +70,10 @@ _m.rect(10, 10, 15, 15);`;
   //    runs in p5 with angleMode(DEGREES), so we wrap the surface with a p5-like
   //    API: fill(gray, alpha), fill(r,g,b,a), degrees, rectMode, shapes…
   // ---------------------------------------------------------------------------
-  function createTipShim(surface, degrees = true) {
+  function createTipShim(surface) {
     const ctx = surface.drawingContext;
-    const st = { fill: 'rgb(255,255,255)', stroke: null, lineWidth: 1, degrees, rectMode: 'corner', ellipseMode: 'center', shape: null };
+    // Radians by default: a p5.Graphics keeps RADIANS even when the sketch calls angleMode(DEGREES).
+    const st = { fill: 'rgb(255,255,255)', stroke: null, lineWidth: 1, degrees: false, rectMode: 'corner', ellipseMode: 'center', shape: null };
     const stack = [];
     const ang = (a) => (st.degrees ? (a * Math.PI) / 180 : a);
     const n255 = (v) => clamp(Math.round(v), 0, 255);
@@ -186,7 +187,7 @@ _m.rect(10, 10, 15, 15);`;
       quadraticVertex(cx, cy, x, y) { ctx.quadraticCurveTo(cx, cy, x, y); st.shape++; },
       endShape(mode) { if (mode === 'close') ctx.closePath(); paint(); st.shape = null; },
       noSmooth() {}, smooth() {}, pixelDensity() { return 1; },
-      random(a = 1, b) { return b === undefined ? Math.random() * a : a + Math.random() * (b - a); },
+      random: brush.random,
       map(v, a, b, c, d) { return c + ((v - a) / (b - a)) * (d - c); },
       lerp(a, b, t) { return a + (b - a) * t; },
       radians(d) { return (d * Math.PI) / 180; },
@@ -196,13 +197,27 @@ _m.rect(10, 10, 15, 15);`;
     return m;
   }
 
-  function compileTip(source, degrees = false) {
+  function compileTip(source) {
     // The tip body is authored exactly as in the Brush Maker: statements on `_m`.
-    // NOTE: a p5.Graphics keeps its own angleMode (RADIANS) even when the sketch
-    // calls angleMode(DEGREES), so the faithful default is radians.
     // eslint-disable-next-line no-new-func
     const fn = new Function('_m', source);
-    return (surface) => fn(createTipShim(surface, degrees));
+    return (surface) => fn(createTipShim(surface));
+  }
+
+  /** Throws if the tip source does not run on a scratch 2D surface. */
+  function checkTip(source) {
+    compileTip(source)({ drawingContext: document.createElement('canvas').getContext('2d') });
+  }
+
+  // Angle units are expressed *in* the tip source, as a leading angleMode() line,
+  // so a spec round-trips through copy/paste and the p5 sketch export unchanged.
+  const ANGLE_LINE = '_m.angleMode("degrees");';
+  const tipUsesDegrees = (src) => /^\s*_m\.angleMode\s*\(\s*(["'])degrees\1/i.test(src);
+  function setTipDegrees(src, degrees) {
+    const lines = src.split('\n');
+    if (lines.length && /^\s*_m\.angleMode\s*\(/.test(lines[0])) lines.shift();
+    if (degrees) lines.unshift(ANGLE_LINE);
+    return lines.join('\n');
   }
 
   // ---------------------------------------------------------------------------
@@ -297,14 +312,13 @@ _m.rect(10, 10, 15, 15);`;
       gl.activeTexture(gl.TEXTURE0);
     }
     _end() {
-      // Leave GL the way p5.brush's standalone adapter expects to find it.
+      // Unbind what _begin/draw bound. p5.brush re-arms program, VAO and blend
+      // state itself before every draw and composite pass.
       const gl = this.gl;
       gl.bindVertexArray(null);
       gl.bindTexture(gl.TEXTURE_2D, null);
       gl.useProgram(null);
       gl.enable(gl.BLEND);
-      gl.blendEquation(gl.FUNC_ADD);
-      gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     }
     blit(tex) {
       const gl = this.gl;
@@ -318,10 +332,10 @@ _m.rect(10, 10, 15, 15);`;
     }
     snapshot(tex) {
       const gl = this.gl;
-      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      this._begin();
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.copyTexImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 0, 0, this.w, this.h, 0);
-      gl.bindTexture(gl.TEXTURE_2D, null);
+      this._end();
     }
     eraseDabs(dabs, hardness = 0.6) {
       // dabs: [{x, y, r}] in device pixels, y measured from the top.
@@ -367,7 +381,6 @@ _m.rect(10, 10, 15, 15);`;
   const S = {
     spec: clone(DEFAULT_SPEC),
     tipSource: DEFAULT_TIP_SOURCE,
-    tipDegrees: false,       // false = p5.Graphics/standalone behaviour (radians)
     size: 1,                 // brush.set(name, color, size) → strokeWeight
     color: '#1a1c23',
     paper: 'hotpress',
@@ -387,57 +400,48 @@ _m.rect(10, 10, 15, 15);`;
   let cssW = 0, cssH = 0, dpr = 1, glW = 1, glH = 1;
   let live = null;          // in-progress stroke
   let previewQueued = false;
-  let lastStampCount = 0;
 
   // ---------------------------------------------------------------------------
-  // 5. Brush registration (bounded pool of p5.brush brush names)
+  // 5. Brush registration
+  //    One p5.brush brush per distinct tip source (the only thing that needs the
+  //    500×500 rasterisation). p5.brush reads the params object we hand to
+  //    brush.add() by reference at stroke time — the same contract its own
+  //    scaleBrushes() relies on — so per-stroke numbers are patched in place.
   // ---------------------------------------------------------------------------
-  const POOL = 24;
-  const registry = new Map(); // key → { name, tick }
+  const POOL = 8;
+  const registry = new Map(); // tipSource → { name, params, tick }
   let regTick = 0;
 
-  function specForRecord(rec) {
-    // The record carries the exact spec used; 'stylus' pressure mode swaps the
-    // simulated envelope for a constant so only the plot pressure remains.
-    const spec = clone(rec.spec);
-    if (rec.pressureMode === 'stylus') {
-      spec.pressure = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
-    }
-    return spec;
-  }
-
-  function brushKey(rec) {
-    return JSON.stringify(specForRecord(rec)) + '|' + rec.tipSource + '|' + (rec.tipDegrees ? 'deg' : 'rad') + '|' + rec.pressureMode;
-  }
-
   function ensureRegistered(rec) {
-    const key = brushKey(rec);
-    let entry = registry.get(key);
-    if (entry) { entry.tick = ++regTick; return entry.name; }
-    let name;
-    if (registry.size < POOL) {
-      name = 'studio-' + registry.size;
-    } else {
-      // Evict least-recently-used pool slot.
-      let oldest = null, oldestKey = null;
-      for (const [k, e] of registry) if (!oldest || e.tick < oldest.tick) { oldest = e; oldestKey = k; }
-      registry.delete(oldestKey);
-      name = oldest.name;
+    let entry = registry.get(rec.tipSource);
+    if (!entry) {
+      let name = 'studio-' + registry.size;
+      if (registry.size >= POOL) {
+        let oldestKey = null;
+        for (const [k, e] of registry) if (oldestKey === null || e.tick < registry.get(oldestKey).tick) oldestKey = k;
+        name = registry.get(oldestKey).name;
+        registry.delete(oldestKey);
+      }
+      const params = Object.assign(clone(rec.spec), { tip: compileTip(rec.tipSource) });
+      brush.add(name, params);
+      entry = { name, params };
+      registry.set(rec.tipSource, entry);
     }
-    const params = specForRecord(rec);
-    params.tip = compileTip(rec.tipSource, !!rec.tipDegrees);
-    brush.add(name, params);
-    registry.set(key, { name, tick: ++regTick });
-    return name;
+    entry.tick = ++regTick;
+    const { params } = entry, sp = rec.spec;
+    params.weight = sp.weight; params.scatter = sp.scatter; params.opacity = sp.opacity;
+    params.spacing = sp.spacing; params.noise = clamp(sp.noise, 0, 1);
+    params.rotate = sp.rotate; params.markerTip = sp.markerTip;
+    params.pressure = { type: 'gaussian', mode: 'gaussian', curve: sp.pressure.curve, min_max: sp.pressure.min_max };
+    return entry.name;
   }
 
   // ---------------------------------------------------------------------------
-  // 6. Path → brush.Plot
+  // 6. Path → segments (shared by rendering and the p5 sketch export)
   // ---------------------------------------------------------------------------
   function resamplePath(points, segLen) {
     // Uniform arc-length resampling. Segment boundaries then align with p5.brush's
     // stamping step (segLen is a multiple of spacing), avoiding integration drift.
-    if (points.length === 0) return [];
     const out = [{ x: points[0].x, y: points[0].y, p: points[0].p }];
     let carry = 0;
     for (let i = 1; i < points.length; i++) {
@@ -456,12 +460,13 @@ _m.rect(10, 10, 15, 15);`;
     const last = points[points.length - 1];
     const tail = out[out.length - 1];
     if (Math.hypot(last.x - tail.x, last.y - tail.y) > segLen * 0.35) out.push({ x: last.x, y: last.y, p: last.p });
+    // A tap still needs a plot with length: make it a tiny dash.
+    if (out.length < 2) out.push({ x: out[0].x + segLen, y: out[0].y, p: out[0].p });
     return out;
   }
 
   function segmentLengthFor(spacing) {
-    const k = Math.max(1, Math.round(2 / spacing));
-    return spacing * k;
+    return spacing * Math.max(1, Math.round(2 / spacing));
   }
 
   function mapStylus(p, sensitivity) {
@@ -469,41 +474,33 @@ _m.rect(10, 10, 15, 15);`;
     return clamp(Math.pow(Math.max(p, 0.02) / 0.5, 0.75 * sensitivity), 0.3, 1.6);
   }
 
-  function pressureFnFor(rec) {
-    if (rec.pressureMode === 'gaussian') return () => 1;
-    const s = rec.sensitivity;
-    return (pt) => mapStylus(pt.p, s);
-  }
-
-  function buildPlot(rec) {
-    const segLen = segmentLengthFor(rec.spec.spacing);
-    let pts = resamplePath(rec.points, segLen);
-    if (pts.length < 2) {
-      const p0 = pts[0] || rec.points[0];
-      pts = [p0, { x: p0.x + segLen, y: p0.y, p: p0.p }];
-    }
-    const pf = pressureFnFor(rec);
-    const plot = new brush.Plot('curve');
-    let lastA = 0, stamps = 0;
+  /** { origin, segs: [{ a (deg), len, p }], endA, endP, stamps } for a brush record. */
+  function strokeSegments(rec) {
+    const pts = resamplePath(rec.points, segmentLengthFor(rec.spec.spacing));
+    const pf = rec.pressureMode === 'gaussian' ? () => 1 : (pt) => mapStylus(pt.p, rec.sensitivity);
+    const segs = [];
+    let a = 0, stamps = 0;
     for (let i = 1; i < pts.length; i++) {
       const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
       const len = Math.hypot(dx, dy);
       if (len < 1e-6) continue;
-      lastA = (Math.atan2(-dy, dx) * 180) / Math.PI;
-      plot.addSegment(lastA, len, pf(pts[i - 1]), true);
+      a = ((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360;
+      segs.push({ a, len, p: pf(pts[i - 1]) });
       stamps += len / rec.spec.spacing;
     }
-    plot.endPlot(lastA, pf(pts[pts.length - 1]), true);
-    lastStampCount = Math.round(stamps);
-    return { plot, origin: pts[0] };
+    return { origin: pts[0], segs, endA: a, endP: pf(pts[pts.length - 1]), stamps: Math.round(stamps) };
   }
 
   // ---------------------------------------------------------------------------
   // 7. Rendering
   // ---------------------------------------------------------------------------
+  /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
   function renderBrushStroke(rec) {
     const name = ensureRegistered(rec);
-    const { plot, origin } = buildPlot(rec);
+    const { origin, segs, endA, endP, stamps } = strokeSegments(rec);
+    const plot = new brush.Plot('curve');
+    for (const s of segs) plot.addSegment(s.a, s.len, s.p, true);
+    plot.endPlot(endA, endP, true);
     brush.seed(rec.seed);
     brush.push();
     brush.translate(-glW / 2, -glH / 2); // p5.brush origin is the canvas centre
@@ -512,18 +509,19 @@ _m.rect(10, 10, 15, 15);`;
     plot.draw(origin.x, origin.y, 1);
     brush.pop();
     brush.render();
+    return stamps;
   }
 
-  function eraserDabsFor(rec, fromIndex = 1) {
+  /** Eraser dabs (device px) for the record's points from index `from` on. */
+  function eraserDabs(rec, from) {
     const dabs = [];
     const r = (rec.size / 2) * dpr;
     const step = Math.max(0.75, rec.size * 0.12);
     const pts = rec.points;
-    if (pts.length === 1 || fromIndex === 0) dabs.push({ x: pts[0].x * dpr, y: pts[0].y * dpr, r });
-    for (let i = Math.max(1, fromIndex); i < pts.length; i++) {
+    if (from === 0) dabs.push({ x: pts[0].x * dpr, y: pts[0].y * dpr, r });
+    for (let i = Math.max(1, from); i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
-      const len = Math.hypot(b.x - a.x, b.y - a.y);
-      const n = Math.max(1, Math.ceil(len / step));
+      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step));
       for (let k = 1; k <= n; k++) {
         const t = k / n;
         dabs.push({ x: (a.x + (b.x - a.x) * t) * dpr, y: (a.y + (b.y - a.y) * t) * dpr, r });
@@ -533,73 +531,71 @@ _m.rect(10, 10, 15, 15);`;
   }
 
   function renderRecord(rec) {
-    if (rec.tool === 'eraser') sgl.eraseDabs(eraserDabsFor(rec, 0));
+    if (rec.tool === 'eraser') sgl.eraseDabs(eraserDabs(rec, 0));
     else renderBrushStroke(rec);
   }
 
-  function rebuildFrom(startCount, baseTex) {
+  /** Restores `baseTex`, draws `records` on top, and stores the result as committed. */
+  function paint(baseTex, records) {
     sgl.blit(baseTex);
-    for (let i = startCount; i < S.strokes.length; i++) renderRecord(S.strokes[i]);
+    for (const rec of records) renderRecord(rec);
     sgl.snapshot(sgl.committedTex);
   }
 
-  function rebuildAll() {
-    // Checkpoints are resolution-bound; drop them and replay from the paper.
-    for (const c of S.checkpoints) sgl.deleteTexture(c.tex);
-    S.checkpoints = [];
-    rebuildFrom(0, sgl.paperTex);
+  /** Drops checkpoints taken after `count` strokes. */
+  function truncateCheckpoints(count) {
+    while (S.checkpoints.length && S.checkpoints[S.checkpoints.length - 1].count > count) {
+      sgl.deleteTexture(S.checkpoints.pop().tex);
+    }
   }
 
-  function maybeCheckpoint() {
+  /** Rebuilds the committed image for the current stroke list from the newest usable checkpoint. */
+  function rebuild() {
     const n = S.strokes.length;
-    if (n === 0 || n % CHECKPOINT_EVERY !== 0) return;
-    const tex = sgl.createTexture();
-    sgl.snapshot(tex);
-    S.checkpoints.push({ count: n, tex });
-    while (S.checkpoints.length > MAX_CHECKPOINTS) sgl.deleteTexture(S.checkpoints.shift().tex);
+    truncateCheckpoints(n);
+    const cp = S.checkpoints[S.checkpoints.length - 1];
+    if (cp) paint(cp.tex, S.strokes.slice(cp.count));
+    else paint(sgl.paperTex, S.strokes);
   }
 
-  function commitRecord(rec) {
-    sgl.blit(sgl.committedTex);
-    renderRecord(rec);
+  /** Appends a record whose pixels are already in the framebuffer. */
+  function pushRecord(rec, { clearRedo = true } = {}) {
     sgl.snapshot(sgl.committedTex);
     S.strokes.push(rec);
-    S.redo = [];
-    maybeCheckpoint();
+    if (clearRedo) S.redo = [];
+    const n = S.strokes.length;
+    if (n % CHECKPOINT_EVERY === 0) {
+      const tex = sgl.createTexture();
+      sgl.snapshot(tex);
+      S.checkpoints.push({ count: n, tex });
+      while (S.checkpoints.length > MAX_CHECKPOINTS) sgl.deleteTexture(S.checkpoints.shift().tex);
+    }
     updateHistoryButtons();
+  }
+
+  function commitRecord(rec, opts) {
+    sgl.blit(sgl.committedTex);
+    renderRecord(rec);
+    pushRecord(rec, opts);
   }
 
   function undo() {
     if (!S.strokes.length) { showToast('Nothing to undo'); return; }
     S.redo.push(S.strokes.pop());
-    const n = S.strokes.length;
-    while (S.checkpoints.length && S.checkpoints[S.checkpoints.length - 1].count > n) {
-      sgl.deleteTexture(S.checkpoints.pop().tex);
-    }
-    const cp = S.checkpoints[S.checkpoints.length - 1];
-    if (cp) rebuildFrom(cp.count, cp.tex); else rebuildFrom(0, sgl.paperTex);
+    rebuild();
     updateHistoryButtons();
     showToast('Undo');
   }
 
   function redo() {
     if (!S.redo.length) return;
-    const rec = S.redo.pop();
-    sgl.blit(sgl.committedTex);
-    renderRecord(rec);
-    sgl.snapshot(sgl.committedTex);
-    S.strokes.push(rec);
-    maybeCheckpoint();
-    updateHistoryButtons();
+    commitRecord(S.redo.pop(), { clearRedo: false });
     showToast('Redo');
   }
 
   function clearCanvas() {
     S.strokes = []; S.redo = [];
-    for (const c of S.checkpoints) sgl.deleteTexture(c.tex);
-    S.checkpoints = [];
-    sgl.blit(sgl.paperTex);
-    sgl.snapshot(sgl.committedTex);
+    rebuild();
     updateHistoryButtons();
     showToast('White paper pristine');
   }
@@ -650,6 +646,13 @@ _m.rect(10, 10, 15, 15);`;
     sgl.uploadPaper(c);
   }
 
+  /** Paper changed: checkpoints embed the old paper, so replay everything. */
+  function repaintPaper() {
+    renderPaper();
+    truncateCheckpoints(-1);
+    rebuild();
+  }
+
   // ---------------------------------------------------------------------------
   // 9. Canvas sizing + p5.brush target
   // ---------------------------------------------------------------------------
@@ -667,8 +670,7 @@ _m.rect(10, 10, 15, 15);`;
     sgl.setSize(glW, glH);
     brush.load(canvas);      // (re)registers the target with its new size
     brush.noFill(); brush.noHatch(); brush.noField();
-    renderPaper();
-    rebuildAll();
+    repaintPaper();
   }
 
   let resizeTimer = 0;
@@ -683,18 +685,19 @@ _m.rect(10, 10, 15, 15);`;
   function pointFromEvent(e, rect) {
     let p = e.pressure;
     if (!(p > 0)) p = e.pointerType === 'pen' ? 0.02 : 0.5;
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top, p, tx: e.tiltX || 0, ty: e.tiltY || 0 };
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top, p };
   }
 
-  function newRecord(firstPt) {
-    if (S.tool === 'eraser') {
-      return { tool: 'eraser', size: S.eraserSize, points: [firstPt] };
-    }
+  /** A record captures everything needed to replay the stroke deterministically. */
+  function newRecord(tool, firstPt) {
+    if (tool === 'eraser') return { tool, size: S.eraserSize, points: [firstPt] };
+    const spec = clone(S.spec);
+    // 'stylus' mode disables the simulated envelope so only plot pressure remains.
+    if (S.pressureMode === 'stylus') spec.pressure = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
     return {
-      tool: 'brush',
-      spec: clone(S.spec),
+      tool,
+      spec,
       tipSource: S.tipSource,
-      tipDegrees: S.tipDegrees,
       size: S.size,
       color: S.color,
       pressureMode: S.pressureMode,
@@ -705,22 +708,16 @@ _m.rect(10, 10, 15, 15);`;
   }
 
   function onPointerDown(e) {
-    if (e.target !== canvas) return;
-    if (live) return;
+    if (e.target !== canvas || live) return;
     if (S.pencilOnly && e.pointerType !== 'pen') { showToast('Pencil-only mode: touch ignored'); return; }
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     e.preventDefault();
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     const rect = canvas.getBoundingClientRect();
-    const pt = pointFromEvent(e, rect);
-    live = { id: e.pointerId, rect, rec: newRecord(pt), erasedUpTo: 0 };
+    const rec = newRecord(S.tool, pointFromEvent(e, rect));
+    live = { id: e.pointerId, rect, rec, erasedUpTo: 0, pointerType: null };
     updateTelemetry(e);
-    if (live.rec.tool === 'eraser') {
-      sgl.eraseDabs(eraserDabsFor(live.rec, 0));
-      live.erasedUpTo = 1;
-    } else {
-      schedulePreview();
-    }
+    schedulePreview();
   }
 
   function onPointerMove(e) {
@@ -736,34 +733,20 @@ _m.rect(10, 10, 15, 15);`;
       if (Math.abs(pt.x - last.x) < 0.15 && Math.abs(pt.y - last.y) < 0.15) { last.p = pt.p; continue; }
       pts.push(pt);
     }
-    if (live.rec.tool === 'eraser') {
-      if (pts.length > live.erasedUpTo) {
-        sgl.eraseDabs(eraserDabsFor(live.rec, live.erasedUpTo));
-        live.erasedUpTo = pts.length;
-      }
-    } else {
-      schedulePreview();
-    }
+    schedulePreview();
   }
 
   function onPointerUp(e) {
     if (!live || e.pointerId !== live.id) return;
     e.preventDefault();
-    const rec = live.rec;
+    const { rec } = live;
+    // Points that arrived after the last preview frame are not on screen yet;
+    // once the preview is current the framebuffer *is* the committed result.
+    if (previewQueued) renderPreview();
     live = null;
-    previewQueued = false;
-    $('hud-pressure-bar').style.width = '0%';
-    $('hud-pressure-val').textContent = '0.00';
-    if (rec.tool === 'eraser') {
-      // Already applied live; freeze the result.
-      sgl.snapshot(sgl.committedTex);
-      S.strokes.push(rec); S.redo = [];
-      maybeCheckpoint();
-      updateHistoryButtons();
-    } else {
-      commitRecord(rec);
-      $('hud-stamps').textContent = String(lastStampCount);
-    }
+    HUD.pressureBar.style.width = '0%';
+    HUD.pressureVal.textContent = '0.00';
+    pushRecord(rec);
   }
 
   function schedulePreview() {
@@ -772,31 +755,42 @@ _m.rect(10, 10, 15, 15);`;
     requestAnimationFrame(renderPreview);
   }
 
+  /** Live view: brush strokes are re-stamped from the committed image (seeded, so
+   *  stable); eraser dabs are applied incrementally since they are cumulative. */
   function renderPreview() {
     previewQueued = false;
-    if (!live || live.rec.tool !== 'brush') return;
+    if (!live) return;
+    const { rec } = live;
+    if (rec.tool === 'eraser') {
+      if (rec.points.length > live.erasedUpTo) {
+        sgl.eraseDabs(eraserDabs(rec, live.erasedUpTo));
+        live.erasedUpTo = rec.points.length;
+      }
+      return;
+    }
     sgl.blit(sgl.committedTex);
-    renderBrushStroke(live.rec);
-    $('hud-stamps').textContent = String(lastStampCount);
+    HUD.stamps.textContent = String(renderBrushStroke(rec));
   }
 
+  const HUD = {};
   function updateTelemetry(e) {
-    const badge = $('stylus-badge');
-    const isPen = e.pointerType === 'pen';
-    badge.textContent = isPen ? 'APPLE PENCIL' : (e.pointerType || 'pointer').toUpperCase();
-    badge.className = isPen
-      ? 'px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-100 text-indigo-700 border border-indigo-200'
-      : 'px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-700 border border-slate-200';
+    if (live && live.pointerType !== e.pointerType) {
+      live.pointerType = e.pointerType;
+      const isPen = e.pointerType === 'pen';
+      HUD.badge.textContent = isPen ? 'APPLE PENCIL' : (e.pointerType || 'pointer').toUpperCase();
+      HUD.badge.classList.toggle('is-pen', isPen);
+    }
     const p = e.pressure > 0 ? e.pressure : 0;
-    $('hud-pressure-bar').style.width = `${Math.round(clamp(p, 0, 1) * 100)}%`;
-    $('hud-pressure-val').textContent = p.toFixed(2);
-    $('hud-tilt').textContent = `${Math.round(e.tiltX || 0)}°, ${Math.round(e.tiltY || 0)}°`;
+    HUD.pressureBar.style.width = `${Math.round(clamp(p, 0, 1) * 100)}%`;
+    HUD.pressureVal.textContent = p.toFixed(2);
+    HUD.tilt.textContent = `${Math.round(e.tiltX || 0)}°, ${Math.round(e.tiltY || 0)}°`;
   }
 
   // ---------------------------------------------------------------------------
   // 11. Sample stroke (goes through the exact same pipeline)
   // ---------------------------------------------------------------------------
   function drawSampleStroke() {
+    if (S.tool !== 'brush') setTool('brush');
     const cx = cssW / 2, cy = cssH / 2;
     const rx = Math.min(cssW * 0.32, 260), ry = Math.min(cssH * 0.22, 120);
     const points = [];
@@ -805,11 +799,10 @@ _m.rect(10, 10, 15, 15);`;
       const t = i / steps, a = t * Math.PI * 2;
       points.push({ x: cx + Math.sin(a) * rx, y: cy + Math.sin(a * 2) * ry, p: 0.5 + 0.4 * Math.sin(a * 3) ** 2 });
     }
-    const rec = newRecord(points[0]);
-    if (rec.tool === 'eraser') { setTool('brush'); return drawSampleStroke(); }
+    const rec = newRecord('brush', points[0]);
     rec.points = points;
     commitRecord(rec);
-    $('hud-stamps').textContent = String(lastStampCount);
+    HUD.stamps.textContent = String(strokeSegments(rec).stamps);
     showToast('p5.brush sample stroke (lemniscate)');
   }
 
@@ -818,12 +811,9 @@ _m.rect(10, 10, 15, 15);`;
   // ---------------------------------------------------------------------------
   function fmt(n) { return Number.isInteger(n) ? String(n) : String(+n.toFixed(3)); }
 
-  function specCode(spec = S.spec, tipSource = S.tipSource, name = 'myBrush', tipDegrees = S.tipDegrees) {
+  function specCode(spec = S.spec, tipSource = S.tipSource, name = 'myBrush') {
     const p = spec.pressure;
-    const pressure = `{ mode: "gaussian", curve: [${fmt(p.curve[0])}, ${fmt(p.curve[1])}], min_max: [${fmt(p.min_max[0])}, ${fmt(p.min_max[1])}] }`;
-    const tipLines = tipSource.split('\n').map((l) => l.trim()).filter(Boolean);
-    if (tipDegrees) tipLines.unshift('_m.angleMode(_m.DEGREES ?? "degrees");');
-    const tip = tipLines.map((l) => '      ' + l).join('\n');
+    const tip = tipSource.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => '      ' + l).join('\n');
     return `brush.add("${name}", {
   type:    "custom",
   weight:  ${fmt(spec.weight)},
@@ -831,7 +821,7 @@ _m.rect(10, 10, 15, 15);`;
   opacity: ${fmt(spec.opacity)},
   spacing: ${fmt(spec.spacing)},
   noise:   ${fmt(spec.noise)},
-  pressure: ${pressure},
+  pressure: { mode: "gaussian", curve: [${fmt(p.curve[0])}, ${fmt(p.curve[1])}], min_max: [${fmt(p.min_max[0])}, ${fmt(p.min_max[1])}] },
   rotate:  "${spec.rotate}",
   markerTip: ${spec.markerTip},
   tip: (_m) => {
@@ -847,10 +837,8 @@ ${tip}
     const cfg = new Function(`"use strict"; return (${m[3]});`)();
     if (cfg.type && cfg.type !== 'custom') throw new Error('Only type: "custom" brushes are supported here');
     if (typeof cfg.tip !== 'function') throw new Error('Missing tip: (_m) => { ... }');
-    const src = cfg.tip.toString();
-    const bodyMatch = /^[^{]*\{([\s\S]*)\}\s*$/.exec(src);
-    let body = bodyMatch ? bodyMatch[1] : '';
-    body = body.split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+    const bodyMatch = /^[^{]*\{([\s\S]*)\}\s*$/.exec(cfg.tip.toString());
+    const tipSource = (bodyMatch ? bodyMatch[1] : '').split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
     const spec = clone(DEFAULT_SPEC);
     for (const k of ['weight', 'scatter', 'opacity', 'spacing', 'noise']) if (typeof cfg[k] === 'number') spec[k] = cfg[k];
     if (cfg.vibration !== undefined && cfg.scatter === undefined) spec.scatter = cfg.vibration;
@@ -861,67 +849,46 @@ ${tip}
       spec.pressure = { mode: 'gaussian', curve: [+pr.curve[0], +pr.curve[1]], min_max: [+pr.min_max[0], +pr.min_max[1]] };
     } else if (Array.isArray(pr)) {
       // Simple [start, end] / [start, mid, end] ramps: approximate with a gaussian envelope.
-      const lo = Math.min(...pr), hi = Math.max(...pr);
-      spec.pressure = { mode: 'gaussian', curve: [0.2, 0.25], min_max: [lo, hi] };
+      spec.pressure = { mode: 'gaussian', curve: [0.2, 0.25], min_max: [Math.min(...pr), Math.max(...pr)] };
     }
-    // A leading angleMode(DEGREES) line (emitted by this studio) is folded into the toggle.
-    let tipDegrees = false;
-    const bodyLines = body.split('\n');
-    if (bodyLines.length && /angleMode\s*\(/.test(bodyLines[0])) {
-      tipDegrees = /degrees/i.test(bodyLines[0]);
-      body = bodyLines.slice(1).join('\n');
-    }
-    compileTip(body, tipDegrees)({ drawingContext: document.createElement('canvas').getContext('2d') }); // syntax check
-    return { spec, tipSource: body, tipDegrees, name: m[2] };
+    checkTip(tipSource);
+    return { spec, tipSource, name: m[2] };
   }
 
   function sketchCode() {
-    const W = Math.round(cssW), H = Math.round(cssH);
     const conf = paperPresets[S.paper];
-    const bg = `rgb(${conf.bg.join(', ')})`;
-    const lines = [];
-    lines.push('// p5.js + p5.brush 2.2.2 — exported from p5.brush Realtime Studio');
-    lines.push('// <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>');
-    lines.push('// <script src="https://cdn.jsdelivr.net/npm/p5.brush@2.2.2/dist/p5.brush.js"></script>');
-    lines.push('');
-    lines.push('const BRUSHES = {};');
-    lines.push('function setup() {');
-    lines.push(`  createCanvas(${W}, ${H}, WEBGL);`);
-    lines.push(`  pixelDensity(${dpr});`);
-    lines.push('  angleMode(DEGREES);');
-    lines.push('  noLoop();');
-    lines.push('}');
-    lines.push('');
-    lines.push('function draw() {');
-    lines.push(`  background("${bg}");`);
-    lines.push('  translate(-width / 2, -height / 2);');
-    let names = new Map();
+    const lines = [
+      '// p5.js + p5.brush 2.2.2 — exported from p5.brush Realtime Studio',
+      '// <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>',
+      '// <script src="https://cdn.jsdelivr.net/npm/p5.brush@2.2.2/dist/p5.brush.js"></script>',
+      '',
+      'function setup() {',
+      `  createCanvas(${Math.round(cssW)}, ${Math.round(cssH)}, WEBGL);`,
+      `  pixelDensity(${dpr});`,
+      '  angleMode(DEGREES);',
+      '  noLoop();',
+      '}',
+      '',
+      'function draw() {',
+      `  background("rgb(${conf.bg.join(', ')})");`,
+      '  translate(-width / 2, -height / 2);',
+    ];
+    const names = new Map();
     for (const rec of S.strokes) {
       if (rec.tool !== 'brush') { lines.push('  // (eraser stroke omitted)'); continue; }
-      const key = brushKey(rec);
+      const key = JSON.stringify(rec.spec) + '|' + rec.tipSource;
       let name = names.get(key);
       if (!name) {
         name = 'studioBrush' + names.size;
         names.set(key, name);
-        const sp = specForRecord(rec);
-        lines.push('  ' + specCode(sp, rec.tipSource, name, !!rec.tipDegrees).replace(/\n/g, '\n  '));
+        lines.push('  ' + specCode(rec.spec, rec.tipSource, name).replace(/\n/g, '\n  '));
       }
-      const segLen = segmentLengthFor(rec.spec.spacing);
-      let pts = resamplePath(rec.points, segLen);
-      if (pts.length < 2) { const p0 = pts[0] || rec.points[0]; pts = [p0, { x: p0.x + segLen, y: p0.y, p: p0.p }]; }
-      const pf = pressureFnFor(rec);
+      const { origin, segs, endA, endP } = strokeSegments(rec);
       lines.push(`  randomSeed(${rec.seed});`);
       lines.push(`  brush.set("${name}", "${rec.color}", ${fmt(rec.size)});`);
-      lines.push(`  brush.beginStroke("curve", ${fmt(pts[0].x)}, ${fmt(pts[0].y)});`);
-      let lastA = 0;
-      for (let i = 1; i < pts.length; i++) {
-        const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
-        const len = Math.hypot(dx, dy);
-        if (len < 1e-6) continue;
-        lastA = ((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360;
-        lines.push(`  brush.move(${fmt(lastA)}, ${fmt(len)}, ${fmt(pf(pts[i - 1]))});`);
-      }
-      lines.push(`  brush.endStroke(${fmt(lastA)}, ${fmt(pf(pts[pts.length - 1]))});`);
+      lines.push(`  brush.beginStroke("curve", ${fmt(origin.x)}, ${fmt(origin.y)});`);
+      for (const s of segs) lines.push(`  brush.move(${fmt(s.a)}, ${fmt(s.len)}, ${fmt(s.p)});`);
+      lines.push(`  brush.endStroke(${fmt(endA)}, ${fmt(endP)});`);
     }
     lines.push('}');
     return lines.join('\n');
@@ -973,11 +940,15 @@ ${tip}
     $('btn-redo').disabled = S.redo.length === 0;
   }
 
+  function setTipInvalid(bad) {
+    $('tip-error').classList.toggle('hidden', !bad);
+    $('tip-code').classList.toggle('is-invalid', bad);
+  }
+
   function drawTipPreview() {
     const c = $('tip-preview-canvas');
     const ctx = c.getContext('2d');
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, c.width, c.height);
     ctx.fillStyle = '#fff';
     ctx.fillRect(0, 0, c.width, c.height);
     ctx.save();
@@ -987,34 +958,54 @@ ${tip}
     ctx.lineWidth = 0.6;
     ctx.strokeRect(-50, -50, 100, 100);
     try {
-      compileTip(S.tipSource, S.tipDegrees)({ drawingContext: ctx });
-      $('tip-error').classList.add('hidden');
-      $('tip-code').classList.remove('is-invalid');
+      compileTip(S.tipSource)({ drawingContext: ctx });
+      setTipInvalid(false);
     } catch (err) {
-      $('tip-error').classList.remove('hidden');
-      $('tip-code').classList.add('is-invalid');
+      setTipInvalid(true);
     }
     ctx.restore();
   }
 
+  // Every numeric control in one table: refreshSpecUI and the input bindings both walk it.
+  const two = (v) => v.toFixed(2);
+  const CONTROLS = [
+    { id: 'param-weight', get: () => S.spec.weight, set: (v) => { S.spec.weight = v; }, fmt },
+    { id: 'param-opacity', get: () => S.spec.opacity, set: (v) => { S.spec.opacity = v; }, fmt },
+    { id: 'param-scatter', get: () => S.spec.scatter, set: (v) => { S.spec.scatter = v; }, fmt: two },
+    { id: 'param-spacing', get: () => S.spec.spacing, set: (v) => { S.spec.spacing = v; }, fmt: two },
+    { id: 'param-noise', get: () => S.spec.noise, set: (v) => { S.spec.noise = v; }, fmt: two },
+    { id: 'param-size', get: () => S.size, set: (v) => { S.size = v; }, fmt: (v) => two(v) + '×' },
+    { id: 'param-force-sens', get: () => S.forceSensitivity, set: (v) => { S.forceSensitivity = v; }, fmt: (v) => two(v) + 'x' },
+    { id: 'param-eraser', get: () => S.eraserSize, set: (v) => { S.eraserSize = v; }, fmt: (v) => `${fmt(v)}px` },
+    { id: 'param-curve0', get: () => S.spec.pressure.curve[0], set: (v) => { S.spec.pressure.curve[0] = v; } },
+    { id: 'param-curve1', get: () => S.spec.pressure.curve[1], set: (v) => { S.spec.pressure.curve[1] = v; } },
+    { id: 'param-pmin', get: () => S.spec.pressure.min_max[0], set: (v) => { S.spec.pressure.min_max[0] = v; } },
+    { id: 'param-pmax', get: () => S.spec.pressure.min_max[1], set: (v) => { S.spec.pressure.min_max[1] = v; } },
+  ];
+
+  let specCodeQueued = false;
+  function refreshSpecCode() {
+    if (specCodeQueued) return;
+    specCodeQueued = true;
+    requestAnimationFrame(() => {
+      specCodeQueued = false;
+      const area = $('spec-code');
+      if (document.activeElement !== area) { area.value = specCode(); area.classList.remove('is-invalid'); }
+      $('brush-size-badge').textContent = `${fmt(S.spec.weight)}px`;
+    });
+  }
+
   function refreshSpecUI() {
-    const sp = S.spec;
-    $('param-weight').value = sp.weight; $('val-weight').textContent = fmt(sp.weight);
-    $('param-opacity').value = sp.opacity; $('val-opacity').textContent = fmt(sp.opacity);
-    $('param-scatter').value = sp.scatter; $('val-scatter').textContent = sp.scatter.toFixed(2);
-    $('param-spacing').value = sp.spacing; $('val-spacing').textContent = sp.spacing.toFixed(2);
-    $('param-noise').value = sp.noise; $('val-noise').textContent = sp.noise.toFixed(2);
-    $('param-size').value = S.size; $('val-size').textContent = S.size.toFixed(2) + '×';
-    $('param-rotate').value = sp.rotate;
-    $('param-markertip').checked = !!sp.markerTip;
-    $('param-curve0').value = sp.pressure.curve[0];
-    $('param-curve1').value = sp.pressure.curve[1];
-    $('param-pmin').value = sp.pressure.min_max[0];
-    $('param-pmax').value = sp.pressure.min_max[1];
-    $('brush-size-badge').textContent = `${fmt(sp.weight)}px`;
-    $('tip-angle-units').value = S.tipDegrees ? 'degrees' : 'radians';
+    for (const c of CONTROLS) {
+      const v = c.get();
+      $(c.id).value = v;
+      if (c.label) c.label.textContent = c.fmt(v);
+    }
+    $('param-rotate').value = S.spec.rotate;
+    $('param-markertip').checked = !!S.spec.markerTip;
+    $('tip-angle-units').value = tipUsesDegrees(S.tipSource) ? 'degrees' : 'radians';
     if (document.activeElement !== $('tip-code')) $('tip-code').value = S.tipSource;
-    if (document.activeElement !== $('spec-code')) { $('spec-code').value = specCode(); $('spec-code').classList.remove('is-invalid'); }
+    refreshSpecCode();
     drawTipPreview();
   }
 
@@ -1040,8 +1031,7 @@ ${tip}
     S.paper = name;
     for (const b of document.querySelectorAll('.paper-btn')) b.classList.toggle('is-active', b.dataset.paper === name);
     $('paper-mode-name').textContent = paperPresets[name].label;
-    renderPaper();
-    rebuildAll();
+    repaintPaper();
     showToast(paperPresets[name].label);
   }
 
@@ -1055,30 +1045,21 @@ ${tip}
     }[mode];
   }
 
-  function bindRange(id, onChange, format) {
-    const el = $(id);
-    el.addEventListener('input', () => {
-      const v = parseFloat(el.value);
-      onChange(v);
-      const label = $(id.replace('param-', 'val-'));
-      if (label) label.textContent = format(v);
-    });
-  }
-
   function applyTipSource(src) {
     try {
-      compileTip(src, S.tipDegrees)({ drawingContext: document.createElement('canvas').getContext('2d') });
+      checkTip(src);
       S.tipSource = src;
       refreshSpecUI();
       showToast('Tip updated');
     } catch (err) {
-      $('tip-error').classList.remove('hidden');
-      $('tip-code').classList.add('is-invalid');
+      setTipInvalid(true);
       showToast('Tip code error: ' + err.message);
     }
   }
 
   function setupUI() {
+    Object.assign(HUD, { badge: $('stylus-badge'), pressureBar: $('hud-pressure-bar'), pressureVal: $('hud-pressure-val'), tilt: $('hud-tilt'), stamps: $('hud-stamps') });
+
     // Swatches
     const box = $('swatch-container');
     for (const s of colorSwatches) {
@@ -1115,32 +1096,24 @@ ${tip}
     for (const b of document.querySelectorAll('.paper-btn')) b.addEventListener('click', () => setPaper(b.dataset.paper));
     for (const b of document.querySelectorAll('#pressure-mode-group .seg-btn')) b.addEventListener('click', () => setPressureMode(b.dataset.pmode));
 
-    // brush.add parameters
-    const spec = () => S.spec;
-    bindRange('param-weight', (v) => { spec().weight = v; $('brush-size-badge').textContent = `${fmt(v)}px`; refreshCode(); }, fmt);
-    bindRange('param-opacity', (v) => { spec().opacity = v; refreshCode(); }, fmt);
-    bindRange('param-scatter', (v) => { spec().scatter = v; refreshCode(); }, (v) => v.toFixed(2));
-    bindRange('param-spacing', (v) => { spec().spacing = v; refreshCode(); }, (v) => v.toFixed(2));
-    bindRange('param-noise', (v) => { spec().noise = v; refreshCode(); }, (v) => v.toFixed(2));
-    bindRange('param-size', (v) => { S.size = v; }, (v) => v.toFixed(2) + '×');
-    bindRange('param-force-sens', (v) => { S.forceSensitivity = v; }, (v) => v.toFixed(2) + 'x');
-    bindRange('param-eraser', (v) => { S.eraserSize = v; }, (v) => `${fmt(v)}px`);
-    $('param-rotate').addEventListener('change', (e) => { spec().rotate = e.target.value; refreshCode(); });
-    $('param-markertip').addEventListener('change', (e) => { spec().markerTip = e.target.checked; refreshCode(); });
-    const num = (id, apply) => $(id).addEventListener('change', (e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) { apply(v); refreshCode(); } });
-    num('param-curve0', (v) => { spec().pressure.curve[0] = v; });
-    num('param-curve1', (v) => { spec().pressure.curve[1] = v; });
-    num('param-pmin', (v) => { spec().pressure.min_max[0] = v; });
-    num('param-pmax', (v) => { spec().pressure.min_max[1] = v; });
-
-    function refreshCode() {
-      if (document.activeElement !== $('spec-code')) $('spec-code').value = specCode();
+    // Numeric controls (sliders fire on input, number boxes on change)
+    for (const c of CONTROLS) {
+      const el = $(c.id);
+      c.label = c.fmt ? $(c.id.replace('param-', 'val-')) : null;
+      el.addEventListener(el.type === 'range' ? 'input' : 'change', () => {
+        const v = parseFloat(el.value);
+        if (!Number.isFinite(v)) return;
+        c.set(v);
+        if (c.label) c.label.textContent = c.fmt(v);
+        refreshSpecCode();
+      });
     }
+    $('param-rotate').addEventListener('change', (e) => { S.spec.rotate = e.target.value; refreshSpecCode(); });
+    $('param-markertip').addEventListener('change', (e) => { S.spec.markerTip = e.target.checked; refreshSpecCode(); });
 
     $('btn-reset-params').addEventListener('click', () => {
       S.spec = clone(DEFAULT_SPEC);
       S.tipSource = DEFAULT_TIP_SOURCE;
-      S.tipDegrees = false;
       S.size = 1;
       refreshSpecUI();
       showToast('myBrush defaults restored');
@@ -1151,9 +1124,9 @@ ${tip}
     tipArea.addEventListener('blur', () => { if (tipArea.value !== S.tipSource) applyTipSource(tipArea.value); });
     tipArea.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') tipArea.blur(); });
     $('tip-angle-units').addEventListener('change', (e) => {
-      S.tipDegrees = e.target.value === 'degrees';
-      refreshSpecUI();
-      showToast(S.tipDegrees ? 'Tip angles: degrees (Brush Maker preview look)' : 'Tip angles: radians (p5.Graphics / p5.brush actual)');
+      const degrees = e.target.value === 'degrees';
+      applyTipSource(setTipDegrees(S.tipSource, degrees));
+      showToast(degrees ? 'Tip angles: degrees (Brush Maker preview look)' : 'Tip angles: radians (p5.Graphics / p5.brush actual)');
     });
 
     // Spec import / copy
@@ -1162,9 +1135,7 @@ ${tip}
         const parsed = parseSpecCode($('spec-code').value);
         S.spec = parsed.spec;
         S.tipSource = parsed.tipSource;
-        S.tipDegrees = parsed.tipDegrees;
         $('brush-badge').textContent = `${parsed.name} · custom`;
-        $('spec-code').classList.remove('is-invalid');
         refreshSpecUI();
         showToast(`brush.add("${parsed.name}") applied`);
       } catch (err) {
@@ -1189,8 +1160,7 @@ ${tip}
       else if (k === 'c') clearCanvas();
       else if (k === 's') exportPNG();
       else if (k === 'p') $('controls-drawer').classList.toggle('is-hidden');
-      else if (k === '[') { S.spec.weight = clamp(S.spec.weight - 1, 1, 80); refreshSpecUI(); }
-      else if (k === ']') { S.spec.weight = clamp(S.spec.weight + 1, 1, 80); refreshSpecUI(); }
+      else if (k === '[' || k === ']') { S.spec.weight = clamp(S.spec.weight + (k === ']' ? 1 : -1), 1, 80); refreshSpecUI(); }
     });
 
     // Small screens start with the drawer hidden.
@@ -1226,26 +1196,24 @@ ${tip}
     canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
     canvas.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-
     canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); fatal('WebGL context lost. Reload the page to continue.'); });
 
     setTimeout(drawSampleStroke, 120);
     showToast('p5.brush 2.2.2 engine ready — draw on the paper');
   }
 
-  // Expose a tiny debug/testing hook.
+  // Tiny debug/testing hook.
   window.__studio = {
     state: S,
     commit: (points, opts = {}) => {
-      const rec = Object.assign(newRecordFor(points[0]), opts, { points });
+      const rec = Object.assign(newRecord('brush', points[0]), opts, { points });
       commitRecord(rec);
       return rec;
     },
     strokes: () => S.strokes,
-    undo, redo, clear: clearCanvas, sample: drawSampleStroke, sketchCode, specCode, rebuildAll,
-    setPaper, setPressureMode,
+    undo, redo, clear: clearCanvas, sample: drawSampleStroke, sketchCode, specCode, setPaper, setPressureMode,
+    rebuildAll: repaintPaper,
   };
-  function newRecordFor(pt) { return newRecord(pt); }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
