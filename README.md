@@ -18,7 +18,8 @@ installed from npm). Strokes drawn with a mouse, finger or Apple Pencil are turn
 `brush.Plot`s and stamped by p5.brush with the registered custom brush, so the result
 matches `brush.line()` / `brush.spline()` in a p5 sketch.
 
-Built with Vite, React, TypeScript, Tailwind CSS and shadcn/ui.
+Built with Vite, React, TypeScript, Tailwind CSS and shadcn/ui, with a tldraw-inspired
+interface: tool dock at the bottom, quick actions top-left, style panel top-right.
 
 ```bash
 cd p5brush-studio

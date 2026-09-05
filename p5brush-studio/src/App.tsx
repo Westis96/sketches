@@ -4,9 +4,11 @@ import { Studio } from '@/engine/Studio';
 import { StudioContext, useStudio, useStudioState } from '@/hooks/useStudio';
 import { Toaster } from '@/components/ui/sonner';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { Toolbar } from '@/components/Toolbar';
+import { QuickActions } from '@/components/QuickActions';
+import { ToolDock } from '@/components/ToolDock';
+import { StylePanel } from '@/components/StylePanel';
 import { Hud } from '@/components/Hud';
-import { BrushPanel } from '@/components/BrushPanel';
+import { HelpButton } from '@/components/HelpButton';
 import { cn } from '@/lib/utils';
 
 declare global {
@@ -17,9 +19,14 @@ export default function App() {
   const [studio] = useState(() => new Studio((msg) => toast(msg)));
   return (
     <StudioContext.Provider value={studio}>
-      <TooltipProvider delayDuration={300}>
+      <TooltipProvider delayDuration={250} skipDelayDuration={400}>
         <Shell />
-        <Toaster position="bottom-center" richColors closeButton={false} duration={2400} />
+        <Toaster
+          position="bottom-center"
+          offset={64}
+          duration={2200}
+          toastOptions={{ className: 'rounded-[11px] border-0 shadow-[var(--tl-shadow)] text-[12px]' }}
+        />
       </TooltipProvider>
     </StudioContext.Provider>
   );
@@ -27,7 +34,8 @@ export default function App() {
 
 function Shell() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 700);
+  const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 720);
+  const [helpOpen, setHelpOpen] = useState(false);
   const studio = useStudio();
   const tool = useStudioState((s) => s.settings.tool);
   const fatal = useStudioState((s) => s.fatal);
@@ -41,23 +49,27 @@ function Shell() {
     return () => studio.dispose();
   }, [studio]);
 
-  // Keyboard shortcuts
+  // Keyboard shortcuts (tldraw-like: D draws, ? shows shortcuts)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement).tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target as HTMLElement).isContentEditable) return;
+      const el = e.target as HTMLElement;
+      const tag = el.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable) return;
       const k = e.key.toLowerCase();
       if ((e.metaKey || e.ctrlKey) && k === 'z') { e.preventDefault(); if (e.shiftKey) studio.redo(); else studio.undo(); return; }
       if ((e.metaKey || e.ctrlKey) && k === 'y') { e.preventDefault(); studio.redo(); return; }
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (k === 'b') studio.setTool('brush');
+      if (k === 'd' || k === 'b') studio.setTool('brush');
       else if (k === 'e') studio.setTool('eraser');
       else if (k === 't') studio.drawSampleStroke();
+      else if (k === 'q') studio.setPencilOnly(!studio.settings.pencilOnly);
       else if (k === 'c') studio.clear();
       else if (k === 's') studio.exportPNG();
       else if (k === 'p') setPanelOpen((o) => !o);
+      else if (e.key === '?') setHelpOpen((o) => !o);
       else if (k === '[') studio.nudgeWeight(-1);
       else if (k === ']') studio.nudgeWeight(1);
+      else if (k === 'escape') { setHelpOpen(false); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -66,7 +78,7 @@ function Shell() {
   return (
     <div className="relative h-full w-full overflow-hidden">
       {/* Single WebGL2 canvas: paper texture + p5.brush strokes */}
-      <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[radial-gradient(circle_at_50%_40%,#f0ece3_0%,#d8d2c4_100%)]">
+      <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[#f4f4f2]">
         <canvas
           ref={canvasRef}
           id="ink-canvas"
@@ -74,15 +86,35 @@ function Shell() {
         />
       </div>
 
-      <Toolbar panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} />
-      <Hud />
-      <BrushPanel open={panelOpen} />
+      {/* Chrome: fixed layers that never take pointer events except on their own controls */}
+      <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
+        <QuickActions />
+      </div>
+      <div className="pointer-events-none fixed right-2 top-2 z-30">
+        <StylePanel open={panelOpen} />
+      </div>
+      <div className="pointer-events-none fixed bottom-2 left-1/2 z-30 -translate-x-1/2">
+        <ToolDock />
+      </div>
+      <div className="pointer-events-none fixed bottom-2 left-2 z-30 hidden sm:block">
+        <Hud />
+      </div>
+      <div className="pointer-events-none fixed bottom-2 right-2 z-30 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setPanelOpen((o) => !o)}
+          className="tl-panel-sm pointer-events-auto hidden h-9 items-center px-3 text-[11px] font-medium text-[var(--tl-text-2)] hover:bg-[var(--tl-low)] sm:inline-flex"
+        >
+          {panelOpen ? 'Hide styles' : 'Show styles'}<kbd className="ml-2 rounded bg-[var(--tl-low)] px-1 font-mono text-[10px]">P</kbd>
+        </button>
+        <HelpButton open={helpOpen} onOpenChange={setHelpOpen} />
+      </div>
 
       {fatal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#dcd7ce]/95 p-6">
-          <div className="paper-card max-w-md space-y-2 p-6 text-sm">
-            <div className="font-bold text-rose-700">p5.brush could not start</div>
-            <div className="text-muted-foreground">{fatal}</div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#f4f4f2]/95 p-6">
+          <div className="tl-panel max-w-md space-y-2 p-6 text-[13px]">
+            <div className="font-semibold text-[var(--tl-danger)]">p5.brush could not start</div>
+            <div className="text-[var(--tl-text-2)]">{fatal}</div>
           </div>
         </div>
       )}

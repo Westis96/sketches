@@ -4,26 +4,40 @@
 
 @layer base {
   :root {
-    --background: 40 20% 94%;
-    --foreground: 222 47% 11%;
+    /* shadcn tokens, tuned to a tldraw-like palette */
+    --background: 210 20% 98%;
+    --foreground: 0 0% 18%;
     --card: 0 0% 100%;
-    --card-foreground: 222 47% 11%;
+    --card-foreground: 0 0% 18%;
     --popover: 0 0% 100%;
-    --popover-foreground: 222 47% 11%;
-    --primary: 222 47% 11%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96%;
-    --secondary-foreground: 222 47% 11%;
-    --muted: 210 40% 96%;
-    --muted-foreground: 215 16% 47%;
-    --accent: 226 100% 97%;
-    --accent-foreground: 243 75% 40%;
-    --destructive: 350 89% 60%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214 32% 91%;
-    --input: 214 32% 91%;
-    --ring: 239 84% 67%;
-    --radius: 0.75rem;
+    --popover-foreground: 0 0% 18%;
+    --primary: 214 84% 56%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 0 0% 95%;
+    --secondary-foreground: 0 0% 18%;
+    --muted: 0 0% 95%;
+    --muted-foreground: 0 0% 55%;
+    --accent: 0 0% 94%;
+    --accent-foreground: 0 0% 18%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 0% / 0.08;
+    --input: 0 0% 0% / 0.1;
+    --ring: 214 84% 56%;
+    --radius: 0.5rem;
+
+    /* tldraw-flavoured design tokens */
+    --tl-panel: #fdfdfd;
+    --tl-text-1: #2d2d2d;
+    --tl-text-2: #4d4d4d;
+    --tl-text-3: #9a9a9a;
+    --tl-low: #f2f2f2;
+    --tl-hint: rgba(0, 0, 0, 0.055);
+    --tl-hint-strong: rgba(0, 0, 0, 0.1);
+    --tl-selected: #2f80ed;
+    --tl-danger: #e03131;
+    --tl-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.07), 0 6px 16px rgba(0, 0, 0, 0.08);
+    --tl-shadow-sm: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.1);
   }
 
   * {
@@ -38,7 +52,8 @@
     touch-action: none;
   }
   body {
-    @apply bg-background text-foreground font-sans antialiased;
+    @apply bg-background font-sans text-[12px] antialiased;
+    color: var(--tl-text-1);
     -webkit-user-select: none;
     user-select: none;
   }
@@ -49,15 +64,61 @@
 }
 
 @layer components {
-  .paper-pill {
-    @apply rounded-xl border border-black/10 bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.06)] backdrop-blur-md;
+  /* Floating UI surfaces */
+  .tl-panel {
+    background: var(--tl-panel);
+    border-radius: 13px;
+    box-shadow: var(--tl-shadow);
   }
-  .paper-card {
-    @apply rounded-2xl border border-black/10 bg-white/95 shadow-[0_12px_36px_rgba(0,0,0,0.09)] backdrop-blur-xl;
+  .tl-panel-sm {
+    background: var(--tl-panel);
+    border-radius: 9px;
+    box-shadow: var(--tl-shadow-sm);
   }
-  .custom-scroll::-webkit-scrollbar { width: 4px; }
-  .custom-scroll::-webkit-scrollbar-thumb { @apply rounded-full bg-black/15; }
+
+  /* 40px icon button, the tldraw toolbar unit */
+  .tl-btn {
+    @apply relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] outline-none transition-colors duration-100;
+    color: var(--tl-text-1);
+  }
+  .tl-btn:hover:not(:disabled) { background: var(--tl-low); }
+  .tl-btn:active:not(:disabled) { background: var(--tl-hint-strong); }
+  .tl-btn:focus-visible { box-shadow: inset 0 0 0 2px var(--tl-selected); }
+  .tl-btn:disabled { color: var(--tl-text-3); cursor: default; }
+  .tl-btn[data-active='true'] { background: var(--tl-selected); color: #fff; }
+  .tl-btn[data-active='true']:hover { background: #2a74d8; }
+  .tl-btn > svg { width: 18px; height: 18px; stroke-width: 1.75; }
+
+  /* Style-panel option button (selection is quiet gray, like tldraw's style panel) */
+  .tl-opt {
+    @apply relative inline-flex h-8 min-w-8 items-center justify-center rounded-[7px] px-1 text-[12px] font-medium outline-none transition-colors duration-100;
+    color: var(--tl-text-2);
+  }
+  .tl-opt:hover { background: var(--tl-low); }
+  .tl-opt:focus-visible { box-shadow: inset 0 0 0 2px var(--tl-selected); }
+  .tl-opt[data-state='on'], .tl-opt[data-active='true'] { background: var(--tl-hint-strong); color: var(--tl-text-1); }
+
+  .tl-label {
+    @apply mb-1.5 text-[11px] font-medium;
+    color: var(--tl-text-3);
+  }
+  .tl-divider { width: 1px; height: 24px; background: var(--tl-hint-strong); margin: 0 4px; }
+  .tl-hdivider { height: 1px; background: var(--tl-hint); margin: 8px -12px; }
+
+  .tl-kbd {
+    @apply ml-2 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded px-1 font-mono text-[10px];
+    background: rgba(255, 255, 255, 0.16);
+  }
+
+  .tl-scroll::-webkit-scrollbar { width: 6px; }
+  .tl-scroll::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); border-radius: 9999px; border: 1px solid transparent; }
+
   .code-area {
-    @apply w-full whitespace-pre overflow-auto rounded-lg border border-border bg-slate-50 p-2 font-mono text-[10px] leading-[1.45] text-slate-800;
+    @apply w-full whitespace-pre overflow-auto rounded-lg p-2 font-mono text-[10.5px] leading-[1.5];
+    background: var(--tl-low);
+    color: var(--tl-text-1);
+    border: 1px solid transparent;
   }
+  .code-area:focus { outline: none; border-color: var(--tl-selected); background: #fff; }
+  .code-area[data-invalid='true'] { border-color: var(--tl-danger); background: #fff5f5; }
 }
