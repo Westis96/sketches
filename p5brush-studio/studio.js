@@ -673,8 +673,14 @@ _m.rect(10, 10, 15, 15);`;
     repaintPaper();
   }
 
+  /** Keeps the drawer below the header, which wraps to two rows on narrow screens. */
+  function placeDrawer() {
+    $('controls-drawer').style.top = `${Math.round(document.querySelector('header').getBoundingClientRect().bottom + 8)}px`;
+  }
+
   let resizeTimer = 0;
   function onResize() {
+    placeDrawer();
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { if (!live) resize(); }, 150);
   }
@@ -1185,6 +1191,7 @@ ${tip}
     }
 
     setupUI();
+    placeDrawer();
     resize(true);
     window.addEventListener('resize', onResize);
     if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
