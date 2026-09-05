@@ -122,3 +122,25 @@
   .code-area:focus { outline: none; border-color: var(--tl-selected); background: #fff; }
   .code-area[data-invalid='true'] { border-color: var(--tl-danger); background: #fff5f5; }
 }
+
+/* Practice mode */
+@keyframes guide-flow { to { stroke-dashoffset: -36; } }
+.guide-flow { animation: guide-flow 0.9s linear infinite; }
+@keyframes guide-start { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.guide-start { animation: guide-start 1.2s ease-in-out infinite; }
+@keyframes guide-pulse-bar { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+.guide-pulse-bar { animation: guide-pulse-bar 1.2s ease-in-out infinite; }
+@keyframes feedback-pop {
+  0% { opacity: 0; transform: translateY(4px) scale(0.9); }
+  12% { opacity: 1; transform: translateY(0) scale(1.04); }
+  20% { transform: scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.feedback-pop { animation: feedback-pop 2.4s ease-out forwards; }
+@keyframes star-pop { 0% { transform: scale(0.3); opacity: 0; } 60% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
+.star-pop { animation: star-pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+@media (prefers-reduced-motion: reduce) {
+  .guide-flow, .guide-start, .guide-pulse-bar, .star-pop { animation: none; }
+  .feedback-pop { animation-duration: 0.01s; animation-delay: 2.4s; opacity: 1; }
+}

@@ -4,6 +4,7 @@ const shortcuts: Array<[string, string]> = [
   ['Brush', 'D'], ['Paper eraser', 'E'], ['Sample stroke', 'T'], ['Pencil only', 'Q'],
   ['Weight − / +', '[ ]'], ['Undo', '⌘ Z'], ['Redo', '⇧ ⌘ Z'], ['Clear canvas', 'C'],
   ['Export PNG', 'S'], ['Toggle style panel', 'P'], ['Cancel current stroke', 'Esc'],
+  ['Practice lessons', 'L'], ['Skip lesson step', 'N'],
   ['Zoom in / out', '+ −'], ['Zoom 100%', '0'], ['Zoom to fit', 'F'], ['Pan', 'Space+drag'], ['Shortcuts', '?'],
 ];
 

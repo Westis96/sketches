@@ -42,6 +42,18 @@ spike, and finger and mouse strokes get simulated pressure from speed (slow is h
 Conditioning runs at render time from the stored input kind, so old drawings are untouched.
 When the canvas is rebuilt (undo, zoom, reload) strokes outside the viewport are skipped.
 
+Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
+pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the
+thumbnails are rendered by the engine) and trace it stroke by stroke. Each step sets the
+brush, size and colour for you, shows a coaching hint, and highlights the stroke to draw
+with a flowing dashed line, a start dot and an arrowhead. Every stroke is scored on shape,
+size and direction against the reference: good strokes advance, strokes far off the mark
+are removed so you can try again, Skip counts a step as zero and Undo reopens it. A lesson
+ends with stars (1 to 3), a score out of 100 and a per-step bar, with your best kept per
+lesson. Your own drawing is set aside while a lesson is open (autosave keeps saving it) and
+comes back when you leave; you can also keep the traced drawing instead. Lessons live in
+`src/practice/lessons.ts` as ordered brush steps built from deterministic splines.
+
 WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are
 rendered by the engine itself), edit the `brush.add(...)` parameters live, paste a spec from

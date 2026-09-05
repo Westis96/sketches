@@ -202,6 +202,67 @@ try {
   const sketch = await studio((s) => s.sketchCode());
   check('sketch export contains brush.add and strokes', /brush\.add\(/.test(sketch) && (sketch.match(/beginStroke/g) || []).length === 2);
 
+  // --- Practice (tracing lessons) --------------------------------------------
+  const freeBefore = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource }));
+  await studio((s) => s.practice.start('waves'));
+  const lessonSteps = await studio((s) => s.practice.steps('waves'));
+  let pr = await studio((s) => s.state.practice);
+  check('lesson opens on an empty canvas at step 1', pr && pr.step === 0 && pr.status === 'active' && (await studio((s) => s.history().length)) === 0);
+  const brush0 = await studio((s) => ({ size: s.state.settings.size, color: s.state.settings.color }));
+  check('each step sets the brush, size and colour', brush0.size === lessonSteps[0].size && brush0.color === lessonSteps[0].color, JSON.stringify(brush0));
+  check('guide shows the current stroke and the remaining ghosts',
+    (await page.locator('[data-guide=current]').count()) === 1 && (await page.locator('[data-guide=ghost]').count()) === lessonSteps.length - 1);
+
+  // Step 1 traced with real pointer events along the reference.
+  const lv = await studio((s) => s.view());
+  const toScreen = (p) => [p.x * lv.zoom + lv.x, p.y * lv.zoom + lv.y];
+  const ref0 = lessonSteps[0].points;
+  await page.mouse.move(...toScreen(ref0[0]));
+  await page.mouse.down();
+  for (let i = 1; i < ref0.length; i += 2) { const [x, y] = toScreen(ref0[i]); await page.mouse.move(x + Math.sin(i) * 2, y + Math.cos(i) * 2); }
+  await page.mouse.move(...toScreen(ref0[ref0.length - 1]));
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  pr = await studio((s) => s.state.practice);
+  check('a clean trace scores high and advances', pr.step === 1 && pr.feedback?.accepted && pr.feedback.score >= 90, `score ${pr.feedback?.score}`);
+
+  await studio((s, pts) => s.commit(pts), [...lessonSteps[1].points].reverse());
+  pr = await studio((s) => s.state.practice);
+  check('a reversed stroke is accepted but flagged and penalised', pr.step === 2 && pr.feedback.reversed && pr.feedback.score >= 60 && pr.feedback.score < 95, `score ${pr.feedback.score}`);
+
+  const nBefore = await studio((s) => s.history().length);
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('a stroke far from the reference is rejected and removed', pr.step === 2 && pr.feedback.accepted === false && (await studio((s) => s.history().length)) === nBefore, `score ${pr.feedback.score}`);
+
+  await studio((s) => s.practice.skip());
+  const afterSkip = await studio((s) => s.state.practice);
+  await studio((s) => s.undo());
+  pr = await studio((s) => s.state.practice);
+  check('skip counts as zero and undo reopens the step', afterSkip.step === 3 && afterSkip.results[2] === null && pr.step === 2 && pr.results.length === 2);
+
+  for (let i = 2; i < lessonSteps.length; i++) await studio((s, pts) => s.commit(pts), lessonSteps[i].points);
+  pr = await studio((s) => s.state.practice);
+  const savedProgress = await page.evaluate(() => JSON.parse(localStorage.getItem('p5brush-studio:practice:v1') || 'null'));
+  check('finishing every step completes the lesson with stars and a saved best',
+    pr.status === 'complete' && pr.summary?.stars === 3 && pr.summary.newBest && savedProgress?.waves?.best === pr.summary.score, JSON.stringify(pr.summary));
+  check('finished lesson shows the whole reference for comparing', (await page.locator('[data-guide=ghost]').count()) === lessonSteps.length);
+  const savedDoc = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).strokes.length, await studio((s) => s.saveKey));
+  check('autosave keeps the free drawing while a lesson is open', savedDoc === freeBefore.n, `${savedDoc} vs ${freeBefore.n}`);
+
+  await studio((s) => s.practice.exit(false));
+  const freeAfter = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource, practice: s.state.practice }));
+  check('leaving a lesson restores the drawing, brush and view',
+    freeAfter.practice === null && freeAfter.n === freeBefore.n && freeAfter.size === freeBefore.size && freeAfter.tip === freeBefore.tip && Math.abs(freeAfter.zoom - freeBefore.zoom) < 1e-9,
+    JSON.stringify({ freeBefore, freeAfter: { ...freeAfter, practice: undefined } }));
+
+  await studio((s) => s.practice.start('leaf'));
+  const leafSteps = await studio((s) => s.practice.steps('leaf'));
+  await studio((s, pts) => s.commit(pts), leafSteps[0].points);
+  await studio((s) => s.practice.exit(true));
+  const kept = await studio((s) => ({ n: s.history().length, practice: s.state.practice }));
+  check('keeping the traced drawing replaces the document', kept.practice === null && kept.n === 1);
+
   check('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   console.error(err);

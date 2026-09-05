@@ -10,6 +10,10 @@ import { StylePanel } from '@/components/StylePanel';
 import { Hud } from '@/components/Hud';
 import { HelpButton } from '@/components/HelpButton';
 import { BrushCursor } from '@/components/BrushCursor';
+import { PracticeGuide } from '@/components/practice/PracticeGuide';
+import { PracticePanel } from '@/components/practice/PracticePanel';
+import { PracticePicker } from '@/components/practice/PracticePicker';
+import { PracticeComplete } from '@/components/practice/PracticeComplete';
 
 declare global {
   interface Window { __studio?: ReturnType<Studio['debug']> }
@@ -37,8 +41,10 @@ function Shell() {
   const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null);
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 720);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [practiceOpen, setPracticeOpen] = useState(false);
   const studio = useStudio();
   const fatal = useStudioState((s) => s.fatal);
+  const practice = useStudioState((s) => s.practice);
 
   // Attach the engine to the canvas once it is mounted.
   useEffect(() => {
@@ -49,6 +55,21 @@ function Shell() {
     window.__studio = studio.debug();
     return () => studio.dispose();
   }, [studio]);
+
+  // A lesson sets the brush for you and needs the whole canvas: collapse the style
+  // panel while one is open and bring it back afterwards.
+  const panelBeforeLesson = useRef<boolean | null>(null);
+  const inLesson = practice !== null;
+  useEffect(() => {
+    if (inLesson) {
+      if (panelBeforeLesson.current === null) { panelBeforeLesson.current = panelOpen; setPanelOpen(false); }
+    } else if (panelBeforeLesson.current !== null) {
+      setPanelOpen(panelBeforeLesson.current);
+      panelBeforeLesson.current = null;
+    }
+    // panelOpen is read only when a lesson starts
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inLesson]);
 
   // Keyboard shortcuts (tldraw-like: D draws, ? shows shortcuts)
   useEffect(() => {
@@ -67,6 +88,8 @@ function Shell() {
       else if (k === 'c') studio.clear();
       else if (k === 's') studio.exportPNG();
       else if (k === 'p') setPanelOpen((o) => !o);
+      else if (k === 'l') setPracticeOpen((o) => !o);
+      else if (k === 'n') studio.skipStep();
       else if (e.key === '?') setHelpOpen((o) => !o);
       else if (k === '[') studio.nudgeWeight(-1);
       else if (k === ']') studio.nudgeWeight(1);
@@ -74,7 +97,7 @@ function Shell() {
       else if (k === 'f') studio.zoomToFit();
       else if (e.key === '+' || e.key === '=') studio.zoomBy(1.25);
       else if (e.key === '-' || e.key === '_') studio.zoomBy(1 / 1.25);
-      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else setHelpOpen(false); }
+      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else { setHelpOpen(false); setPracticeOpen(false); } }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -85,18 +108,32 @@ function Shell() {
       {/* Single WebGL2 canvas: paper texture + p5.brush strokes */}
       <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[#f4f4f2]">
         <canvas ref={canvasRef} id="ink-canvas" className="absolute inset-0 block h-full w-full cursor-none touch-none" />
+        <PracticeGuide />
       </div>
       <BrushCursor canvas={canvasEl} />
 
+      {/* Practice: step card top-centre (below the quick actions on phones), result card above the dock */}
+      {practice?.status === 'active' && (
+        <div className="pointer-events-none fixed left-2 right-2 top-[56px] z-30 md:left-1/2 md:right-auto md:top-2 md:w-[420px] md:-translate-x-1/2">
+          <PracticePanel />
+        </div>
+      )}
+      {practice?.status === 'complete' && (
+        <div className="pointer-events-none fixed bottom-16 left-1/2 z-30 -translate-x-1/2">
+          <PracticeComplete onChooseLesson={() => setPracticeOpen(true)} />
+        </div>
+      )}
+      <PracticePicker open={practiceOpen} onOpenChange={setPracticeOpen} />
+
       {/* Chrome: fixed layers that never take pointer events except on their own controls */}
       <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
-        <QuickActions />
+        <QuickActions onPractice={() => setPracticeOpen(true)} />
       </div>
       <div className="pointer-events-none fixed right-2 top-2 z-30">
         <StylePanel open={panelOpen} />
       </div>
       <div className="pointer-events-none fixed bottom-2 left-1/2 z-30 -translate-x-1/2">
-        <ToolDock panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} />
+        <ToolDock panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} onPractice={() => setPracticeOpen((o) => !o)} />
       </div>
       <div className="pointer-events-none fixed bottom-2 left-2 z-30">
         <Hud />

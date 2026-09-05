@@ -22,6 +22,10 @@ import {
   type StrokeRecord, type Tool,
 } from './records';
 import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
+import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type Lesson, type LessonStep } from '@/practice/lessons';
+import { pathLength } from '@/practice/geometry';
+import { PASS_SCORE, scoreTrace, starsFor } from '@/practice/score';
+import { loadProgress, recordRun, saveProgress, type Progress } from '@/practice/progress';
 
 export const paperPresets: Record<PaperName, { bg: [number, number, number]; grain: number; label: string }> = {
   hotpress: { bg: [255, 254, 250], grain: 2.2, label: 'Hot Press Fine Art' },
@@ -57,6 +61,23 @@ export interface View { x: number; y: number; zoom: number }
 export const MIN_ZOOM = 0.2;
 export const MAX_ZOOM = 8;
 
+export interface PracticeFeedback { step: number; score: number; reversed: boolean; accepted: boolean; at: number }
+export interface PracticeSummary { score: number; stars: number; newBest: boolean }
+export interface PracticeState {
+  lessonId: string;
+  /** Index of the step being traced; equals the step count once complete. */
+  step: number;
+  /** Per finished step: score, or null when skipped. */
+  results: Array<number | null>;
+  status: 'active' | 'complete';
+  /** Show the remaining reference strokes on the canvas. */
+  guide: boolean;
+  feedback: PracticeFeedback | null;
+  /** Consecutive steps scored 80 or better. */
+  streak: number;
+  summary: PracticeSummary | null;
+}
+
 export interface StudioState {
   settings: Settings;
   hud: Hud;
@@ -69,6 +90,11 @@ export interface StudioState {
   /** Template id → PNG data URL of a stroke rendered by the engine; null until generated. */
   templatePreviews: Record<string, string> | null;
   view: View;
+  /** Tracing lesson in progress, or null in free drawing. */
+  practice: PracticeState | null;
+  /** Lesson id → engine-rendered PNG data URL; null until requested. */
+  lessonPreviews: Record<string, string> | null;
+  progress: Progress;
 }
 
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
@@ -118,6 +144,9 @@ export class Studio {
     fatal: null,
     templatePreviews: null,
     view: { x: 0, y: 0, zoom: 1 },
+    practice: null,
+    lessonPreviews: null,
+    progress: loadProgress(),
   };
   private listeners = new Set<() => void>();
 
@@ -140,6 +169,9 @@ export class Studio {
   private sampleQueued = false;
   private detach: (() => void) | null = null;
   private extentCache = new Map<string, number>();
+  /** The user's drawing while a lesson occupies the canvas. */
+  private practiceBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[]; settings: Settings; view: View } | null = null;
+  private lessonPreviewsQueued = false;
 
   // Camera. `committedView` is the view the committed texture was rendered at.
   private view: View = { x: 0, y: 0, zoom: 1 };
@@ -187,9 +219,10 @@ export class Studio {
   isDrawing() { return this.live !== null; }
 
   private syncHistory() {
+    const pr = this.state.practice;
     this.emit({
-      canUndo: this.strokes.length > 0,
-      canRedo: this.redoStack.length > 0,
+      canUndo: pr ? pr.status === 'active' && pr.step > 0 : this.strokes.length > 0,
+      canRedo: pr ? false : this.redoStack.length > 0,
       strokeCount: visibleRecords(this.strokes).length,
     });
     this.scheduleSave();
@@ -234,7 +267,12 @@ export class Studio {
   private saveNow() {
     clearTimeout(this.saveTimer);
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, settings: this.settings, view: this.view, strokes: serializeRecords(this.strokes) }));
+      // A lesson never overwrites the user's drawing: while one is open the backup is what gets saved.
+      const b = this.practiceBackup;
+      const doc = b
+        ? { v: SAVE_VERSION, settings: b.settings, view: b.view, strokes: serializeRecords(b.strokes) }
+        : { v: SAVE_VERSION, settings: this.settings, view: this.view, strokes: serializeRecords(this.strokes) };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(doc));
     } catch {
       if (!this.saveWarned) {
         this.saveWarned = true;
@@ -456,29 +494,240 @@ export class Studio {
       points.push({ x: round(22 + t * (W - 44), 100), y: round(H / 2 + Math.sin(t * Math.PI * 2) * 16 - (t - 0.5) * 10, 100), p: round(0.5 + 0.35 * Math.sin(t * Math.PI), 1000) });
     }
     const out: Record<string, string> = {};
-    try {
-      brush.load(c);
-      brush.noFill(); brush.noHatch(); brush.noField();
-      const bg = paperPresets[this.settings.paper].bg;
-      // Clear through the preview canvas's own context rather than brush.clear():
-      // right after a load() the engine's mask framebuffers still belong to the
-      // main canvas's context (they are rebuilt lazily on the first stroke), and
-      // brush.clear() would try to bind them here.
-      const pgl = c.getContext('webgl2')!;
+    this.renderOffscreen(c, (clearPaper) => {
       for (const t of BRUSH_TEMPLATES) {
-        pgl.bindFramebuffer(pgl.FRAMEBUFFER, null);
-        pgl.disable(pgl.SCISSOR_TEST);
-        pgl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
-        pgl.clear(pgl.COLOR_BUFFER_BIT | pgl.DEPTH_BUFFER_BIT);
+        clearPaper();
         const rec: BrushRecord = { tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 20240611, points };
         this.stampRecord(rec, W, H, 1, { x: 0, y: 0, zoom: 1 });
         out[t.id] = c.toDataURL('image/png');
       }
+    });
+    this.emit({ templatePreviews: out });
+  }
+
+  /**
+   * Runs `draw` with p5.brush loaded on an offscreen canvas, then re-loads the
+   * main canvas. `clearPaper` clears through the offscreen canvas's own context
+   * rather than brush.clear(): right after a load() the engine's mask
+   * framebuffers still belong to the previous context (they are rebuilt lazily
+   * on the first stroke), and brush.clear() would try to bind them.
+   */
+  private renderOffscreen(c: HTMLCanvasElement, draw: (clearPaper: () => void) => void) {
+    const bg = paperPresets[this.settings.paper].bg;
+    const pgl = c.getContext('webgl2')!;
+    const clearPaper = () => {
+      pgl.bindFramebuffer(pgl.FRAMEBUFFER, null);
+      pgl.disable(pgl.SCISSOR_TEST);
+      pgl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
+      pgl.clear(pgl.COLOR_BUFFER_BIT | pgl.DEPTH_BUFFER_BIT);
+    };
+    try {
+      brush.load(c);
+      brush.noFill(); brush.noHatch(); brush.noField();
+      draw(clearPaper);
     } finally {
-      brush.load(this.canvas);
+      brush.load(this.canvas!);
       brush.noFill(); brush.noHatch(); brush.noField();
     }
-    this.emit({ templatePreviews: out });
+  }
+
+  /** Engine-rendered thumbnails of every lesson, one lesson per frame; no-op once done. */
+  ensureLessonPreviews() {
+    if (this.state.lessonPreviews || this.lessonPreviewsQueued || !this.canvas) return;
+    this.lessonPreviewsQueued = true;
+    const W = 320, H = 240;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const zoom = Math.min(W / (LESSON_BOX.w + 40), H / (LESSON_BOX.h + 40));
+    const view: View = { zoom, x: (W - LESSON_BOX.w * zoom) / 2, y: (H - LESSON_BOX.h * zoom) / 2 };
+    const out: Record<string, string> = {};
+    const queue = [...LESSONS];
+    const next = () => {
+      const lesson = queue.shift();
+      if (!lesson) { this.lessonPreviewsQueued = false; this.emit({ lessonPreviews: out }); return; }
+      if (this.live) { requestAnimationFrame(next); return; } // never steal the engine mid-stroke
+      try {
+        this.renderOffscreen(c, (clearPaper) => {
+          clearPaper();
+          lessonSteps(lesson).forEach((st, i) => this.stampRecord(this.stepRecord(st, i), W, H, 1, view));
+          out[lesson.id] = c.toDataURL('image/png');
+        });
+      } catch (err) {
+        console.warn('[studio] lesson preview failed', lesson.id, err);
+      }
+      requestAnimationFrame(next);
+    };
+    requestAnimationFrame(next);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Practice (tracing lessons)
+  // ---------------------------------------------------------------------------
+  /** Reference stroke of a lesson step as a brush record (world units = lesson units). */
+  private stepRecord(st: LessonStep, i: number): BrushRecord {
+    const t = BRUSH_TEMPLATES.find((x) => x.id === st.template) ?? BRUSH_TEMPLATES[0];
+    return {
+      tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: st.size, color: st.color,
+      pressureMode: 'gaussian', sensitivity: 1.25, seed: 7000 + i, points: st.points,
+    };
+  }
+
+  private practiceLesson(): { lesson: Lesson; steps: LessonStep[] } | null {
+    const pr = this.state.practice;
+    const lesson = pr && lessonById(pr.lessonId);
+    return lesson ? { lesson, steps: lessonSteps(lesson) } : null;
+  }
+
+  /** Opens a lesson: the current drawing is set aside (and still autosaved) until the lesson is left. */
+  startPractice(id: string) {
+    const lesson = lessonById(id);
+    if (!lesson || !this.sgl) return;
+    if (this.live) this.cancelStroke(true);
+    if (!this.practiceBackup) {
+      this.practiceBackup = { strokes: this.strokes, redo: this.redoStack, settings: clone(this.settings), view: { ...this.view } };
+    }
+    this.strokes = [];
+    this.redoStack = [];
+    this.emit({ practice: { lessonId: id, step: 0, results: [], status: 'active', guide: this.state.practice?.guide ?? true, feedback: null, streak: 0, summary: null } });
+    this.frameLesson();
+    this.syncHistory();
+    this.practiceApplyBrush(0);
+    this.toast(`${lesson.title}: trace the glowing stroke`, { duration: 2500 });
+  }
+
+  /** Fits the lesson box in the viewport, leaving room for the step card at the top. */
+  private frameLesson() {
+    const { w, h } = LESSON_BOX;
+    // The step card sits top-centre on tablets and desktops (~180px tall) and below
+    // the quick actions on phones; the dock takes the bottom.
+    const top = this.cssW >= 768 ? 200 : 228, bottom = 72, side = 24;
+    const zoom = clamp(Math.min((this.cssW - side * 2) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
+    this.setViewLive({ zoom, x: this.cssW / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
+    this.committedView = { ...this.view };
+    this.repaintPaper();
+  }
+
+  /** Leaves the lesson. `keep` keeps the traced drawing as the document instead of restoring the previous one. */
+  exitPractice(keep = false) {
+    if (!this.state.practice) return;
+    if (this.live) this.cancelStroke(true);
+    const b = this.practiceBackup;
+    this.practiceBackup = null;
+    this.emit({ practice: null });
+    if (b) {
+      if (!keep) {
+        this.strokes = b.strokes;
+        this.redoStack = b.redo;
+        this.setViewLive(b.view);
+        this.committedView = { ...this.view };
+        this.repaintPaper();
+      } else {
+        this.redoStack = [];
+      }
+      this.set({ ...b.settings, tool: 'brush' });
+      this.emit({ tipError: null, tipExtent: this.extentFor(b.settings.tipSource) });
+    }
+    this.syncHistory();
+    this.saveNow();
+  }
+
+  /** Starts the open lesson over. */
+  restartPractice() {
+    const pr = this.state.practice;
+    if (!pr) return;
+    if (this.live) this.cancelStroke(true);
+    this.strokes = [];
+    this.redoStack = [];
+    this.repaintPaper();
+    this.emit({ practice: { ...pr, step: 0, results: [], status: 'active', feedback: null, streak: 0, summary: null } });
+    this.syncHistory();
+    this.practiceApplyBrush(0);
+  }
+
+  setPracticeGuide(guide: boolean) {
+    const pr = this.state.practice;
+    if (pr) this.emit({ practice: { ...pr, guide } });
+  }
+
+  /** Sets the brush, colour and size the reference stroke was made with. */
+  private practiceApplyBrush(i: number) {
+    const ctx = this.practiceLesson();
+    const st = ctx?.steps[i];
+    if (!st) return;
+    const t = BRUSH_TEMPLATES.find((x) => x.id === st.template);
+    if (!t) return;
+    this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: st.size, color: st.color, tool: 'brush' });
+    this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
+  }
+
+  private dropLastStroke() {
+    this.strokes.pop();
+    this.rebuild();
+  }
+
+  /** Scores the stroke just committed against the current step and advances or rejects it. */
+  private practiceEvaluate(rec: StrokeRecord) {
+    const pr = this.state.practice, ctx = this.practiceLesson();
+    if (!pr || !ctx || pr.status !== 'active') return;
+    if (rec.tool !== 'brush') { this.dropLastStroke(); this.syncHistory(); this.toast('Lessons are traced with the brush'); return; }
+    const st = ctx.steps[pr.step];
+    const tol = Math.max(10, stepWidth(st) * 0.6 + 4);
+    if (rec.points.length < 2 || pathLength(rec.points) < tol) {
+      this.dropLastStroke();
+      this.syncHistory();
+      return; // a tap: nothing to score
+    }
+    const res = scoreTrace(rec.points, st.points, tol);
+    const accepted = res.score >= PASS_SCORE;
+    const feedback: PracticeFeedback = { step: pr.step, score: res.score, reversed: res.reversed, accepted, at: Date.now() };
+    if (!accepted) {
+      this.dropLastStroke();
+      this.emit({ practice: { ...pr, feedback, streak: 0 } });
+      this.syncHistory();
+      return;
+    }
+    this.advancePractice(res.score, feedback);
+  }
+
+  /** Leaves the current step open and moves on. */
+  skipStep() {
+    const pr = this.state.practice;
+    if (pr?.status === 'active') this.advancePractice(null, null);
+  }
+
+  private advancePractice(score: number | null, feedback: PracticeFeedback | null) {
+    const pr = this.state.practice, ctx = this.practiceLesson();
+    if (!pr || !ctx) return;
+    const results = [...pr.results];
+    results[pr.step] = score;
+    const step = pr.step + 1;
+    const streak = score !== null && score >= 80 ? pr.streak + 1 : 0;
+    if (step >= ctx.steps.length) {
+      const total = results.reduce<number>((a, r) => a + (r ?? 0), 0) / ctx.steps.length;
+      const finalScore = Math.round(total);
+      const stars = starsFor(finalScore);
+      const { progress, newBest } = recordRun(this.state.progress, ctx.lesson.id, finalScore, stars);
+      saveProgress(progress);
+      this.emit({ progress, practice: { ...pr, results, step, streak, feedback, status: 'complete', summary: { score: finalScore, stars, newBest } } });
+      this.syncHistory();
+      return;
+    }
+    this.emit({ practice: { ...pr, results, step, streak, feedback } });
+    this.syncHistory();
+    this.practiceApplyBrush(step);
+  }
+
+  /** Undo inside a lesson: removes the last traced stroke and reopens its step. */
+  private practiceBack() {
+    const pr = this.state.practice;
+    if (!pr || pr.status !== 'active') return;
+    if (pr.step === 0) { this.toast('Nothing to undo'); return; }
+    const prev = pr.step - 1;
+    const results = pr.results.slice(0, prev);
+    if (pr.results[prev] !== null && this.strokes.length) this.dropLastStroke();
+    this.emit({ practice: { ...pr, step: prev, results, feedback: null, streak: 0 } });
+    this.syncHistory();
+    this.practiceApplyBrush(prev);
   }
 
   /** Eraser dabs (device px) for the record's points from index `from` on. */
@@ -574,6 +823,7 @@ export class Studio {
 
   undo = () => {
     if (this.live) this.cancelStroke();
+    if (this.state.practice) { this.practiceBack(); return; }
     if (!this.strokes.length) { this.toast('Nothing to undo'); return; }
     this.redoStack.push(this.strokes.pop()!);
     this.rebuild();
@@ -581,6 +831,7 @@ export class Studio {
   };
 
   redo = () => {
+    if (this.state.practice) return;
     const rec = this.redoStack.pop();
     if (!rec) return;
     this.commitRecord(rec, false);
@@ -589,6 +840,7 @@ export class Studio {
   /** Clears the paper as an undoable history entry. */
   clear = () => {
     if (this.live) this.cancelStroke();
+    if (this.state.practice) { this.restartPractice(); return; }
     if (visibleRecords(this.strokes).length === 0) { this.toast('The paper is already blank'); return; }
     this.commitRecord({ tool: 'clear' });
     this.toast('Canvas cleared', { action: { label: 'Undo', onClick: this.undo } });
@@ -956,6 +1208,7 @@ export class Studio {
     this.live = null;
     this.queueHud({ pressure: 0 });
     this.pushRecord(live.rec);
+    if (this.state.practice?.status === 'active') this.practiceEvaluate(live.rec);
   }
 
   private schedulePreview() {
@@ -1008,7 +1261,7 @@ export class Studio {
   // ---------------------------------------------------------------------------
   /** Draws a lemniscate through the exact same pipeline as a pointer stroke. */
   drawSampleStroke = () => {
-    if (!this.sgl) return;
+    if (!this.sgl || this.state.practice) return;
     if (this.settings.tool !== 'brush') this.setTool('brush');
     const c = this.toWorld(this.cssW / 2, this.cssH / 2), z = this.view.zoom;
     const rx = Math.min(this.cssW * 0.32, 260) / z, ry = Math.min(this.cssH * 0.22, 120) / z;
@@ -1026,6 +1279,7 @@ export class Studio {
     const rec = { ...(this.newRecord('brush', points[0]) as BrushRecord), ...overrides, points };
     this.commitRecord(rec);
     this.queueHud({ stamps: strokeSegments(rec).stamps });
+    if (this.state.practice?.status === 'active') this.practiceEvaluate(rec);
     return rec;
   }
 
@@ -1190,6 +1444,14 @@ export class Studio {
       setCulling: (on: boolean) => { this.cullingEnabled = on; },
       lastCulled: () => this.lastCulled,
       conditioned: (rec: BrushRecord) => conditionPoints(rec),
+      practice: {
+        start: (id: string) => this.startPractice(id), exit: (keep?: boolean) => this.exitPractice(keep),
+        skip: () => this.skipStep(), restart: () => this.restartPractice(), guide: (on: boolean) => this.setPracticeGuide(on),
+        previews: () => this.ensureLessonPreviews(),
+        lessons: LESSONS.map((l) => l.id),
+        steps: (id: string) => lessonSteps(lessonById(id)!).map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points })),
+        score: (user: Point[], ref: Point[], tol: number) => scoreTrace(user, ref, tol),
+      },
       // low-level primitives for determinism experiments
       gl: {
         blitCommitted: () => this.sgl!.blit(this.sgl!.committedTex),

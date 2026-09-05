@@ -12,7 +12,7 @@ async function copyText(text: string, label: string) {
 }
 
 /** Top-left: main menu + undo / redo / clear, like tldraw's quick actions bar. */
-export function QuickActions() {
+export function QuickActions({ onPractice }: { onPractice?: () => void }) {
   const studio = useStudio();
   const canUndo = useStudioState((s) => s.canUndo);
   const canRedo = useStudioState((s) => s.canRedo);
@@ -37,6 +37,7 @@ export function QuickActions() {
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.resetView()}>Reset view to 100%<DropdownMenuShortcut>0</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={studio.drawSampleStroke}>Draw sample stroke<DropdownMenuShortcut>T</DropdownMenuShortcut></DropdownMenuItem>
+          <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => onPractice?.()}>Practice lessons…<DropdownMenuShortcut>L</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.resetDefaults()}>Reset brush to myBrush defaults</DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />
           <DropdownMenuItem className="rounded-[7px] py-1.5 text-[var(--tl-danger)] focus:text-[var(--tl-danger)]" onSelect={studio.clear}>Clear canvas<DropdownMenuShortcut>C</DropdownMenuShortcut></DropdownMenuItem>
