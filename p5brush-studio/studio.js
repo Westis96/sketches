@@ -653,11 +653,13 @@ _m.rect(10, 10, 15, 15);`;
   // ---------------------------------------------------------------------------
   // 9. Canvas sizing + p5.brush target
   // ---------------------------------------------------------------------------
-  function resize() {
+  function resize(force = false) {
     const desk = $('studio-desk');
-    cssW = desk.clientWidth || window.innerWidth;
-    cssH = desk.clientHeight || window.innerHeight;
-    dpr = Math.min(2, window.devicePixelRatio || 1);
+    const nextW = desk.clientWidth || window.innerWidth;
+    const nextH = desk.clientHeight || window.innerHeight;
+    const nextDpr = Math.min(2, window.devicePixelRatio || 1);
+    if (!force && nextW === cssW && nextH === cssH && nextDpr === dpr) return; // e.g. iOS keyboard viewport events
+    cssW = nextW; cssH = nextH; dpr = nextDpr;
     glW = Math.max(1, Math.round(cssW * dpr));
     glH = Math.max(1, Math.round(cssH * dpr));
     canvas.width = glW; canvas.height = glH;
@@ -1213,7 +1215,7 @@ ${tip}
     }
 
     setupUI();
-    resize();
+    resize(true);
     window.addEventListener('resize', onResize);
     if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
 
