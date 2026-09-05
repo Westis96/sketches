@@ -9,14 +9,14 @@ import { ToolDock } from '@/components/ToolDock';
 import { StylePanel } from '@/components/StylePanel';
 import { Hud } from '@/components/Hud';
 import { HelpButton } from '@/components/HelpButton';
-import { cn } from '@/lib/utils';
+import { BrushCursor } from '@/components/BrushCursor';
 
 declare global {
   interface Window { __studio?: ReturnType<Studio['debug']> }
 }
 
 export default function App() {
-  const [studio] = useState(() => new Studio((msg) => toast(msg)));
+  const [studio] = useState(() => new Studio((msg, opts) => toast(msg, opts)));
   return (
     <StudioContext.Provider value={studio}>
       <TooltipProvider delayDuration={250} skipDelayDuration={400}>
@@ -34,10 +34,10 @@ export default function App() {
 
 function Shell() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [canvasEl, setCanvasEl] = useState<HTMLCanvasElement | null>(null);
   const [panelOpen, setPanelOpen] = useState(() => window.innerWidth >= 720);
   const [helpOpen, setHelpOpen] = useState(false);
   const studio = useStudio();
-  const tool = useStudioState((s) => s.settings.tool);
   const fatal = useStudioState((s) => s.fatal);
 
   // Attach the engine to the canvas once it is mounted.
@@ -45,6 +45,7 @@ function Shell() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     studio.attach(canvas);
+    setCanvasEl(canvas);
     window.__studio = studio.debug();
     return () => studio.dispose();
   }, [studio]);
@@ -69,7 +70,7 @@ function Shell() {
       else if (e.key === '?') setHelpOpen((o) => !o);
       else if (k === '[') studio.nudgeWeight(-1);
       else if (k === ']') studio.nudgeWeight(1);
-      else if (k === 'escape') { setHelpOpen(false); }
+      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else setHelpOpen(false); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -79,12 +80,9 @@ function Shell() {
     <div className="relative h-full w-full overflow-hidden">
       {/* Single WebGL2 canvas: paper texture + p5.brush strokes */}
       <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[#f4f4f2]">
-        <canvas
-          ref={canvasRef}
-          id="ink-canvas"
-          className={cn('absolute inset-0 block h-full w-full touch-none', tool === 'eraser' ? 'cursor-cell' : 'cursor-crosshair')}
-        />
+        <canvas ref={canvasRef} id="ink-canvas" className="absolute inset-0 block h-full w-full cursor-none touch-none" />
       </div>
+      <BrushCursor canvas={canvasEl} />
 
       {/* Chrome: fixed layers that never take pointer events except on their own controls */}
       <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
@@ -94,7 +92,7 @@ function Shell() {
         <StylePanel open={panelOpen} />
       </div>
       <div className="pointer-events-none fixed bottom-2 left-1/2 z-30 -translate-x-1/2">
-        <ToolDock />
+        <ToolDock panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} />
       </div>
       <div className="pointer-events-none fixed bottom-2 left-2 z-30 hidden sm:block">
         <Hud />

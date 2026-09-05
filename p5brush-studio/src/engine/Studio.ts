@@ -6,17 +6,18 @@
  *  - Live preview: while the pointer is down the committed image is restored
  *    from a texture and the in-progress plot is re-stamped every frame with the
  *    same seed (brush.seed), so the stroke you see is the stroke you get on lift.
- *  - Strokes are vector records, so undo, paper changes, resize and the sketch
- *    export all replay deterministically.
+ *  - Strokes are vector records, so undo, paper changes, resize, autosave and
+ *    the sketch export all replay deterministically. Clear is a record too.
  *
  * The class is framework-free; React subscribes through `subscribe/getState`.
  */
 import * as brush from 'p5.brush/standalone';
 import type { BrushParams } from 'p5.brush/standalone';
 import { StudioGL, type Dab } from './StudioGL';
-import { compileTip, checkTip } from './tipShim';
+import { compileTip, checkTip, tipExtent } from './tipShim';
 import {
-  DEFAULT_SPEC, DEFAULT_TIP_SOURCE, clamp, clone, fmt, parseSpecCode, specCode, strokeSegments,
+  DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, clamp, clone, deserializeRecords, fmt, parseSpecCode,
+  serializeRecords, specCode, strokeSegments, visibleRecords,
   type BrushRecord, type BrushSpec, type EraserRecord, type PaperName, type Point, type PressureMode,
   type StrokeRecord, type Tool,
 } from './records';
@@ -53,42 +54,51 @@ export interface StudioState {
   hud: Hud;
   canUndo: boolean;
   canRedo: boolean;
-  strokeCount: number;
+  strokeCount: number;       // visible strokes (after the last clear)
+  tipExtent: number;         // ink extent of the current tip, fraction of the 100-unit space
   tipError: string | null;
   fatal: string | null;
 }
 
-export type Toast = (message: string) => void;
+export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
+export type Toast = (message: string, opts?: ToastOptions) => void;
 
 const CHECKPOINT_EVERY = 6;
 const MAX_CHECKPOINTS = 4;
 const POOL = 8;
+const SAVE_KEY = `p5brush-studio:v${SAVE_VERSION}`;
+const SAVE_DEBOUNCE_MS = 700;
+
+const DEFAULT_SETTINGS: Settings = {
+  spec: DEFAULT_SPEC,
+  tipSource: DEFAULT_TIP_SOURCE,
+  size: 1,
+  color: '#1a1c23',
+  paper: 'hotpress',
+  tool: 'brush',
+  eraserSize: 24,
+  pressureMode: 'gaussian',
+  forceSensitivity: 1.25,
+  pencilOnly: false,
+};
 
 interface Live {
   id: number;
   rect: DOMRect;
-  rec: StrokeRecord;
+  rec: BrushRecord | EraserRecord;
   erasedUpTo: number;
 }
 
+const round = (v: number, d: number) => Math.round(v * d) / d;
+
 export class Studio {
   private state: StudioState = {
-    settings: {
-      spec: clone(DEFAULT_SPEC),
-      tipSource: DEFAULT_TIP_SOURCE,
-      size: 1,
-      color: '#1a1c23',
-      paper: 'hotpress',
-      tool: 'brush',
-      eraserSize: 24,
-      pressureMode: 'gaussian',
-      forceSensitivity: 1.25,
-      pencilOnly: false,
-    },
+    settings: clone(DEFAULT_SETTINGS),
     hud: { pointerType: null, pressure: 0, tiltX: 0, tiltY: 0, stamps: 0 },
     canUndo: false,
     canRedo: false,
     strokeCount: 0,
+    tipExtent: 0.5,
     tipError: null,
     fatal: null,
   };
@@ -105,8 +115,14 @@ export class Studio {
   private live: Live | null = null;
   private previewQueued = false;
   private hudQueued = false;
+  private pendingHud: Partial<Hud> = {};
   private resizeTimer = 0;
+  private saveTimer = 0;
+  private saveWarned = false;
+  private restored = false;
+  private sampleQueued = false;
   private detach: (() => void) | null = null;
+  private extentCache = new Map<string, number>();
 
   // One p5.brush brush per distinct tip source (the only thing that needs the
   // 500×500 rasterisation). p5.brush reads the params object by reference at
@@ -115,7 +131,10 @@ export class Studio {
   private registry = new Map<string, { name: string; params: BrushParams; tick: number }>();
   private regTick = 0;
 
-  constructor(private toast: Toast = () => {}) {}
+  constructor(private toast: Toast = () => {}) {
+    this.restoreSaved();
+    this.state.tipExtent = this.extentFor(this.state.settings.tipSource);
+  }
 
   // ---------------------------------------------------------------------------
   // Store
@@ -129,11 +148,60 @@ export class Studio {
   }
   private set(patch: Partial<Settings>) {
     this.emit({ settings: { ...this.state.settings, ...patch } });
+    this.scheduleSave();
   }
   get settings() { return this.state.settings; }
+  isDrawing() { return this.live !== null; }
 
   private syncHistory() {
-    this.emit({ canUndo: this.strokes.length > 0, canRedo: this.redoStack.length > 0, strokeCount: this.strokes.length });
+    this.emit({
+      canUndo: this.strokes.length > 0,
+      canRedo: this.redoStack.length > 0,
+      strokeCount: visibleRecords(this.strokes).length,
+    });
+    this.scheduleSave();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Persistence
+  // ---------------------------------------------------------------------------
+  private restoreSaved() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return;
+      const doc = JSON.parse(raw) as { v?: number; settings?: Partial<Settings>; strokes?: unknown };
+      if (doc?.v !== SAVE_VERSION) return;
+      const s = doc.settings ?? {};
+      const settings: Settings = {
+        ...clone(DEFAULT_SETTINGS),
+        ...s,
+        spec: { ...clone(DEFAULT_SPEC), ...(s.spec ?? {}) },
+        tool: 'brush',
+      };
+      try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
+      this.state = { ...this.state, settings };
+      this.strokes = deserializeRecords(doc.strokes);
+      this.restored = this.strokes.length > 0;
+    } catch {
+      /* corrupt or unavailable storage: start fresh */
+    }
+  }
+
+  private scheduleSave() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => this.saveNow(), SAVE_DEBOUNCE_MS);
+  }
+
+  private saveNow() {
+    clearTimeout(this.saveTimer);
+    try {
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, settings: this.settings, strokes: serializeRecords(this.strokes) }));
+    } catch {
+      if (!this.saveWarned) {
+        this.saveWarned = true;
+        this.toast('Autosave paused: the drawing no longer fits in browser storage', { duration: 5000 });
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -159,6 +227,7 @@ export class Studio {
     const prevent = (e: Event) => e.preventDefault();
     const onResize = () => this.onResize();
     const onLost = (e: Event) => { e.preventDefault(); this.emit({ fatal: 'WebGL context lost. Reload the page to continue.' }); };
+    const onHide = () => { if (document.visibilityState === 'hidden') this.saveNow(); };
 
     canvas.addEventListener('pointerdown', onDown, { passive: false });
     window.addEventListener('pointermove', onMove, { passive: false });
@@ -170,6 +239,8 @@ export class Studio {
     canvas.addEventListener('webglcontextlost', onLost);
     window.addEventListener('resize', onResize);
     window.visualViewport?.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
     this.detach = () => {
       canvas.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
@@ -181,20 +252,30 @@ export class Studio {
       canvas.removeEventListener('webglcontextlost', onLost);
       window.removeEventListener('resize', onResize);
       window.visualViewport?.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
     };
 
     this.resize(true);
+    this.syncHistory();
     if (!this.sampleQueued) {
       this.sampleQueued = true;
-      setTimeout(() => this.drawSampleStroke(), 120);
+      if (this.restored) {
+        this.toast(`Restored your drawing (${visibleRecords(this.strokes).length} strokes)`);
+      } else {
+        setTimeout(() => {
+          this.drawSampleStroke();
+          this.toast('Draw anywhere. D brush · E eraser · ? shortcuts', { duration: 4500 });
+        }, 120);
+      }
     }
   }
-  private sampleQueued = false;
 
   dispose() {
     this.detach?.();
     this.detach = null;
     clearTimeout(this.resizeTimer);
+    this.saveNow();
   }
 
   // ---------------------------------------------------------------------------
@@ -222,6 +303,12 @@ export class Studio {
     params.rotate = sp.rotate; params.markerTip = sp.markerTip;
     params.pressure = { type: 'gaussian', mode: 'gaussian', curve: sp.pressure.curve, min_max: sp.pressure.min_max };
     return entry.name;
+  }
+
+  private extentFor(tipSource: string): number {
+    let v = this.extentCache.get(tipSource);
+    if (v === undefined) { v = tipExtent(tipSource); this.extentCache.set(tipSource, v); }
+    return v;
   }
 
   // ---------------------------------------------------------------------------
@@ -265,7 +352,8 @@ export class Studio {
   }
 
   private renderRecord(rec: StrokeRecord) {
-    if (rec.tool === 'eraser') this.sgl!.eraseDabs(this.eraserDabs(rec, 0));
+    if (rec.tool === 'clear') this.sgl!.blit(this.sgl!.paperTex);
+    else if (rec.tool === 'eraser') this.sgl!.eraseDabs(this.eraserDabs(rec, 0));
     else this.renderBrushStroke(rec);
   }
 
@@ -316,6 +404,7 @@ export class Studio {
   }
 
   undo = () => {
+    if (this.live) this.cancelStroke();
     if (!this.strokes.length) { this.toast('Nothing to undo'); return; }
     this.redoStack.push(this.strokes.pop()!);
     this.rebuild();
@@ -328,11 +417,22 @@ export class Studio {
     this.commitRecord(rec, false);
   };
 
+  /** Clears the paper as an undoable history entry. */
   clear = () => {
-    this.strokes = []; this.redoStack = [];
-    this.rebuild();
-    this.syncHistory();
-    this.toast('White paper pristine');
+    if (this.live) this.cancelStroke();
+    if (visibleRecords(this.strokes).length === 0) { this.toast('The paper is already blank'); return; }
+    this.commitRecord({ tool: 'clear' });
+    this.toast('Canvas cleared', { action: { label: 'Undo', onClick: this.undo } });
+  };
+
+  /** Discards the stroke in progress (Escape). */
+  cancelStroke = () => {
+    if (!this.live) return;
+    this.live = null;
+    this.previewQueued = false;
+    this.sgl!.blit(this.sgl!.committedTex);
+    this.queueHud({ pressure: 0 });
+    this.toast('Stroke cancelled');
   };
 
   // ---------------------------------------------------------------------------
@@ -417,11 +517,12 @@ export class Studio {
   private pointFromEvent(e: PointerEvent, rect: DOMRect): Point {
     let p = e.pressure;
     if (!(p > 0)) p = e.pointerType === 'pen' ? 0.02 : 0.5;
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top, p };
+    // Quantise at capture so autosaved replays are identical to the live stroke.
+    return { x: round(e.clientX - rect.left, 100), y: round(e.clientY - rect.top, 100), p: round(p, 1000) };
   }
 
   /** A record captures everything needed to replay the stroke deterministically. */
-  private newRecord(tool: Tool, firstPt: Point): StrokeRecord {
+  private newRecord(tool: Tool, firstPt: Point): BrushRecord | EraserRecord {
     const s = this.settings;
     if (tool === 'eraser') return { tool, size: s.eraserSize, points: [firstPt] };
     const spec = clone(s.spec);
@@ -479,7 +580,7 @@ export class Studio {
     // once the preview is current the framebuffer *is* the committed result.
     if (this.previewQueued) this.renderPreview();
     this.live = null;
-    this.emit({ hud: { ...this.state.hud, pressure: 0 } });
+    this.queueHud({ pressure: 0 });
     this.pushRecord(live.rec);
   }
 
@@ -508,7 +609,6 @@ export class Studio {
     if (stamps !== this.state.hud.stamps) this.queueHud({ stamps });
   }
 
-  private pendingHud: Partial<Hud> = {};
   private queueHud(patch: Partial<Hud>) {
     Object.assign(this.pendingHud, patch);
     if (this.hudQueued) return;
@@ -542,10 +642,9 @@ export class Studio {
     const steps = 160;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps, a = t * Math.PI * 2;
-      points.push({ x: cx + Math.sin(a) * rx, y: cy + Math.sin(a * 2) * ry, p: 0.5 + 0.4 * Math.sin(a * 3) ** 2 });
+      points.push({ x: round(cx + Math.sin(a) * rx, 100), y: round(cy + Math.sin(a * 2) * ry, 100), p: round(0.5 + 0.4 * Math.sin(a * 3) ** 2, 1000) });
     }
     this.commitPoints(points);
-    this.toast('p5.brush sample stroke (lemniscate)');
   };
 
   /** Commits a brush stroke from a list of CSS-pixel points (also used by tests). */
@@ -556,19 +655,26 @@ export class Studio {
     return rec;
   }
 
-  exportPNG = () => {
+  /** Exports a PNG: native share sheet on touch devices when available, download otherwise. */
+  exportPNG = async () => {
     const sgl = this.sgl, canvas = this.canvas;
     if (!sgl || !canvas) return;
     sgl.blit(sgl.committedTex); // a stale preview could be up
-    canvas.toBlob((blob) => {
-      if (!blob) { this.toast('Export failed'); return; }
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `p5brush-studio-${Date.now()}.png`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 4000);
-      this.toast(`Exported ${this.glW}×${this.glH} PNG`);
-    }, 'image/png');
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
+    if (!blob) { this.toast('Export failed'); return; }
+    const name = `p5brush-studio-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`;
+    const file = new File([blob], name, { type: 'image/png' });
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    if (coarse && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'p5.brush drawing' }); return; }
+      catch (err) { if ((err as Error).name === 'AbortError') return; }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    this.toast(`Exported ${this.glW}×${this.glH} PNG`);
   };
 
   // ---------------------------------------------------------------------------
@@ -583,20 +689,27 @@ export class Studio {
   setEraserSize(eraserSize: number) { this.set({ eraserSize }); }
   setPressureMode(pressureMode: PressureMode) { this.set({ pressureMode }); }
   setForceSensitivity(forceSensitivity: number) { this.set({ forceSensitivity }); }
-  setPencilOnly(pencilOnly: boolean) { this.set({ pencilOnly }); }
+  setPencilOnly(pencilOnly: boolean) {
+    this.set({ pencilOnly });
+    this.toast(pencilOnly ? 'Pencil only: finger touches are ignored' : 'Accepting pencil and touch');
+  }
   setTool(tool: Tool) { this.set({ tool }); }
   setPaper(paper: PaperName) {
     this.set({ paper });
     if (this.sgl) this.repaintPaper();
   }
-  nudgeWeight(delta: number) { this.setSpec({ weight: clamp(this.settings.spec.weight + delta, 1, 80) }); }
+  nudgeWeight(delta: number) {
+    const weight = clamp(this.settings.spec.weight + delta, 1, 80);
+    this.setSpec({ weight });
+    this.toast(`Weight ${weight} px`, { duration: 900 });
+  }
 
   /** Validates and applies a tip body; returns false (and records the error) if it does not compile. */
   setTipSource(tipSource: string): boolean {
     try {
       checkTip(tipSource);
       this.set({ tipSource });
-      this.emit({ tipError: null });
+      this.emit({ tipError: null, tipExtent: this.extentFor(tipSource) });
       return true;
     } catch (err) {
       this.emit({ tipError: (err as Error).message });
@@ -606,7 +719,7 @@ export class Studio {
 
   resetDefaults() {
     this.set({ spec: clone(DEFAULT_SPEC), tipSource: DEFAULT_TIP_SOURCE, size: 1 });
-    this.emit({ tipError: null });
+    this.emit({ tipError: null, tipExtent: this.extentFor(DEFAULT_TIP_SOURCE) });
     this.toast('myBrush defaults restored');
   }
 
@@ -614,13 +727,13 @@ export class Studio {
   applySpecCode(text: string): string {
     const parsed = parseSpecCode(text);
     this.set({ spec: parsed.spec, tipSource: parsed.tipSource });
-    this.emit({ tipError: null });
+    this.emit({ tipError: null, tipExtent: this.extentFor(parsed.tipSource) });
     return parsed.name;
   }
 
   specCode(name = 'myBrush') { return specCode(this.settings.spec, this.settings.tipSource, name); }
 
-  /** A complete p5.js sketch that replays the drawing with p5.brush. */
+  /** A complete p5.js sketch that replays the visible drawing with p5.brush. */
   sketchCode(): string {
     const conf = paperPresets[this.settings.paper];
     const lines = [
@@ -640,7 +753,7 @@ export class Studio {
       '  translate(-width / 2, -height / 2);',
     ];
     const names = new Map<string, string>();
-    for (const rec of this.strokes) {
+    for (const rec of visibleRecords(this.strokes)) {
       if (rec.tool !== 'brush') { lines.push('  // (eraser stroke omitted)'); continue; }
       const key = JSON.stringify(rec.spec) + '|' + rec.tipSource;
       let name = names.get(key);
@@ -665,13 +778,14 @@ export class Studio {
     const studio = this;
     return {
       get state() { return studio.state; },
-      strokes: () => this.strokes,
+      strokes: () => visibleRecords(this.strokes),
+      history: () => this.strokes,
       commit: (points: Point[], overrides?: Partial<BrushRecord>) => this.commitPoints(points, overrides),
-      undo: this.undo, redo: this.redo, clear: this.clear, sample: this.drawSampleStroke,
+      undo: this.undo, redo: this.redo, clear: this.clear, sample: this.drawSampleStroke, cancel: this.cancelStroke,
       sketchCode: () => this.sketchCode(), specCode: () => this.specCode(),
       setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),
       setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
-      rebuildAll: () => this.repaintPaper(),
+      rebuildAll: () => this.repaintPaper(), saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
     };
   }
 }

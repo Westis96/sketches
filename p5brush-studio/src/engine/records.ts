@@ -46,7 +46,57 @@ export interface EraserRecord {
   points: Point[];
 }
 
-export type StrokeRecord = BrushRecord | EraserRecord;
+/** Clears the paper. Kept in the history so Clear is undoable like any stroke. */
+export interface ClearRecord { tool: 'clear' }
+
+export type StrokeRecord = BrushRecord | EraserRecord | ClearRecord;
+
+/** Records that are currently visible: everything after the last clear. */
+export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
+  for (let i = records.length - 1; i >= 0; i--) if (records[i].tool === 'clear') return records.slice(i + 1);
+  return records;
+}
+
+// ---------------------------------------------------------------------------
+// Persistence (localStorage): compact, versioned, validated on load
+// ---------------------------------------------------------------------------
+export const SAVE_VERSION = 1;
+
+type SavedRecord =
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[] }
+  | { t: 'e'; size: number; pts: number[] }
+  | { t: 'c' };
+
+const packPoints = (pts: Point[]) => pts.flatMap((p) => [p.x, p.y, p.p]);
+const unpackPoints = (a: number[]): Point[] => {
+  const out: Point[] = [];
+  for (let i = 0; i + 2 < a.length; i += 3) out.push({ x: a[i], y: a[i + 1], p: a[i + 2] });
+  return out;
+};
+
+export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
+  return records.map((r): SavedRecord => {
+    if (r.tool === 'clear') return { t: 'c' };
+    if (r.tool === 'eraser') return { t: 'e', size: r.size, pts: packPoints(r.points) };
+    return { t: 'b', spec: r.spec, tip: r.tipSource, size: r.size, color: r.color, pm: r.pressureMode, sens: r.sensitivity, seed: r.seed, pts: packPoints(r.points) };
+  });
+}
+
+export function deserializeRecords(saved: unknown): StrokeRecord[] {
+  if (!Array.isArray(saved)) return [];
+  const out: StrokeRecord[] = [];
+  for (const r of saved as SavedRecord[]) {
+    if (!r || typeof r !== 'object') continue;
+    if (r.t === 'c') { out.push({ tool: 'clear' }); continue; }
+    if (!Array.isArray(r.pts) || r.pts.length < 3) continue;
+    const points = unpackPoints(r.pts);
+    if (r.t === 'e') { out.push({ tool: 'eraser', size: +r.size || 24, points }); continue; }
+    if (r.t === 'b' && r.spec && typeof r.tip === 'string') {
+      out.push({ tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points });
+    }
+  }
+  return out;
+}
 
 /** The user's brush specification — passed to brush.add() verbatim. */
 export const DEFAULT_TIP_SOURCE =

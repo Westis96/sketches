@@ -3,7 +3,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 const shortcuts: Array<[string, string]> = [
   ['Brush', 'D'], ['Paper eraser', 'E'], ['Sample stroke', 'T'], ['Pencil only', 'Q'],
   ['Weight − / +', '[ ]'], ['Undo', '⌘ Z'], ['Redo', '⇧ ⌘ Z'], ['Clear canvas', 'C'],
-  ['Export PNG', 'S'], ['Toggle style panel', 'P'], ['Shortcuts', '?'],
+  ['Export PNG', 'S'], ['Toggle style panel', 'P'], ['Cancel current stroke', 'Esc'], ['Shortcuts', '?'],
 ];
 
 /** Bottom-right "?" button with keyboard shortcuts, like tldraw's help menu. */
@@ -26,6 +26,9 @@ export function HelpButton({ open, onOpenChange }: { open: boolean; onOpenChange
           ))}
         </ul>
         <div className="tl-hdivider" />
+        <p className="mb-2 text-[11px] leading-snug text-[var(--tl-text-3)]">
+          Your drawing and settings autosave in this browser.
+        </p>
         <p className="text-[11px] leading-snug text-[var(--tl-text-3)]">
           Strokes are stamped by the real p5.brush 2.2.2 engine and blended with its spectral pigment shader.
           Design tips in the <a className="underline" href="https://acamposuribe.github.io/p5.brush/tools/brush-maker.html" target="_blank" rel="noreferrer">Brush Maker</a> and paste the spec in the Code tab.

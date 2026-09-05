@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Check, Plus } from 'lucide-react';
+import { Check, ChevronRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -86,11 +86,18 @@ function NumberField({ label, value, onCommit }: { label: string; value: number;
   );
 }
 
+type Tab = 'style' | 'brush' | 'code';
+const TAB_KEY = 'p5brush-studio:tab';
+
 export function StylePanel({ open }: { open: boolean }) {
   const studio = useStudio();
   const s = useStudioState((st) => st.settings);
   const tipError = useStudioState((st) => st.tipError);
   const { spec } = s;
+  const [tab, setTab] = useState<Tab>(() => {
+    try { const t = localStorage.getItem(TAB_KEY); return t === 'brush' || t === 'code' ? t : 'style'; } catch { return 'style'; }
+  });
+  const selectTab = (t: string) => { setTab(t as Tab); try { localStorage.setItem(TAB_KEY, t); } catch { /* ignore */ } };
 
   const [tipDraft, setTipDraft] = useState(s.tipSource);
   useEffect(() => setTipDraft(s.tipSource), [s.tipSource]);
@@ -117,11 +124,11 @@ export function StylePanel({ open }: { open: boolean }) {
   return (
     <aside
       className={cn(
-        'tl-panel pointer-events-auto flex w-[16.5rem] max-h-[calc(100vh-4.25rem)] flex-col overflow-hidden transition-all duration-200',
+        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(100vh-4.25rem)] flex-col overflow-hidden transition-all duration-200',
         !open && 'pointer-events-none translate-x-4 opacity-0',
       )}
     >
-      <Tabs defaultValue="style" className="flex min-h-0 flex-col">
+      <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-col">
         <TabsList className="m-1.5 mb-0 grid h-8 grid-cols-3 rounded-[9px] bg-[var(--tl-low)] p-0.5">
           {(['style', 'brush', 'code'] as const).map((t) => (
             <TabsTrigger key={t} value={t} className="h-7 rounded-[7px] text-[11.5px] font-medium capitalize text-[var(--tl-text-2)] data-[state=active]:text-[var(--tl-text-1)] data-[state=active]:shadow-[var(--tl-shadow-sm)]">
@@ -133,6 +140,18 @@ export function StylePanel({ open }: { open: boolean }) {
         <div className="tl-scroll min-h-0 overflow-y-auto overflow-x-hidden">
           {/* ------------------------------------------------------------ Style */}
           <TabsContent value="style" className="m-0 space-y-4 p-3">
+            {/* Brush summary: what will be stamped, one tap from the internals */}
+            <button type="button" onClick={() => selectTab('brush')} className="group -m-1 flex w-[calc(100%+0.5rem)] items-center gap-2.5 rounded-[9px] p-1 text-left hover:bg-[var(--tl-low)]">
+              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-[8px] bg-white shadow-[var(--tl-shadow-sm)]">
+                <TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <div className="text-[12px] font-semibold text-[var(--tl-text-1)]">myBrush</div>
+                <div className="truncate font-mono text-[10.5px] text-[var(--tl-text-3)]">{fmt(spec.weight)} px · ×{s.size.toFixed(2)} · opacity {fmt(spec.opacity)}{tipBad ? ' · tip error' : ''}</div>
+              </div>
+              <ChevronRight className="h-4 w-4 text-[var(--tl-text-3)] transition group-hover:translate-x-0.5" />
+            </button>
+
             <Section label="Color" trailing={<span className="font-mono text-[10px] text-[var(--tl-text-3)]">{s.color.toUpperCase()}</span>}>
               <div className="grid grid-cols-6 gap-0.5">
                 {swatches.map((sw) => {

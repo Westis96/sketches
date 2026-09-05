@@ -180,3 +180,36 @@ export function setTipDegrees(src: string, degrees: boolean): string {
   if (degrees) lines.unshift(ANGLE_LINE);
   return lines.join('\n');
 }
+
+/**
+ * Largest extent of the tip's ink as a fraction of the 100-unit tip space
+ * (e.g. 0.35 for a shape spanning 35 units), measured on a small raster.
+ * Used to size the on-canvas brush cursor to the visible mark, not the
+ * nominal footprint.
+ */
+export function tipExtent(source: string): number {
+  const N = 64;
+  const c = document.createElement('canvas');
+  c.width = c.height = N;
+  const ctx = c.getContext('2d', { willReadFrequently: true })!;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, N, N);
+  ctx.save();
+  ctx.translate(N / 2, N / 2);
+  ctx.scale(N / 100, N / 100);
+  try { compileTip(source)({ drawingContext: ctx }); } catch { ctx.restore(); return 0.5; }
+  ctx.restore();
+  const d = ctx.getImageData(0, 0, N, N).data;
+  let minX = N, minY = N, maxX = -1, maxY = -1;
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4;
+    if ((d[i] + d[i + 1] + d[i + 2]) / 3 < 235) { // dark → ink
+      if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y;
+    }
+  }
+  if (maxX < 0) return 0.5;
+  const ext = Math.max(maxX - minX + 1, maxY - minY + 1) / N;
+  // Extent measured from the centre matters for a centred ring: use the farthest ink pixel.
+  const far = Math.max(Math.abs(minX - N / 2), Math.abs(maxX + 1 - N / 2), Math.abs(minY - N / 2), Math.abs(maxY + 1 - N / 2)) / (N / 2);
+  return Math.max(ext, Math.min(far, 1.5));
+}

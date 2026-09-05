@@ -1,9 +1,9 @@
-import { Download, Eraser, PenLine, Pencil, Sparkles } from 'lucide-react';
+import { Download, Eraser, PenLine, Pencil, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { TlButton } from '@/components/TlButton';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 
 /** Bottom-center tool dock, tldraw style: the active tool is blue. */
-export function ToolDock() {
+export function ToolDock({ panelOpen, onTogglePanel }: { panelOpen: boolean; onTogglePanel: () => void }) {
   const studio = useStudio();
   const { tool, pencilOnly } = useStudioState((s) => s.settings);
 
@@ -16,6 +16,8 @@ export function ToolDock() {
       <TlButton label={pencilOnly ? 'Pencil only: finger touches ignored' : 'Accepting pencil and touch'} kbd="Q" active={pencilOnly} onClick={() => studio.setPencilOnly(!pencilOnly)}><Pencil /></TlButton>
       <span className="tl-divider" />
       <TlButton label="Export PNG" kbd="S" onClick={studio.exportPNG}><Download /></TlButton>
+      {/* On phones the bottom-right "Show styles" pill is hidden, so the dock carries the toggle. */}
+      <TlButton label={panelOpen ? 'Hide styles' : 'Show styles'} kbd="P" active={panelOpen} className="sm:hidden" onClick={onTogglePanel}><SlidersHorizontal /></TlButton>
     </div>
   );
 }
