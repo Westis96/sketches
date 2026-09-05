@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 20% 94%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 222 47% 11%;
+    --primary-foreground: 210 40% 98%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+    --accent: 226 100% 97%;
+    --accent-foreground: 243 75% 40%;
+    --destructive: 350 89% 60%;
+    --destructive-foreground: 210 40% 98%;
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 239 84% 67%;
+    --radius: 0.75rem;
+  }
+
+  * {
+    @apply border-border;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  textarea, input {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+@layer components {
+  .paper-pill {
+    @apply rounded-xl border border-black/10 bg-white/95 shadow-[0_4px_16px_rgba(0,0,0,0.06)] backdrop-blur-md;
+  }
+  .paper-card {
+    @apply rounded-2xl border border-black/10 bg-white/95 shadow-[0_12px_36px_rgba(0,0,0,0.09)] backdrop-blur-xl;
+  }
+  .custom-scroll::-webkit-scrollbar { width: 4px; }
+  .custom-scroll::-webkit-scrollbar-thumb { @apply rounded-full bg-black/15; }
+  .code-area {
+    @apply w-full whitespace-pre overflow-auto rounded-lg border border-border bg-slate-50 p-2 font-mono text-[10px] leading-[1.45] text-slate-800;
+  }
+}
