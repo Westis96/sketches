@@ -21,6 +21,7 @@ import {
   type BrushRecord, type BrushSpec, type EraserRecord, type PaperName, type Point, type PressureMode,
   type StrokeRecord, type Tool,
 } from './records';
+import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
 
 export const paperPresets: Record<PaperName, { bg: [number, number, number]; grain: number; label: string }> = {
   hotpress: { bg: [255, 254, 250], grain: 2.2, label: 'Hot Press Fine Art' },
@@ -58,6 +59,8 @@ export interface StudioState {
   tipExtent: number;         // ink extent of the current tip, fraction of the 100-unit space
   tipError: string | null;
   fatal: string | null;
+  /** Template id → PNG data URL of a stroke rendered by the engine; null until generated. */
+  templatePreviews: Record<string, string> | null;
 }
 
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
@@ -101,6 +104,7 @@ export class Studio {
     tipExtent: 0.5,
     tipError: null,
     fatal: null,
+    templatePreviews: null,
   };
   private listeners = new Set<() => void>();
 
@@ -258,6 +262,7 @@ export class Studio {
 
     this.resize(true);
     this.syncHistory();
+    setTimeout(() => { try { this.renderTemplatePreviews(); } catch (err) { console.warn('[studio] template previews failed', err); } }, 500);
     if (!this.sampleQueued) {
       this.sampleQueued = true;
       if (this.restored) {
@@ -316,6 +321,11 @@ export class Studio {
   // ---------------------------------------------------------------------------
   /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
   private renderBrushStroke(rec: BrushRecord): number {
+    return this.stampRecord(rec, this.glW, this.glH, this.dpr);
+  }
+
+  /** Engine call for one record on the currently loaded p5.brush target of the given size. */
+  private stampRecord(rec: BrushRecord, glW: number, glH: number, dpr: number): number {
     const name = this.ensureRegistered(rec);
     const { origin, segs, endA, endP, stamps } = strokeSegments(rec);
     const plot = new brush.Plot('curve');
@@ -323,13 +333,62 @@ export class Studio {
     plot.endPlot(endA, endP, true);
     brush.seed(rec.seed);
     brush.push();
-    brush.translate(-this.glW / 2, -this.glH / 2); // p5.brush origin is the canvas centre
-    brush.scale(this.dpr);                         // work in CSS pixels
+    brush.translate(-glW / 2, -glH / 2); // p5.brush origin is the canvas centre
+    brush.scale(dpr);                    // work in CSS pixels
     brush.set(name, rec.color, rec.size);
     plot.draw(origin.x, origin.y, 1);
     brush.pop();
     brush.render();
     return stamps;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Templates
+  // ---------------------------------------------------------------------------
+  /** Template matching the current spec + tip exactly, if any. */
+  activeTemplate(): BrushTemplate | undefined {
+    return matchTemplate(this.settings.spec, this.settings.tipSource);
+  }
+
+  applyTemplate(id: string) {
+    const t = BRUSH_TEMPLATES.find((x) => x.id === id);
+    if (!t) return;
+    this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush' });
+    this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
+    this.toast(`Brush: ${t.name}`, { duration: 1200 });
+  }
+
+  /**
+   * Renders one short stroke per template with the real engine on an offscreen
+   * canvas. p5.brush has a single active target, so the main canvas is
+   * re-loaded afterwards; the committed image lives in a texture and is untouched.
+   */
+  private renderTemplatePreviews() {
+    if (this.state.templatePreviews || !this.canvas || this.live) return;
+    const W = 240, H = 80;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const points: Point[] = [];
+    for (let i = 0; i <= 48; i++) {
+      const t = i / 48;
+      points.push({ x: round(22 + t * (W - 44), 100), y: round(H / 2 + Math.sin(t * Math.PI * 2) * 16 - (t - 0.5) * 10, 100), p: round(0.5 + 0.35 * Math.sin(t * Math.PI), 1000) });
+    }
+    const out: Record<string, string> = {};
+    try {
+      brush.load(c);
+      brush.noFill(); brush.noHatch(); brush.noField();
+      const bg = paperPresets[this.settings.paper].bg;
+      for (const t of BRUSH_TEMPLATES) {
+        brush.clear(bg[0], bg[1], bg[2]);
+        const rec: BrushRecord = { tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 20240611, points };
+        this.stampRecord(rec, W, H, 1);
+        out[t.id] = c.toDataURL('image/png');
+      }
+    } finally {
+      brush.load(this.canvas);
+      brush.noFill(); brush.noHatch(); brush.noField();
+    }
+    this.emit({ templatePreviews: out });
   }
 
   /** Eraser dabs (device px) for the record's points from index `from` on. */
@@ -731,7 +790,7 @@ export class Studio {
     return parsed.name;
   }
 
-  specCode(name = 'myBrush') { return specCode(this.settings.spec, this.settings.tipSource, name); }
+  specCode(name = this.activeTemplate()?.codeName ?? 'myBrush') { return specCode(this.settings.spec, this.settings.tipSource, name); }
 
   /** A complete p5.js sketch that replays the visible drawing with p5.brush. */
   sketchCode(): string {
@@ -785,6 +844,7 @@ export class Studio {
       sketchCode: () => this.sketchCode(), specCode: () => this.specCode(),
       setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),
       setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
+      applyTemplate: (id: string) => this.applyTemplate(id), templates: BRUSH_TEMPLATES.map((t) => t.id),
       rebuildAll: () => this.repaintPaper(), saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
     };
   }

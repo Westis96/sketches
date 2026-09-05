@@ -14,6 +14,7 @@ import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { paperPresets } from '@/engine/Studio';
 import { fmt, type PaperName, type PressureMode } from '@/engine/records';
 import { setTipDegrees, tipUsesDegrees } from '@/engine/tipShim';
+import { BRUSH_TEMPLATES, matchTemplate } from '@/engine/templates';
 import { cn } from '@/lib/utils';
 
 const swatches = [
@@ -93,7 +94,9 @@ export function StylePanel({ open }: { open: boolean }) {
   const studio = useStudio();
   const s = useStudioState((st) => st.settings);
   const tipError = useStudioState((st) => st.tipError);
+  const previews = useStudioState((st) => st.templatePreviews);
   const { spec } = s;
+  const activeTemplate = matchTemplate(spec, s.tipSource);
   const [tab, setTab] = useState<Tab>(() => {
     try { const t = localStorage.getItem(TAB_KEY); return t === 'brush' || t === 'code' ? t : 'style'; } catch { return 'style'; }
   });
@@ -140,17 +143,54 @@ export function StylePanel({ open }: { open: boolean }) {
         <div className="tl-scroll min-h-0 overflow-y-auto overflow-x-hidden">
           {/* ------------------------------------------------------------ Style */}
           <TabsContent value="style" className="m-0 space-y-4 p-3">
-            {/* Brush summary: what will be stamped, one tap from the internals */}
-            <button type="button" onClick={() => selectTab('brush')} className="group -m-1 flex w-[calc(100%+0.5rem)] items-center gap-2.5 rounded-[9px] p-1 text-left hover:bg-[var(--tl-low)]">
-              <div className="h-10 w-10 shrink-0 overflow-hidden rounded-[8px] bg-white shadow-[var(--tl-shadow-sm)]">
-                <TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} />
+            {/* Brush templates: previews are strokes rendered by the engine itself */}
+            <Section label="Brush" trailing={
+              <button type="button" onClick={() => selectTab('brush')} className="group inline-flex items-center gap-0.5 text-[11px] font-medium text-[var(--tl-selected)] hover:underline">
+                {activeTemplate ? 'Customize' : 'Custom · edit'}<ChevronRight className="h-3 w-3 transition group-hover:translate-x-0.5" />
+              </button>
+            }>
+              <div className="grid grid-cols-2 gap-1">
+                {BRUSH_TEMPLATES.map((t) => {
+                  const on = activeTemplate?.id === t.id;
+                  return (
+                    <TlTip key={t.id} label={t.description} side="left">
+                      <button
+                        type="button"
+                        data-active={on ? 'true' : undefined}
+                        aria-label={`${t.name} brush`}
+                        aria-pressed={on}
+                        onClick={() => studio.applyTemplate(t.id)}
+                        className="tl-opt h-auto min-w-0 flex-col items-stretch gap-1 p-1 text-left"
+                      >
+                        <span className="block h-10 w-full overflow-hidden rounded-[6px] bg-[#fffefa] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]">
+                          {previews?.[t.id]
+                            ? <img src={previews[t.id]} alt="" draggable={false} className="h-full w-full object-cover" />
+                            : <span className="block h-full w-full animate-pulse bg-[var(--tl-low)]" />}
+                        </span>
+                        <span className="truncate px-0.5 text-[11px] font-medium leading-tight">{t.name}</span>
+                      </button>
+                    </TlTip>
+                  );
+                })}
+                {/* The user's own brush: active whenever the settings no longer match a template */}
+                <TlTip label={activeTemplate ? 'Your edited brush lives here once you change a template' : 'Your current brush: edit it in the Brush tab'} side="left">
+                  <button
+                    type="button"
+                    data-active={!activeTemplate ? 'true' : undefined}
+                    aria-label="Custom brush"
+                    aria-pressed={!activeTemplate}
+                    onClick={() => selectTab('brush')}
+                    className="tl-opt h-auto min-w-0 flex-col items-stretch gap-1 p-1 text-left"
+                  >
+                    <span className="flex h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-[6px] bg-[#fffefa] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]">
+                      <span className="h-8 w-8 shrink-0 overflow-hidden rounded-[5px] bg-white shadow-[var(--tl-shadow-sm)]"><TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} /></span>
+                      <span className="font-mono text-[9.5px] leading-tight text-[var(--tl-text-3)]">{fmt(spec.weight)} px<br />op {fmt(spec.opacity)}</span>
+                    </span>
+                    <span className="truncate px-0.5 text-[11px] font-medium leading-tight">{activeTemplate ? 'Custom' : 'Custom (edited)'}{tipBad ? ' ⚠' : ''}</span>
+                  </button>
+                </TlTip>
               </div>
-              <div className="min-w-0 flex-1">
-                <div className="text-[12px] font-semibold text-[var(--tl-text-1)]">myBrush</div>
-                <div className="truncate font-mono text-[10.5px] text-[var(--tl-text-3)]">{fmt(spec.weight)} px · ×{s.size.toFixed(2)} · opacity {fmt(spec.opacity)}{tipBad ? ' · tip error' : ''}</div>
-              </div>
-              <ChevronRight className="h-4 w-4 text-[var(--tl-text-3)] transition group-hover:translate-x-0.5" />
-            </button>
+            </Section>
 
             <Section label="Color" trailing={<span className="font-mono text-[10px] text-[var(--tl-text-3)]">{s.color.toUpperCase()}</span>}>
               <div className="grid grid-cols-6 gap-0.5">
@@ -225,8 +265,8 @@ export function StylePanel({ open }: { open: boolean }) {
                 <TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} />
               </div>
               <div className="min-w-0 text-[11px] leading-snug text-[var(--tl-text-3)]">
-                <div className="text-[12px] font-semibold text-[var(--tl-text-1)]">Custom tip</div>
-                100×100 unit space, rasterised at 500 px. Dark = opaque ink.
+                <div className="text-[12px] font-semibold text-[var(--tl-text-1)]">{activeTemplate ? activeTemplate.name : 'Custom tip'}</div>
+                {activeTemplate ? activeTemplate.description : '100×100 unit space, rasterised at 500 px. Dark = opaque ink.'}
               </div>
             </div>
 
