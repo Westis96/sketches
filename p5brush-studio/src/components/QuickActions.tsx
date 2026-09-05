@@ -33,6 +33,9 @@ export function QuickActions() {
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => copyText(studio.sketchCode(), 'p5.js sketch')}>Copy as p5.js sketch</DropdownMenuItem>
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => copyText(studio.specCode(), 'brush.add spec')}>Copy brush.add spec</DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />
+          <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.zoomToFit()}>Zoom to fit drawing<DropdownMenuShortcut>F</DropdownMenuShortcut></DropdownMenuItem>
+          <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.resetView()}>Reset view to 100%<DropdownMenuShortcut>0</DropdownMenuShortcut></DropdownMenuItem>
+          <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={studio.drawSampleStroke}>Draw sample stroke<DropdownMenuShortcut>T</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.resetDefaults()}>Reset brush to myBrush defaults</DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />

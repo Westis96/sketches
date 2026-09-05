@@ -12,7 +12,8 @@ export function BrushCursor({ canvas }: { canvas: HTMLCanvasElement | null }) {
   const studio = useStudio();
   const { tool, spec, size, eraserSize } = useStudioState((s) => s.settings);
   const tipExtent = useStudioState((s) => s.tipExtent);
-  const diameter = tool === 'eraser' ? eraserSize : Math.max(3, spec.weight * size * tipExtent * spec.pressure.min_max[1]);
+  const zoom = useStudioState((s) => s.view.zoom);
+  const diameter = (tool === 'eraser' ? eraserSize : Math.max(3, spec.weight * size * tipExtent * spec.pressure.min_max[1])) * zoom;
 
   useEffect(() => {
     const el = ref.current;

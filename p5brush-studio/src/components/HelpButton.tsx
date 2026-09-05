@@ -3,7 +3,13 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 const shortcuts: Array<[string, string]> = [
   ['Brush', 'D'], ['Paper eraser', 'E'], ['Sample stroke', 'T'], ['Pencil only', 'Q'],
   ['Weight − / +', '[ ]'], ['Undo', '⌘ Z'], ['Redo', '⇧ ⌘ Z'], ['Clear canvas', 'C'],
-  ['Export PNG', 'S'], ['Toggle style panel', 'P'], ['Cancel current stroke', 'Esc'], ['Shortcuts', '?'],
+  ['Export PNG', 'S'], ['Toggle style panel', 'P'], ['Cancel current stroke', 'Esc'],
+  ['Zoom in / out', '+ −'], ['Zoom 100%', '0'], ['Zoom to fit', 'F'], ['Pan', 'Space+drag'], ['Shortcuts', '?'],
+];
+
+const gestures: Array<[string, string]> = [
+  ['Pinch', 'zoom'], ['Two fingers drag', 'pan'], ['One finger (Pencil only)', 'pan'],
+  ['Two-finger tap', 'undo'], ['Three-finger tap', 'redo'], ['Trackpad pinch / ctrl+scroll', 'zoom'],
 ];
 
 /** Bottom-right "?" button with keyboard shortcuts, like tldraw's help menu. */
@@ -15,13 +21,23 @@ export function HelpButton({ open, onOpenChange }: { open: boolean; onOpenChange
           ?
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" sideOffset={8} className="w-64 rounded-[11px] border-0 p-3 text-[12px] shadow-[var(--tl-shadow)]">
+      <PopoverContent side="top" align="end" sideOffset={8} className="tl-scroll max-h-[calc(100vh-5rem)] w-64 overflow-y-auto rounded-[11px] border-0 p-3 text-[12px] shadow-[var(--tl-shadow)]">
         <div className="mb-2 font-semibold text-[var(--tl-text-1)]">Keyboard shortcuts</div>
         <ul className="space-y-1">
           {shortcuts.map(([label, key]) => (
             <li key={label} className="flex items-center justify-between text-[var(--tl-text-2)]">
               <span>{label}</span>
               <kbd className="rounded bg-[var(--tl-low)] px-1.5 py-0.5 font-mono text-[10.5px] text-[var(--tl-text-1)]">{key}</kbd>
+            </li>
+          ))}
+        </ul>
+        <div className="tl-hdivider" />
+        <div className="mb-2 font-semibold text-[var(--tl-text-1)]">Touch gestures</div>
+        <ul className="space-y-1">
+          {gestures.map(([label, key]) => (
+            <li key={label} className="flex items-center justify-between text-[var(--tl-text-2)]">
+              <span>{label}</span>
+              <span className="text-[11px] text-[var(--tl-text-3)]">{key}</span>
             </li>
           ))}
         </ul>

@@ -26,7 +26,14 @@ cd p5brush-studio
 npm install
 npm run dev      # local dev server
 npm run build    # production build in dist/
+npm test         # headless regression suite against dist/ (needs `npx playwright install chromium` once)
 ```
+
+The canvas is infinite: pinch to zoom and drag with two fingers to pan (with Pencil-only on,
+one finger pans and the Pencil draws; the first Apple Pencil touch turns Pencil-only on),
+two-finger tap undoes, three-finger tap redoes. On a desktop, scroll pans, pinch or
+ctrl-scroll zooms at the cursor, middle-drag or space-drag pans, `0` resets and `F` fits
+the drawing. Strokes are stored in world units, so zooming re-renders them exactly.
 
 WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are

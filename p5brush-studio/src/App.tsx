@@ -70,6 +70,10 @@ function Shell() {
       else if (e.key === '?') setHelpOpen((o) => !o);
       else if (k === '[') studio.nudgeWeight(-1);
       else if (k === ']') studio.nudgeWeight(1);
+      else if (k === '0') studio.resetView();
+      else if (k === 'f') studio.zoomToFit();
+      else if (e.key === '+' || e.key === '=') studio.zoomBy(1.25);
+      else if (e.key === '-' || e.key === '_') studio.zoomBy(1 / 1.25);
       else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else setHelpOpen(false); }
     };
     window.addEventListener('keydown', onKey);
@@ -94,7 +98,7 @@ function Shell() {
       <div className="pointer-events-none fixed bottom-2 left-1/2 z-30 -translate-x-1/2">
         <ToolDock panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} />
       </div>
-      <div className="pointer-events-none fixed bottom-2 left-2 z-30 hidden sm:block">
+      <div className="pointer-events-none fixed bottom-2 left-2 z-30">
         <Hud />
       </div>
       <div className="pointer-events-none fixed bottom-2 right-2 z-30 flex items-center gap-2">

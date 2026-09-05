@@ -6,7 +6,13 @@
 
 const BLIT_VERT = `#version 300 es
 in vec2 a_pos; out vec2 v_uv;
-void main(){ v_uv = a_pos * 0.5 + 0.5; gl_Position = vec4(a_pos, 0.0, 1.0); }`;
+uniform vec4 u_rect; // x, y (from top), w, h in device px
+uniform vec2 u_res;
+void main(){
+  v_uv = a_pos * 0.5 + 0.5;
+  vec2 px = vec2(u_rect.x + v_uv.x * u_rect.z, u_rect.y + (1.0 - v_uv.y) * u_rect.w);
+  gl_Position = vec4(px.x / u_res.x * 2.0 - 1.0, 1.0 - px.y / u_res.y * 2.0, 0.0, 1.0);
+}`;
 const BLIT_FRAG = `#version 300 es
 precision highp float; in vec2 v_uv; uniform sampler2D u_tex; out vec4 o;
 void main(){ o = texture(u_tex, v_uv); }`;
@@ -42,6 +48,8 @@ export class StudioGL {
     this.eraseProg = this.program(ERASE_VERT, ERASE_FRAG);
     this.u = {
       blitTex: gl.getUniformLocation(this.blitProg, 'u_tex'),
+      blitRect: gl.getUniformLocation(this.blitProg, 'u_rect'),
+      blitRes: gl.getUniformLocation(this.blitProg, 'u_res'),
       ePaper: gl.getUniformLocation(this.eraseProg, 'u_paper'),
       eCenter: gl.getUniformLocation(this.eraseProg, 'u_center'),
       eRadius: gl.getUniformLocation(this.eraseProg, 'u_radius'),
@@ -124,13 +132,29 @@ export class StudioGL {
 
   /** Copies `tex` over the whole canvas. */
   blit(tex: WebGLTexture) {
+    this.blitRect(tex, 0, 0, this.w, this.h);
+  }
+
+  /** Draws `tex` into a device-pixel rectangle (y from top); used for the cheap pan/zoom preview. */
+  blitRect(tex: WebGLTexture, x: number, y: number, w: number, h: number) {
     const gl = this.gl;
     this.begin();
     gl.disable(gl.BLEND);
     gl.useProgram(this.blitProg);
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.uniform1i(this.u.blitTex, 0);
+    gl.uniform4f(this.u.blitRect, x, y, w, h);
+    gl.uniform2f(this.u.blitRes, this.w, this.h);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.end();
+  }
+
+  /** Fills the canvas with a flat colour (0..255 components). */
+  clearColor(r: number, g: number, b: number) {
+    const gl = this.gl;
+    this.begin();
+    gl.clearColor(r / 255, g / 255, b / 255, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
     this.end();
   }
 

@@ -40,6 +40,8 @@ export interface Settings {
   pressureMode: PressureMode;
   forceSensitivity: number;
   pencilOnly: boolean;
+  /** Auto-enable pencilOnly the first time an Apple Pencil is seen (off once set by hand). */
+  pencilAuto: boolean;
 }
 
 export interface Hud {
@@ -49,6 +51,11 @@ export interface Hud {
   tiltY: number;
   stamps: number;
 }
+
+/** Camera: screen (CSS px) = world * zoom + pan. World units are CSS px at zoom 1. */
+export interface View { x: number; y: number; zoom: number }
+export const MIN_ZOOM = 0.2;
+export const MAX_ZOOM = 8;
 
 export interface StudioState {
   settings: Settings;
@@ -61,6 +68,7 @@ export interface StudioState {
   fatal: string | null;
   /** Template id → PNG data URL of a stroke rendered by the engine; null until generated. */
   templatePreviews: Record<string, string> | null;
+  view: View;
 }
 
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
@@ -83,10 +91,12 @@ const DEFAULT_SETTINGS: Settings = {
   pressureMode: 'gaussian',
   forceSensitivity: 1.25,
   pencilOnly: false,
+  pencilAuto: true,
 };
 
 interface Live {
   id: number;
+  pointerType: string;
   rect: DOMRect;
   rec: BrushRecord | EraserRecord;
   erasedUpTo: number;
@@ -105,6 +115,7 @@ export class Studio {
     tipError: null,
     fatal: null,
     templatePreviews: null,
+    view: { x: 0, y: 0, zoom: 1 },
   };
   private listeners = new Set<() => void>();
 
@@ -127,6 +138,22 @@ export class Studio {
   private sampleQueued = false;
   private detach: (() => void) | null = null;
   private extentCache = new Map<string, number>();
+
+  // Camera. `committedView` is the view the committed texture was rendered at.
+  private view: View = { x: 0, y: 0, zoom: 1 };
+  private committedView: View = { x: 0, y: 0, zoom: 1 };
+  private gesture: {
+    touches: Map<number, { x: number; y: number }>;
+    start: Map<number, { x: number; y: number }>;
+    startView: View;
+    maxFingers: number;
+    startedAt: number;
+    moved: number;
+    mode: 'touch' | 'mouse';
+  } | null = null;
+  private viewPreviewQueued = false;
+  private wheelTimer = 0;
+  private spaceHeld = false;
 
   // One p5.brush brush per distinct tip source (the only thing that needs the
   // 500×500 rasterisation). p5.brush reads the params object by reference at
@@ -184,6 +211,12 @@ export class Studio {
       };
       try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
       this.state = { ...this.state, settings };
+      const v = (doc as { view?: View }).view;
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.zoom)) {
+        this.view = { x: v.x, y: v.y, zoom: clamp(v.zoom, MIN_ZOOM, MAX_ZOOM) };
+        this.committedView = { ...this.view };
+        this.state = { ...this.state, view: { ...this.view } };
+      }
       this.strokes = deserializeRecords(doc.strokes);
       this.restored = this.strokes.length > 0;
     } catch {
@@ -199,7 +232,7 @@ export class Studio {
   private saveNow() {
     clearTimeout(this.saveTimer);
     try {
-      localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, settings: this.settings, strokes: serializeRecords(this.strokes) }));
+      localStorage.setItem(SAVE_KEY, JSON.stringify({ v: SAVE_VERSION, settings: this.settings, view: this.view, strokes: serializeRecords(this.strokes) }));
     } catch {
       if (!this.saveWarned) {
         this.saveWarned = true;
@@ -232,6 +265,14 @@ export class Studio {
     const onResize = () => this.onResize();
     const onLost = (e: Event) => { e.preventDefault(); this.emit({ fatal: 'WebGL context lost. Reload the page to continue.' }); };
     const onHide = () => { if (document.visibilityState === 'hidden') this.saveNow(); };
+    const onWheel = (e: WheelEvent) => this.onWheel(e);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const tag = (e.target as HTMLElement).tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      this.spaceHeld = e.type === 'keydown';
+      if (e.type === 'keydown' && !e.repeat) e.preventDefault();
+    };
 
     canvas.addEventListener('pointerdown', onDown, { passive: false });
     window.addEventListener('pointermove', onMove, { passive: false });
@@ -245,7 +286,15 @@ export class Studio {
     window.visualViewport?.addEventListener('resize', onResize);
     document.addEventListener('visibilitychange', onHide);
     window.addEventListener('pagehide', onHide);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    document.addEventListener('gesturestart', prevent, { passive: false }); // Safari page pinch
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
     this.detach = () => {
+      canvas.removeEventListener('wheel', onWheel);
+      document.removeEventListener('gesturestart', prevent);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
       canvas.removeEventListener('pointerdown', onDown);
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
@@ -286,7 +335,7 @@ export class Studio {
   // ---------------------------------------------------------------------------
   // Brush registration
   // ---------------------------------------------------------------------------
-  private ensureRegistered(rec: BrushRecord): string {
+  private ensureRegistered(rec: BrushRecord, zoom = 1): string {
     let entry = this.registry.get(rec.tipSource);
     if (!entry) {
       let name = 'studio-' + this.registry.size;
@@ -303,8 +352,10 @@ export class Studio {
     }
     entry.tick = ++this.regTick;
     const { params } = entry, sp = rec.spec;
-    params.weight = sp.weight; params.scatter = sp.scatter; params.opacity = sp.opacity;
-    params.spacing = sp.spacing; params.noise = clamp(sp.noise, 0, 1);
+    // Zoom scales weight, scatter and spacing exactly like p5.brush's scaleBrushes(),
+    // so stamp count, seed sequence and alpha are identical at every zoom level.
+    params.weight = sp.weight * zoom; params.scatter = sp.scatter * zoom; params.opacity = sp.opacity;
+    params.spacing = sp.spacing * zoom; params.noise = clamp(sp.noise, 0, 1);
     params.rotate = sp.rotate; params.markerTip = sp.markerTip;
     params.pressure = { type: 'gaussian', mode: 'gaussian', curve: sp.pressure.curve, min_max: sp.pressure.min_max };
     return entry.name;
@@ -321,22 +372,51 @@ export class Studio {
   // ---------------------------------------------------------------------------
   /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
   private renderBrushStroke(rec: BrushRecord): number {
-    return this.stampRecord(rec, this.glW, this.glH, this.dpr);
+    return this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
   }
 
-  /** Engine call for one record on the currently loaded p5.brush target of the given size. */
-  private stampRecord(rec: BrushRecord, glW: number, glH: number, dpr: number): number {
-    const name = this.ensureRegistered(rec);
+  /**
+   * p5.brush carries a small amount of state from one stroke into the next: the
+   * pressure cache consulted by the start-of-stroke marker tip is only reset
+   * after that tip is drawn, and the first stroke after brush.load() sees cold
+   * blend framebuffers. Both make a stroke's first stamps depend on what was
+   * rendered before it, which would let live strokes drift from their replays.
+   * Rendering a fixed, invisible (opacity 0) priming stroke before every real
+   * render puts the engine in the same state each time.
+   */
+  private static readonly PRIME_SPEC: BrushSpec = { ...DEFAULT_SPEC, opacity: 0, weight: 4, spacing: 1, noise: 0, markerTip: false };
+  private primeEngine(glW: number, glH: number, dpr: number) {
+    const cx = glW / dpr / 2, cy = glH / dpr / 2;
+    const rec: BrushRecord = {
+      tool: 'brush', spec: Studio.PRIME_SPEC, tipSource: DEFAULT_TIP_SOURCE, size: 1, color: '#000000',
+      pressureMode: 'gaussian', sensitivity: 1, seed: 1,
+      points: [{ x: cx - 4, y: cy, p: 0.5 }, { x: cx + 4, y: cy, p: 0.5 }],
+    };
+    this.stampRaw(rec, glW, glH, dpr, { x: 0, y: 0, zoom: 1 });
+  }
+
+  /**
+   * Engine call for one record on the currently loaded p5.brush target.
+   * Geometry is resampled in world space (zoom-independent), then mapped to
+   * screen space; the brush itself is scaled by zoom in ensureRegistered().
+   */
+  private stampRecord(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View): number {
+    this.primeEngine(glW, glH, dpr);
+    return this.stampRaw(rec, glW, glH, dpr, view);
+  }
+
+  private stampRaw(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View): number {
+    const name = this.ensureRegistered(rec, view.zoom);
     const { origin, segs, endA, endP, stamps } = strokeSegments(rec);
     const plot = new brush.Plot('curve');
-    for (const s of segs) plot.addSegment(s.a, s.len, s.p, true);
+    for (const s of segs) plot.addSegment(s.a, s.len * view.zoom, s.p, true);
     plot.endPlot(endA, endP, true);
     brush.seed(rec.seed);
     brush.push();
     brush.translate(-glW / 2, -glH / 2); // p5.brush origin is the canvas centre
-    brush.scale(dpr);                    // work in CSS pixels
+    brush.scale(dpr);                    // work in CSS (screen) pixels
     brush.set(name, rec.color, rec.size);
-    plot.draw(origin.x, origin.y, 1);
+    plot.draw(origin.x * view.zoom + view.x, origin.y * view.zoom + view.y, 1);
     brush.pop();
     brush.render();
     return stamps;
@@ -381,7 +461,7 @@ export class Studio {
       for (const t of BRUSH_TEMPLATES) {
         brush.clear(bg[0], bg[1], bg[2]);
         const rec: BrushRecord = { tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 20240611, points };
-        this.stampRecord(rec, W, H, 1);
+        this.stampRecord(rec, W, H, 1, { x: 0, y: 0, zoom: 1 });
         out[t.id] = c.toDataURL('image/png');
       }
     } finally {
@@ -394,17 +474,18 @@ export class Studio {
   /** Eraser dabs (device px) for the record's points from index `from` on. */
   private eraserDabs(rec: EraserRecord, from: number): Dab[] {
     const dabs: Dab[] = [];
-    const dpr = this.dpr;
-    const r = (rec.size / 2) * dpr;
+    const { dpr } = this, v = this.committedView;
+    const sx = (x: number) => (x * v.zoom + v.x) * dpr, sy = (y: number) => (y * v.zoom + v.y) * dpr;
+    const r = (rec.size / 2) * v.zoom * dpr;
     const step = Math.max(0.75, rec.size * 0.12);
     const pts = rec.points;
-    if (from === 0) dabs.push({ x: pts[0].x * dpr, y: pts[0].y * dpr, r });
+    if (from === 0) dabs.push({ x: sx(pts[0].x), y: sy(pts[0].y), r });
     for (let i = Math.max(1, from); i < pts.length; i++) {
       const a = pts[i - 1], b = pts[i];
       const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step));
       for (let k = 1; k <= n; k++) {
         const t = k / n;
-        dabs.push({ x: (a.x + (b.x - a.x) * t) * dpr, y: (a.y + (b.y - a.y) * t) * dpr, r });
+        dabs.push({ x: sx(a.x + (b.x - a.x) * t), y: sy(a.y + (b.y - a.y) * t), r });
       }
     }
     return dabs;
@@ -484,21 +565,23 @@ export class Studio {
     this.toast('Canvas cleared', { action: { label: 'Undo', onClick: this.undo } });
   };
 
-  /** Discards the stroke in progress (Escape). */
-  cancelStroke = () => {
+  /** Discards the stroke in progress (Escape, or a second finger turning it into a gesture). */
+  cancelStroke = (quiet = false) => {
     if (!this.live) return;
     this.live = null;
     this.previewQueued = false;
     this.sgl!.blit(this.sgl!.committedTex);
     this.queueHud({ pressure: 0 });
-    this.toast('Stroke cancelled');
+    if (!quiet) this.toast('Stroke cancelled');
   };
 
   // ---------------------------------------------------------------------------
   // Paper + sizing
   // ---------------------------------------------------------------------------
+  /** Seeded paper grain, anchored to world space so it scrolls and scales with the drawing. */
   private renderPaper() {
     const { glW, glH, dpr, cssW, cssH } = this;
+    const v = this.committedView;
     const conf = paperPresets[this.settings.paper];
     const c = document.createElement('canvas');
     c.width = glW; c.height = glH;
@@ -513,8 +596,10 @@ export class Studio {
     const img = gctx.createImageData(grainSize, grainSize);
     const d = img.data;
     const amp = conf.grain * 7;
+    let seed = 0x9e3779b9 ^ conf.grain * 1000; // deterministic per paper
+    const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), seed | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
     for (let i = 0; i < d.length; i += 4) {
-      const n = (Math.random() + Math.random() - 1) * amp; // triangular noise
+      const n = (rnd() + rnd() - 1) * amp; // triangular noise
       d[i] = clamp(conf.bg[0] + n, 0, 255);
       d[i + 1] = clamp(conf.bg[1] + n, 0, 255);
       d[i + 2] = clamp(conf.bg[2] + n * 0.9, 0, 255);
@@ -523,24 +608,16 @@ export class Studio {
     gctx.putImageData(img, 0, 0);
     ctx.save();
     ctx.scale(dpr, dpr);
+    // The pattern origin follows the transform, so translating by the pan anchors
+    // the grain to the world; it keeps its paper-sized scale at any zoom.
+    ctx.translate(v.x, v.y);
     ctx.fillStyle = ctx.createPattern(g, 'repeat')!;
-    ctx.fillRect(0, 0, cssW, cssH);
+    ctx.fillRect(-v.x, -v.y, cssW, cssH);
     ctx.restore();
-
-    const vg = ctx.createRadialGradient(glW / 2, glH / 2, Math.min(glW, glH) * 0.35, glW / 2, glH / 2, Math.hypot(glW, glH) * 0.6);
-    vg.addColorStop(0, 'rgba(120,100,70,0)');
-    vg.addColorStop(1, 'rgba(120,100,70,0.06)');
-    ctx.fillStyle = vg;
-    ctx.fillRect(0, 0, glW, glH);
-    ctx.lineWidth = dpr;
-    for (let i = 0; i < 4; i++) {
-      ctx.strokeStyle = `rgba(180,170,155,${0.12 - i * 0.025})`;
-      ctx.strokeRect(i * dpr + 0.5, i * dpr + 0.5, glW - i * 2 * dpr - 1, glH - i * 2 * dpr - 1);
-    }
     this.sgl!.uploadPaper(c);
   }
 
-  /** Paper changed: checkpoints embed the old paper, so replay everything. */
+  /** Paper or view changed: checkpoints embed the old paper/view, so replay everything. */
   private repaintPaper() {
     this.renderPaper();
     this.truncateCheckpoints(-1);
@@ -567,7 +644,80 @@ export class Studio {
 
   private onResize() {
     clearTimeout(this.resizeTimer);
-    this.resizeTimer = window.setTimeout(() => { if (!this.live) this.resize(); }, 150);
+    this.resizeTimer = window.setTimeout(() => { if (!this.live && !this.gesture) this.resize(); }, 150);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Camera
+  // ---------------------------------------------------------------------------
+  get currentView(): View { return this.view; }
+
+  toWorld(sx: number, sy: number): { x: number; y: number } {
+    const v = this.view;
+    return { x: (sx - v.x) / v.zoom, y: (sy - v.y) / v.zoom };
+  }
+
+  /** Sets the camera during an interaction: cheap transformed preview of the committed image. */
+  private setViewLive(next: View) {
+    this.view = { x: next.x, y: next.y, zoom: clamp(next.zoom, MIN_ZOOM, MAX_ZOOM) };
+    this.emit({ view: { ...this.view } });
+    if (this.viewPreviewQueued) return;
+    this.viewPreviewQueued = true;
+    requestAnimationFrame(() => {
+      this.viewPreviewQueued = false;
+      const sgl = this.sgl;
+      if (!sgl) return;
+      const v = this.view, c = this.committedView, dpr = this.dpr;
+      const k = v.zoom / c.zoom;
+      const bg = paperPresets[this.settings.paper].bg;
+      sgl.clearColor(bg[0], bg[1], bg[2]);
+      sgl.blitRect(sgl.committedTex, (v.x - c.x * k) * dpr, (v.y - c.y * k) * dpr, this.glW * k, this.glH * k);
+    });
+  }
+
+  /** Interaction ended: re-render the drawing exactly at the new view. */
+  private commitView() {
+    const v = this.view, c = this.committedView;
+    if (v.x === c.x && v.y === c.y && v.zoom === c.zoom) return;
+    this.committedView = { ...v };
+    this.repaintPaper();
+    this.scheduleSave();
+  }
+
+  /** Zooms by `factor` around a screen point (defaults to the viewport centre). */
+  zoomBy(factor: number, cx = this.cssW / 2, cy = this.cssH / 2) {
+    const v = this.view;
+    const zoom = clamp(v.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    const k = zoom / v.zoom;
+    this.setViewLive({ zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k });
+    this.commitView();
+  }
+
+  setZoom(zoom: number) { this.zoomBy(zoom / this.view.zoom); }
+
+  resetView() {
+    this.setViewLive({ x: 0, y: 0, zoom: 1 });
+    this.commitView();
+  }
+
+  private onWheel(e: WheelEvent) {
+    e.preventDefault();
+    if (this.live) return;
+    const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.cssH : 1;
+    const dx = e.deltaX * scale, dy = e.deltaY * scale;
+    const rect = this.canvas!.getBoundingClientRect();
+    const v = this.view;
+    if (e.ctrlKey || e.metaKey) {
+      // Trackpad pinch arrives as ctrl+wheel; zoom around the cursor.
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const zoom = clamp(v.zoom * Math.exp(-dy * 0.01), MIN_ZOOM, MAX_ZOOM);
+      const k = zoom / v.zoom;
+      this.setViewLive({ zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k });
+    } else {
+      this.setViewLive({ ...v, x: v.x - dx, y: v.y - dy });
+    }
+    clearTimeout(this.wheelTimer);
+    this.wheelTimer = window.setTimeout(() => this.commitView(), 160);
   }
 
   // ---------------------------------------------------------------------------
@@ -576,8 +726,9 @@ export class Studio {
   private pointFromEvent(e: PointerEvent, rect: DOMRect): Point {
     let p = e.pressure;
     if (!(p > 0)) p = e.pointerType === 'pen' ? 0.02 : 0.5;
+    const w = this.toWorld(e.clientX - rect.left, e.clientY - rect.top);
     // Quantise at capture so autosaved replays are identical to the live stroke.
-    return { x: round(e.clientX - rect.left, 100), y: round(e.clientY - rect.top, 100), p: round(p, 1000) };
+    return { x: round(w.x, 100), y: round(w.y, 100), p: round(p, 1000) };
   }
 
   /** A record captures everything needed to replay the stroke deterministically. */
@@ -600,21 +751,133 @@ export class Studio {
     };
   }
 
+  private screenPoint(e: PointerEvent) {
+    const rect = this.canvas!.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  // -- gestures (fingers, middle mouse, space-drag) --------------------------
+  private beginGesture(e: PointerEvent, mode: 'touch' | 'mouse') {
+    const pt = this.screenPoint(e);
+    this.gesture = {
+      touches: new Map([[e.pointerId, pt]]),
+      start: new Map([[e.pointerId, pt]]),
+      startView: { ...this.view },
+      maxFingers: 1,
+      startedAt: performance.now(),
+      moved: 0,
+      mode,
+    };
+  }
+
+  /** Re-anchors the gesture to the current fingers (called when a finger is added or removed). */
+  private rebaseGesture() {
+    const g = this.gesture!;
+    g.start = new Map(g.touches);
+    g.startView = { ...this.view };
+  }
+
+  private updateGesture() {
+    const g = this.gesture!;
+    const ids = [...g.start.keys()].filter((id) => g.touches.has(id));
+    if (ids.length === 0) return;
+    const s0 = g.start.get(ids[0])!, c0 = g.touches.get(ids[0])!;
+    if (ids.length === 1) {
+      this.setViewLive({ ...g.startView, x: g.startView.x + (c0.x - s0.x), y: g.startView.y + (c0.y - s0.y) });
+      return;
+    }
+    const s1 = g.start.get(ids[1])!, c1 = g.touches.get(ids[1])!;
+    const d0 = Math.hypot(s1.x - s0.x, s1.y - s0.y) || 1;
+    const d1 = Math.hypot(c1.x - c0.x, c1.y - c0.y) || 1;
+    const zoom = clamp(g.startView.zoom * (d1 / d0), MIN_ZOOM, MAX_ZOOM);
+    const k = zoom / g.startView.zoom;
+    const m0 = { x: (s0.x + s1.x) / 2, y: (s0.y + s1.y) / 2 };
+    const m1 = { x: (c0.x + c1.x) / 2, y: (c0.y + c1.y) / 2 };
+    // Keep the world point under the initial midpoint under the current midpoint.
+    this.setViewLive({ zoom, x: m1.x - (m0.x - g.startView.x) * k, y: m1.y - (m0.y - g.startView.y) * k });
+  }
+
+  private endGesture() {
+    const g = this.gesture;
+    if (!g) return;
+    this.gesture = null;
+    const dt = performance.now() - g.startedAt;
+    const isTap = g.mode === 'touch' && dt < 300 && g.moved < 12;
+    if (isTap && g.maxFingers === 2) { this.setViewLive(g.startView); this.commitView(); this.undo(); return; }
+    if (isTap && g.maxFingers >= 3) { this.setViewLive(g.startView); this.commitView(); this.redo(); return; }
+    this.commitView();
+  }
+
   private onPointerDown(e: PointerEvent) {
-    if (e.target !== this.canvas || this.live) return;
-    if (this.settings.pencilOnly && e.pointerType !== 'pen') { this.toast('Pencil-only mode: touch ignored'); return; }
+    if (e.target !== this.canvas) return;
+    const isTouch = e.pointerType === 'touch';
+    const pt = this.screenPoint(e);
+    if (isTouch) this.activeTouches.set(e.pointerId, pt);
+
+    // Apple Pencil detected: fingers become navigation unless the user chose otherwise.
+    if (e.pointerType === 'pen' && this.settings.pencilAuto && !this.settings.pencilOnly) {
+      this.set({ pencilOnly: true });
+      this.toast('Apple Pencil detected: fingers now pan and zoom, two-finger tap undoes', { duration: 4000 });
+    }
+
+    // A gesture is under way: further fingers join it, anything else is ignored.
+    if (this.gesture) {
+      if (isTouch && this.gesture.mode === 'touch') {
+        e.preventDefault();
+        this.gesture.touches.set(e.pointerId, pt);
+        this.gesture.maxFingers = Math.max(this.gesture.maxFingers, this.gesture.touches.size);
+        this.rebaseGesture();
+      }
+      return;
+    }
+
+    if (this.live) {
+      // Pencil drawing: a finger is a resting palm. Ignore it.
+      if (this.live.pointerType === 'pen' || !isTouch) { if (isTouch) e.preventDefault(); return; }
+      // Finger drawing + second finger: it was a gesture all along (Procreate behaviour).
+      e.preventDefault();
+      this.cancelStroke(true);
+      this.beginGesture(e, 'touch');
+      const g = this.gesture!;
+      for (const [id, p] of this.activeTouches) g.touches.set(id, p);
+      g.start = new Map(g.touches);
+      g.maxFingers = g.touches.size;
+      return;
+    }
+
+    // Navigation: a finger when pencil-only, the middle button, or space-drag.
+    const navigate = (isTouch && this.settings.pencilOnly) || (e.pointerType === 'mouse' && (e.button === 1 || (e.button === 0 && this.spaceHeld)));
+    if (navigate) {
+      e.preventDefault();
+      this.beginGesture(e, isTouch ? 'touch' : 'mouse');
+      return;
+    }
     if (e.pointerType === 'mouse' && e.button !== 0) return;
+
     e.preventDefault(); // also suppresses the focus change, so commit any focused editor by hand
     (document.activeElement as HTMLElement | null)?.blur?.();
     try { this.canvas!.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const rect = this.canvas!.getBoundingClientRect();
     const rec = this.newRecord(this.settings.tool, this.pointFromEvent(e, rect));
-    this.live = { id: e.pointerId, rect, rec, erasedUpTo: 0 };
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0 };
     this.updateHud(e);
     this.schedulePreview();
   }
+  private activeTouches = new Map<number, { x: number; y: number }>();
 
   private onPointerMove(e: PointerEvent) {
+    const g = this.gesture;
+    if (g && g.touches.has(e.pointerId)) {
+      e.preventDefault();
+      const pt = this.screenPoint(e);
+      const prev = g.touches.get(e.pointerId)!;
+      g.moved += Math.hypot(pt.x - prev.x, pt.y - prev.y);
+      g.touches.set(e.pointerId, pt);
+      if (e.pointerType === 'touch') this.activeTouches.set(e.pointerId, pt);
+      this.updateGesture();
+      return;
+    }
+    if (e.pointerType === 'touch' && this.activeTouches.has(e.pointerId)) this.activeTouches.set(e.pointerId, this.screenPoint(e));
     const live = this.live;
     if (!live || e.pointerId !== live.id) return;
     e.preventDefault();
@@ -632,6 +895,15 @@ export class Studio {
   }
 
   private onPointerUp(e: PointerEvent) {
+    this.activeTouches.delete(e.pointerId);
+    const g = this.gesture;
+    if (g && g.touches.has(e.pointerId)) {
+      e.preventDefault();
+      g.touches.delete(e.pointerId);
+      if (g.touches.size === 0) this.endGesture();
+      else this.rebaseGesture();
+      return;
+    }
     const live = this.live;
     if (!live || e.pointerId !== live.id) return;
     e.preventDefault();
@@ -695,13 +967,13 @@ export class Studio {
   drawSampleStroke = () => {
     if (!this.sgl) return;
     if (this.settings.tool !== 'brush') this.setTool('brush');
-    const cx = this.cssW / 2, cy = this.cssH / 2;
-    const rx = Math.min(this.cssW * 0.32, 260), ry = Math.min(this.cssH * 0.22, 120);
+    const c = this.toWorld(this.cssW / 2, this.cssH / 2), z = this.view.zoom;
+    const rx = Math.min(this.cssW * 0.32, 260) / z, ry = Math.min(this.cssH * 0.22, 120) / z;
     const points: Point[] = [];
     const steps = 160;
     for (let i = 0; i <= steps; i++) {
       const t = i / steps, a = t * Math.PI * 2;
-      points.push({ x: round(cx + Math.sin(a) * rx, 100), y: round(cy + Math.sin(a * 2) * ry, 100), p: round(0.5 + 0.4 * Math.sin(a * 3) ** 2, 1000) });
+      points.push({ x: round(c.x + Math.sin(a) * rx, 100), y: round(c.y + Math.sin(a * 2) * ry, 100), p: round(0.5 + 0.4 * Math.sin(a * 3) ** 2, 1000) });
     }
     this.commitPoints(points);
   };
@@ -749,8 +1021,8 @@ export class Studio {
   setPressureMode(pressureMode: PressureMode) { this.set({ pressureMode }); }
   setForceSensitivity(forceSensitivity: number) { this.set({ forceSensitivity }); }
   setPencilOnly(pencilOnly: boolean) {
-    this.set({ pencilOnly });
-    this.toast(pencilOnly ? 'Pencil only: finger touches are ignored' : 'Accepting pencil and touch');
+    this.set({ pencilOnly, pencilAuto: false });
+    this.toast(pencilOnly ? 'Pencil only: fingers pan and zoom, the Pencil draws' : 'Fingers draw too (two fingers still pan and zoom)');
   }
   setTool(tool: Tool) { this.set({ tool }); }
   setPaper(paper: PaperName) {
@@ -792,16 +1064,42 @@ export class Studio {
 
   specCode(name = this.activeTemplate()?.codeName ?? 'myBrush') { return specCode(this.settings.spec, this.settings.tipSource, name); }
 
+  /** World-space bounds of the visible strokes, or null when empty. */
+  drawingBounds(): { x: number; y: number; w: number; h: number } | null {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const rec of visibleRecords(this.strokes)) {
+      if (rec.tool === 'clear') continue;
+      const pad = rec.tool === 'eraser' ? rec.size / 2 : rec.spec.weight * rec.size;
+      for (const p of rec.points) {
+        if (p.x - pad < minX) minX = p.x - pad; if (p.x + pad > maxX) maxX = p.x + pad;
+        if (p.y - pad < minY) minY = p.y - pad; if (p.y + pad > maxY) maxY = p.y + pad;
+      }
+    }
+    return Number.isFinite(minX) ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null;
+  }
+
+  /** Frames the whole drawing in the viewport. */
+  zoomToFit() {
+    const b = this.drawingBounds();
+    if (!b) { this.resetView(); return; }
+    const zoom = clamp(Math.min(this.cssW / (b.w + 80), this.cssH / (b.h + 80), 4), MIN_ZOOM, MAX_ZOOM);
+    this.setViewLive({ zoom, x: this.cssW / 2 - (b.x + b.w / 2) * zoom, y: this.cssH / 2 - (b.y + b.h / 2) * zoom });
+    this.commitView();
+  }
+
   /** A complete p5.js sketch that replays the visible drawing with p5.brush. */
   sketchCode(): string {
     const conf = paperPresets[this.settings.paper];
+    const b = this.drawingBounds() ?? { x: 0, y: 0, w: this.cssW, h: this.cssH };
+    const margin = 40;
+    const ox = Math.round(b.x - margin), oy = Math.round(b.y - margin);
     const lines = [
       '// p5.js + p5.brush 2.2.2 — exported from p5.brush Realtime Studio',
       '// <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>',
       '// <script src="https://cdn.jsdelivr.net/npm/p5.brush@2.2.2/dist/p5.brush.js"></script>',
       '',
       'function setup() {',
-      `  createCanvas(${Math.round(this.cssW)}, ${Math.round(this.cssH)}, WEBGL);`,
+      `  createCanvas(${Math.round(b.w + margin * 2)}, ${Math.round(b.h + margin * 2)}, WEBGL);`,
       `  pixelDensity(${this.dpr});`,
       '  angleMode(DEGREES);',
       '  noLoop();',
@@ -809,7 +1107,7 @@ export class Studio {
       '',
       'function draw() {',
       `  background("rgb(${conf.bg.join(', ')})");`,
-      '  translate(-width / 2, -height / 2);',
+      `  translate(-width / 2 - ${ox}, -height / 2 - ${oy});`,
     ];
     const names = new Map<string, string>();
     for (const rec of visibleRecords(this.strokes)) {
@@ -846,6 +1144,16 @@ export class Studio {
       setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
       applyTemplate: (id: string) => this.applyTemplate(id), templates: BRUSH_TEMPLATES.map((t) => t.id),
       rebuildAll: () => this.repaintPaper(), saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
+      // low-level primitives for determinism experiments
+      gl: {
+        blitCommitted: () => this.sgl!.blit(this.sgl!.committedTex),
+        blitPaper: () => this.sgl!.blit(this.sgl!.paperTex),
+        snapshotCommitted: () => this.sgl!.snapshot(this.sgl!.committedTex),
+        render: (rec: BrushRecord) => this.renderBrushStroke(rec),
+        prime: () => this.primeEngine(this.glW, this.glH, this.dpr),
+      },
+      view: () => this.view, zoomBy: (f: number, cx?: number, cy?: number) => this.zoomBy(f, cx, cy), resetView: () => this.resetView(), zoomToFit: () => this.zoomToFit(),
+      toWorld: (x: number, y: number) => this.toWorld(x, y),
     };
   }
 }
