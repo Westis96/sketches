@@ -35,6 +35,13 @@ two-finger tap undoes, three-finger tap redoes. On a desktop, scroll pans, pinch
 ctrl-scroll zooms at the cursor, middle-drag or space-drag pans, `0` resets and `F` fits
 the drawing. Strokes are stored in world units, so zooming re-renders them exactly.
 
+Input is conditioned the way tldraw does it: pen and finger samples closer than a screen
+pixel are folded into the previous point (keeping the higher pressure), the first few jittery
+samples of a stroke are dropped, pen pressure is eased in instead of starting on the raw
+spike, and finger and mouse strokes get simulated pressure from speed (slow is heavier).
+Conditioning runs at render time from the stored input kind, so old drawings are untouched.
+When the canvas is rebuilt (undo, zoom, reload) strokes outside the viewport are skipped.
+
 WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are
 rendered by the engine itself), edit the `brush.add(...)` parameters live, paste a spec from

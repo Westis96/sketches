@@ -147,9 +147,60 @@ try {
   const restored = await studio((s) => ({ n: s.strokes().length, paper: s.state.settings.paper, zoom: s.view().zoom }));
   check('reload restores strokes, paper and zoom', restored.n === saved.n && restored.paper === 'washi' && Math.abs(restored.zoom - saved.zoom) < 1e-9, JSON.stringify({ saved, restored }));
 
+  // Viewport culling: off-screen strokes are skipped, visible pixels are unchanged.
+  await studio((s) => s.clear());
+  await studio((s) => s.commit([{ x: 100, y: 100, p: 0.5 }, { x: 400, y: 120, p: 0.5 }], { seed: 11 }));
+  await studio((s) => s.commit([{ x: 3000, y: 3000, p: 0.5 }, { x: 3300, y: 3050, p: 0.5 }], { seed: 12 }));
+  await studio((s) => s.commit([{ x: -2000, y: 400, p: 0.5 }, { x: -1700, y: 380, p: 0.5 }], { seed: 13 }));
+  await studio((s) => { s.setCulling(true); s.rebuildAll(); });
+  const culledPixels = await checksum();
+  const culledCount = await studio((s) => s.lastCulled());
+  await studio((s) => { s.setCulling(false); s.rebuildAll(); });
+  const uncalledPixels = await checksum();
+  await studio((s) => s.setCulling(true));
+  check('culling skips off-screen strokes', culledCount === 2, `culled ${culledCount}`);
+  check('culling leaves visible pixels identical', culledPixels.h === uncalledPixels.h);
+
+  // Pen point merging: sub-pixel 240 Hz samples fold into the previous point.
+  await studio((s) => s.clear());
+  const penEvents = await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    const ev = (type, x, y, pressure) => new PointerEvent(type, { pointerId: 7, pointerType: 'pen', clientX: x, clientY: y, button: 0, buttons: 1, pressure, bubbles: true, cancelable: true });
+    c.dispatchEvent(ev('pointerdown', 300, 300, 0.4));
+    let n = 1;
+    for (let i = 1; i <= 200; i++) { window.dispatchEvent(ev('pointermove', 300 + i * 0.3, 300 + Math.sin(i / 10) * 0.2, 0.4 + (i % 5) * 0.1)); n++; }
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, pointerType: 'pen', clientX: 360, clientY: 300, button: 0, buttons: 0, bubbles: true, cancelable: true }));
+    return n;
+  });
+  await page.waitForTimeout(50);
+  const penRec = await studio((s) => s.history()[s.history().length - 1]);
+  check('pen samples closer than a pixel are merged', penRec.input === 'pen' && penRec.points.length < penEvents / 2 && penRec.points.length > 10, `${penRec.points.length} points from ${penEvents} events`);
+  check('merged points keep the higher pressure', penRec.points.some((p) => p.p >= 0.8));
+
+  // Simulated pressure for mouse/finger input: slow = heavy, fast = light.
+  const simPts = [];
+  for (let i = 0; i <= 40; i++) simPts.push({ x: 100 + i * 2, y: 500, p: 0.5 });      // slow (2 px steps)
+  for (let i = 1; i <= 20; i++) simPts.push({ x: 180 + i * 20, y: 500, p: 0.5 });     // fast (20 px steps)
+  const sim = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'stylus', sensitivity: 1.25, seed: 1, points: pts, input: 'mouse' }), simPts);
+  const slowP = sim.slice(5, 35).reduce((a, p) => a + p.p, 0) / 30;
+  const fastP = sim.slice(-10).reduce((a, p) => a + p.p, 0) / 10;
+  check('simulated pressure: slow strokes are heavier than fast ones', slowP > fastP + 0.1 && sim.every((p) => p.p >= 0.25 && p.p <= 0.75), `slow ${slowP.toFixed(2)} fast ${fastP.toFixed(2)}`);
+
+  // Start smoothing: a tight cluster of early samples is dropped and pen pressure is eased in.
+  const hook = [{ x: 200, y: 200, p: 1 }, { x: 201, y: 201, p: 1 }, { x: 202, y: 200, p: 1 }, { x: 201, y: 199, p: 1 }];
+  for (let i = 1; i <= 30; i++) hook.push({ x: 200 + i * 5, y: 200, p: 0.3 });
+  const cond = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts, input: 'pen' }), hook);
+  check('start jitter within one stroke width is dropped', cond.length === hook.length - 3, `${cond.length} of ${hook.length}`);
+  check('pen pressure at the start is eased, not the raw spike', cond[0].p < 0.9 && cond[cond.length - 1].p < 0.45, `start ${cond[0].p.toFixed(2)} end ${cond[cond.length - 1].p.toFixed(2)}`);
+  const legacy = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts }), hook);
+  check('records without an input kind are left untouched', legacy.length === hook.length && legacy[0].p === 1);
+
   // Sketch export covers the visible strokes.
+  await studio((s) => s.clear());
+  await studio((s) => s.commit([{ x: 100, y: 100, p: 0.5 }, { x: 400, y: 120, p: 0.5 }], { seed: 21 }));
+  await studio((s) => s.commit([{ x: 100, y: 300, p: 0.5 }, { x: 400, y: 320, p: 0.5 }], { seed: 22 }));
   const sketch = await studio((s) => s.sketchCode());
-  check('sketch export contains brush.add and strokes', /brush\.add\(/.test(sketch) && (sketch.match(/beginStroke/g) || []).length === saved.n);
+  check('sketch export contains brush.add and strokes', /brush\.add\(/.test(sketch) && (sketch.match(/beginStroke/g) || []).length === 2);
 
   check('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {

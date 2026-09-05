@@ -16,9 +16,9 @@ import type { BrushParams } from 'p5.brush/standalone';
 import { StudioGL, type Dab } from './StudioGL';
 import { compileTip, checkTip, tipExtent } from './tipShim';
 import {
-  DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, clamp, clone, deserializeRecords, fmt, parseSpecCode,
-  serializeRecords, specCode, strokeSegments, visibleRecords,
-  type BrushRecord, type BrushSpec, type EraserRecord, type PaperName, type Point, type PressureMode,
+  DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, clamp, clone, conditionPoints, deserializeRecords, fmt,
+  parseSpecCode, recordBounds, serializeRecords, specCode, strokeSegments, visibleRecords,
+  type BrushRecord, type BrushSpec, type EraserRecord, type InputKind, type PaperName, type Point, type PressureMode,
   type StrokeRecord, type Tool,
 } from './records';
 import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
@@ -100,6 +100,8 @@ interface Live {
   rect: DOMRect;
   rec: BrushRecord | EraserRecord;
   erasedUpTo: number;
+  /** World position at which a point was last *recorded* (not merged), for pen/finger thinning. */
+  lastRecorded: Point;
 }
 
 const round = (v: number, d: number) => Math.round(v * d) / d;
@@ -458,8 +460,16 @@ export class Studio {
       brush.load(c);
       brush.noFill(); brush.noHatch(); brush.noField();
       const bg = paperPresets[this.settings.paper].bg;
+      // Clear through the preview canvas's own context rather than brush.clear():
+      // right after a load() the engine's mask framebuffers still belong to the
+      // main canvas's context (they are rebuilt lazily on the first stroke), and
+      // brush.clear() would try to bind them here.
+      const pgl = c.getContext('webgl2')!;
       for (const t of BRUSH_TEMPLATES) {
-        brush.clear(bg[0], bg[1], bg[2]);
+        pgl.bindFramebuffer(pgl.FRAMEBUFFER, null);
+        pgl.disable(pgl.SCISSOR_TEST);
+        pgl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
+        pgl.clear(pgl.COLOR_BUFFER_BIT | pgl.DEPTH_BUFFER_BIT);
         const rec: BrushRecord = { tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 20240611, points };
         this.stampRecord(rec, W, H, 1, { x: 0, y: 0, zoom: 1 });
         out[t.id] = c.toDataURL('image/png');
@@ -497,11 +507,30 @@ export class Studio {
     else this.renderBrushStroke(rec);
   }
 
-  /** Restores `baseTex`, draws `records` on top, and stores the result as committed. */
+  private cullingEnabled = true;
+  /** Records skipped by culling during the last paint (for tests and tuning). */
+  private lastCulled = 0;
+
+  /** World-space rectangle currently visible at the committed view. */
+  private visibleWorldBounds() {
+    const v = this.committedView;
+    return { minX: -v.x / v.zoom, minY: -v.y / v.zoom, maxX: (this.cssW - v.x) / v.zoom, maxY: (this.cssH - v.y) / v.zoom };
+  }
+
+  /**
+   * Restores `baseTex`, draws `records` on top, and stores the result as committed.
+   * Records whose padded bounds miss the viewport are skipped: they cannot touch a
+   * visible pixel, and off-screen strokes dominate the cost of large drawings.
+   */
   private paint(baseTex: WebGLTexture, records: StrokeRecord[]) {
     const sgl = this.sgl!;
     sgl.blit(baseTex);
-    for (const rec of records) this.renderRecord(rec);
+    const view = this.visibleWorldBounds();
+    this.lastCulled = 0;
+    for (const rec of records) {
+      if (this.cullingEnabled && rec.tool !== 'clear' && !boundsIntersect(recordBounds(rec), view)) { this.lastCulled++; continue; }
+      this.renderRecord(rec);
+    }
     sgl.snapshot(sgl.committedTex);
   }
 
@@ -732,7 +761,7 @@ export class Studio {
   }
 
   /** A record captures everything needed to replay the stroke deterministically. */
-  private newRecord(tool: Tool, firstPt: Point): BrushRecord | EraserRecord {
+  private newRecord(tool: Tool, firstPt: Point, input: InputKind = 'mouse'): BrushRecord | EraserRecord {
     const s = this.settings;
     if (tool === 'eraser') return { tool, size: s.eraserSize, points: [firstPt] };
     const spec = clone(s.spec);
@@ -748,6 +777,7 @@ export class Studio {
       sensitivity: s.forceSensitivity,
       seed: (Math.random() * 2147483647) | 0,
       points: [firstPt],
+      input,
     };
   }
 
@@ -858,8 +888,10 @@ export class Studio {
     (document.activeElement as HTMLElement | null)?.blur?.();
     try { this.canvas!.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     const rect = this.canvas!.getBoundingClientRect();
-    const rec = this.newRecord(this.settings.tool, this.pointFromEvent(e, rect));
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0 };
+    const input: InputKind = e.pointerType === 'pen' ? 'pen' : e.pointerType === 'touch' ? 'touch' : 'mouse';
+    const first = this.pointFromEvent(e, rect);
+    const rec = this.newRecord(this.settings.tool, first, input);
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first } };
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -885,11 +917,22 @@ export class Studio {
     const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const list = coalesced.length ? coalesced : [e];
     const pts = live.rec.points;
+    // Pen and finger samples arrive at up to 240 Hz; like tldraw, only record a new
+    // point once the pointer has moved a screen pixel, otherwise fold the sample into
+    // the last point (moving it, keeping the higher pressure). Mouse keeps every move.
+    const minDist = live.pointerType === 'mouse' ? 0.15 : 1 / this.view.zoom;
     for (const ev of list) {
       const pt = this.pointFromEvent(ev, live.rect);
       const last = pts[pts.length - 1];
-      if (Math.abs(pt.x - last.x) < 0.15 && Math.abs(pt.y - last.y) < 0.15) { last.p = pt.p; continue; }
+      if (Math.hypot(pt.x - live.lastRecorded.x, pt.y - live.lastRecorded.y) < minDist) {
+        // Fold into the last point: it follows the pointer, but the reference for the
+        // next distance check stays where a point was last recorded.
+        if (pts.length > 1) { last.x = pt.x; last.y = pt.y; }
+        last.p = Math.max(last.p, pt.p);
+        continue;
+      }
       pts.push(pt);
+      live.lastRecorded = { ...pt };
     }
     this.schedulePreview();
   }
@@ -1144,6 +1187,9 @@ export class Studio {
       setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
       applyTemplate: (id: string) => this.applyTemplate(id), templates: BRUSH_TEMPLATES.map((t) => t.id),
       rebuildAll: () => this.repaintPaper(), saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
+      setCulling: (on: boolean) => { this.cullingEnabled = on; },
+      lastCulled: () => this.lastCulled,
+      conditioned: (rec: BrushRecord) => conditionPoints(rec),
       // low-level primitives for determinism experiments
       gl: {
         blitCommitted: () => this.sgl!.blit(this.sgl!.committedTex),

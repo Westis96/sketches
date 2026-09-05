@@ -28,6 +28,9 @@ export type PaperName = 'hotpress' | 'washi' | 'bristol';
 
 export interface Point { x: number; y: number; p: number }
 
+/** Which device produced a stroke. Decides whether pressure is real or simulated. */
+export type InputKind = 'pen' | 'touch' | 'mouse';
+
 export interface BrushRecord {
   tool: 'brush';
   spec: BrushSpec;
@@ -38,6 +41,8 @@ export interface BrushRecord {
   sensitivity: number;
   seed: number;
   points: Point[];
+  /** Absent on records saved before input conditioning existed; those replay as-is. */
+  input?: InputKind;
 }
 
 export interface EraserRecord {
@@ -63,7 +68,7 @@ export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
 export const SAVE_VERSION = 1;
 
 type SavedRecord =
-  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[] }
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind }
   | { t: 'e'; size: number; pts: number[] }
   | { t: 'c' };
 
@@ -78,7 +83,9 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
   return records.map((r): SavedRecord => {
     if (r.tool === 'clear') return { t: 'c' };
     if (r.tool === 'eraser') return { t: 'e', size: r.size, pts: packPoints(r.points) };
-    return { t: 'b', spec: r.spec, tip: r.tipSource, size: r.size, color: r.color, pm: r.pressureMode, sens: r.sensitivity, seed: r.seed, pts: packPoints(r.points) };
+    const saved: SavedRecord = { t: 'b', spec: r.spec, tip: r.tipSource, size: r.size, color: r.color, pm: r.pressureMode, sens: r.sensitivity, seed: r.seed, pts: packPoints(r.points) };
+    if (r.input) saved.in = r.input;
+    return saved;
   });
 }
 
@@ -92,7 +99,9 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
     const points = unpackPoints(r.pts);
     if (r.t === 'e') { out.push({ tool: 'eraser', size: +r.size || 24, points }); continue; }
     if (r.t === 'b' && r.spec && typeof r.tip === 'string') {
-      out.push({ tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points });
+      const rec: BrushRecord = { tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points };
+      if (r.in === 'pen' || r.in === 'touch' || r.in === 'mouse') rec.input = r.in;
+      out.push(rec);
     }
   }
   return out;
@@ -168,9 +177,77 @@ export interface StrokeGeometry {
   stamps: number;
 }
 
+// ---------------------------------------------------------------------------
+// Input conditioning (after tldraw's freehand pipeline)
+// ---------------------------------------------------------------------------
+
+/** How fast simulated / smoothed pressure follows its target. */
+const RATE_OF_PRESSURE_CHANGE = 0.275;
+
+/** The stroke width the conditioning works in: roughly the visible mark, in world units. */
+export const strokeWidthFor = (rec: BrushRecord) => clamp(rec.spec.weight * rec.size * 0.5, 4, 40);
+
+/**
+ * Conditions raw pointer points before geometry, the way tldraw does:
+ *  - drops the first few samples while the stroke has travelled less than one
+ *    stroke width, which removes the hook a fast pen-down leaves;
+ *  - without a pressure-sensitive device, simulates pressure from velocity
+ *    (slow = heavy, fast = light) so finger and mouse strokes get dynamics;
+ *  - with a pen, smooths pressure with a distance-scaled follower and seeds it
+ *    from the first stretch, so strokes do not start with a blob.
+ * Records without an `input` field predate this and are returned untouched.
+ */
+export function conditionPoints(rec: BrushRecord): Point[] {
+  const raw = rec.points;
+  if (!rec.input || raw.length < 2) return raw;
+  const size = strokeWidthFor(rec);
+  const simulate = rec.input !== 'pen';
+
+  // Pass 1: early jitter. Never drop the last point.
+  const pts: Point[] = [raw[0]];
+  let run = 0;
+  for (let i = 1; i < raw.length; i++) {
+    const prev = pts[pts.length - 1];
+    const d = Math.hypot(raw[i].x - prev.x, raw[i].y - prev.y);
+    if (i < 4 && i < raw.length - 1 && run + d < size) continue;
+    run += d;
+    pts.push(raw[i]);
+  }
+  if (pts.length < 2) return pts;
+
+  const dists = pts.map((p, i) => (i === 0 ? 0 : Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)));
+
+  // Pass 2: seed the follower from the first stroke widths so the start is not a blob.
+  let prev = simulate ? 0.5 : pts[0].p;
+  let running = 0;
+  for (let i = 0; i < pts.length; i++) {
+    if (running > size * 5) break;
+    const sp = Math.min(1, dists[i] / size);
+    const target = simulate ? Math.min(1, 1 - sp) : pts[i].p;
+    const p = simulate
+      ? Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE))
+      : Math.min(1, prev + (target - prev) * 0.5);
+    prev = prev + (p - prev) * 0.5;
+    running += dists[i];
+  }
+
+  // Pass 3: pressure per point.
+  const out: Point[] = new Array(pts.length);
+  for (let i = 0; i < pts.length; i++) {
+    const sp = Math.min(1, dists[i] / size);
+    const target = simulate ? Math.min(1, 1 - sp) : pts[i].p;
+    const p = i === 0 ? prev : Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE));
+    prev = p;
+    // Simulated pressure is tempered to tldraw's effective range so it maps to a
+    // moderate size swing through mapStylus (0.5 → ×1).
+    out[i] = { x: pts[i].x, y: pts[i].y, p: simulate ? 0.25 + 0.5 * p : p };
+  }
+  return out;
+}
+
 /** Segments (angle in degrees, p5.brush convention) for a brush record. */
 export function strokeSegments(rec: BrushRecord): StrokeGeometry {
-  const pts = resamplePath(rec.points, segmentLengthFor(rec.spec.spacing));
+  const pts = resamplePath(conditionPoints(rec), segmentLengthFor(rec.spec.spacing));
   const pf = rec.pressureMode === 'gaussian' ? () => 1 : (pt: Point) => mapStylus(pt.p, rec.sensitivity);
   const segs: Segment[] = [];
   let a = 0, stamps = 0;
@@ -184,6 +261,33 @@ export function strokeSegments(rec: BrushRecord): StrokeGeometry {
   }
   return { origin: pts[0], segs, endA: a, endP: pf(pts[pts.length - 1]), stamps: Math.round(stamps) };
 }
+
+// ---------------------------------------------------------------------------
+// Bounds (world units), used for viewport culling and zoom-to-fit
+// ---------------------------------------------------------------------------
+export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
+
+const boundsCache = new WeakMap<object, Bounds>();
+
+/** Padded world-space bounds of a brush or eraser record; cached per record. */
+export function recordBounds(rec: BrushRecord | EraserRecord): Bounds {
+  const cached = boundsCache.get(rec);
+  if (cached) return cached;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of rec.points) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  // Generous: full tip footprint at peak pressure plus scatter reach.
+  const pad = rec.tool === 'eraser'
+    ? rec.size / 2 + 2
+    : rec.spec.weight * rec.size * Math.max(1, rec.spec.pressure.min_max[0], rec.spec.pressure.min_max[1]) * 1.5 + rec.spec.scatter * rec.size * 3 + 4;
+  const b = { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
+  boundsCache.set(rec, b);
+  return b;
+}
+
+export const boundsIntersect = (a: Bounds, b: Bounds) => a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY;
 
 // ---------------------------------------------------------------------------
 // brush.add(...) code generation / parsing
