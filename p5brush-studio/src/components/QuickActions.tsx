@@ -1,4 +1,4 @@
-import { Menu, Redo2, Trash2, Undo2 } from 'lucide-react';
+import { FilePlus2, Menu, Redo2, Undo2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger,
@@ -41,13 +41,13 @@ export function QuickActions({ onPractice }: { onPractice?: () => void }) {
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.resetDefaults()}>Reset brush to myBrush defaults</DropdownMenuItem>
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => { void studio.copyDiagnostics(); }}>Copy diagnostics</DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />
-          <DropdownMenuItem className="rounded-[7px] py-1.5 text-[var(--tl-danger)] focus:text-[var(--tl-danger)]" onSelect={studio.clear}>Clear canvas<DropdownMenuShortcut>C</DropdownMenuShortcut></DropdownMenuItem>
+          <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={studio.clear}>New sketch<DropdownMenuShortcut>C</DropdownMenuShortcut></DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <span className="tl-divider" />
       <TlButton label="Undo" kbd="⌘Z" side="bottom" disabled={!canUndo} onClick={studio.undo}><Undo2 /></TlButton>
       <TlButton label="Redo" kbd="⇧⌘Z" side="bottom" disabled={!canRedo} onClick={studio.redo}><Redo2 /></TlButton>
-      <TlButton label="Clear canvas" kbd="C" side="bottom" onClick={studio.clear}><Trash2 /></TlButton>
+      <TlButton label="New sketch" kbd="C" side="bottom" onClick={studio.clear}><FilePlus2 /></TlButton>
     </div>
   );
 }

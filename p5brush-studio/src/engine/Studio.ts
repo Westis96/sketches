@@ -1037,7 +1037,7 @@ export class Studio {
   clear = () => {
     if (this.live) this.cancelStroke();
     if (this.state.practice) { this.restartPractice(); return; }
-    if (!this.strokes.length) { this.toast('The paper is already blank'); return; }
+    if (!this.strokes.length) { this.toast('This sketch is already blank'); return; }
     this.flushPaint();
     this.clearedBackup = { strokes: this.strokes, redo: this.redoStack };
     this.strokes = [];
@@ -1047,7 +1047,7 @@ export class Studio {
     this.dropSnaps(this.redoSnaps);
     this.paint(this.sgl!.paperTex, []);
     this.syncHistory();
-    this.toast('Canvas cleared', { action: { label: 'Undo', onClick: this.restoreCleared }, duration: 6000 });
+    this.toast('New sketch', { action: { label: 'Undo', onClick: this.restoreCleared }, duration: 6000 });
   };
 
   /** Brings back the drawing removed by the last Clear, if nothing has been drawn since. */
@@ -1059,7 +1059,7 @@ export class Studio {
     this.redoStack = b.redo;
     this.repaintPaper();
     this.syncHistory();
-    this.toast('Drawing restored');
+    this.toast('Previous sketch restored');
   };
 
   /** Discards the stroke in progress (Escape, or a second finger turning it into a gesture). */
