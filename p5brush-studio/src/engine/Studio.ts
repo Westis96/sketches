@@ -102,8 +102,15 @@ export interface StudioState {
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
 export type Toast = (message: string, opts?: ToastOptions) => void;
 
-const CHECKPOINT_EVERY = 6;
-const MAX_CHECKPOINTS = 4;
+const CHECKPOINT_EVERY = 8;
+const MAX_CHECKPOINTS = 2;
+/** Canvas snapshots kept around the most recent strokes so undo/redo of those is a texture swap. */
+const MAX_STEP_SNAPS = 2;
+/** Live chunks are stamped at most this often; fewer chunks make replays cheaper. */
+const MIN_CHUNK_INTERVAL_MS = 15;
+/** Rebuilds with more strokes than this are spread over frames so the UI never freezes. */
+const PROGRESSIVE_MIN_STROKES = 12;
+const PROGRESSIVE_BUDGET_MS = 9;
 const POOL = 8;
 const SAVE_KEY = `p5brush-studio:v${SAVE_VERSION}`;
 const SAVE_DEBOUNCE_MS = 700;
@@ -131,10 +138,11 @@ interface Live {
   erasedUpTo: number;
   /** World position at which a point was last *recorded* (not merged), for pen/finger thinning. */
   lastRecorded: Point;
-  /** Chunked brush stroke: conditioned length reached, path length stamped, chunk count. */
+  /** Chunked brush stroke: conditioned length reached, path length stamped, chunk count, last chunk time. */
   condLen: number;
   stampedLen: number;
   chunk: number;
+  lastChunkAt: number;
 }
 
 const round = (v: number, d: number) => Math.round(v * d) / d;
@@ -169,6 +177,13 @@ export class Studio {
   private strokes: StrokeRecord[] = [];
   private redoStack: StrokeRecord[] = [];
   private checkpoints: Array<{ count: number; tex: WebGLTexture }> = [];
+  /** Canvas as it was with `count` strokes, kept for the most recent strokes: undo swaps it in. */
+  private undoSnaps: Array<{ count: number; tex: WebGLTexture }> = [];
+  /** Canvas after an undone stroke, so redo of it is a swap too. */
+  private redoSnaps: Array<{ count: number; tex: WebGLTexture }> = [];
+  private texPool: WebGLTexture[] = [];
+  /** Progressive rebuild in flight (large drawings after a view or paper change). */
+  private pending: { records: StrokeRecord[]; index: number; scratch: WebGLTexture; raf: number } | null = null;
 
   private live: Live | null = null;
   private previewQueued = false;
@@ -190,6 +205,8 @@ export class Studio {
    * redraws this texture before stamping and snapshots it afterwards.
    */
   private liveTex: WebGLTexture | null = null;
+  /** Rolling cost counters (ms), read through the debug hook. */
+  private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, restoreMs: 0, stampMs: 0, snapMs: 0, plotMs: 0, compositeMs: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0 };
   /** The user's drawing while a lesson occupies the canvas. */
   private practiceBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[]; settings: Settings; view: View } | null = null;
   private lessonPreviewsQueued = false;
@@ -490,9 +507,12 @@ export class Studio {
     brush.translate(-glW / 2, -glH / 2); // p5.brush origin is the canvas centre
     brush.scale(dpr);                    // work in CSS (screen) pixels
     brush.set(name, rec.color, rec.size);
+    const t0 = performance.now();
     plot.draw(origin.x * view.zoom + view.x, origin.y * view.zoom + view.y, 1);
     brush.pop();
+    const t1 = performance.now();
     brush.render();
+    this.perf.plotMs += t1 - t0; this.perf.compositeMs += performance.now() - t1;
     return stamps;
   }
 
@@ -806,15 +826,83 @@ export class Studio {
    * Records whose padded bounds miss the viewport are skipped: they cannot touch a
    * visible pixel, and off-screen strokes dominate the cost of large drawings.
    */
+  private takeTexture(): WebGLTexture { return this.texPool.pop() ?? this.sgl!.createTexture(); }
+  private releaseTexture(tex: WebGLTexture) { this.texPool.push(tex); }
+  private dropSnaps(list: Array<{ count: number; tex: WebGLTexture }>) {
+    for (const s of list) this.releaseTexture(s.tex);
+    list.length = 0;
+  }
+
+  /** Finishes a progressive rebuild synchronously (before anything else touches the canvas). */
+  private flushPaint() {
+    const p = this.pending;
+    if (!p) return;
+    cancelAnimationFrame(p.raf);
+    this.sgl!.blit(p.scratch);
+    while (p.index < p.records.length) this.paintOne(p.records[p.index++]);
+    this.finishProgressive(p);
+  }
+
+  private cancelPaint() {
+    const p = this.pending;
+    if (!p) return;
+    cancelAnimationFrame(p.raf);
+    this.releaseTexture(p.scratch);
+    this.pending = null;
+  }
+
+  private finishProgressive(p: NonNullable<typeof this.pending>) {
+    const sgl = this.sgl!;
+    sgl.snapshot(sgl.committedTex);
+    this.releaseTexture(p.scratch);
+    this.pending = null;
+  }
+
+  private paintOne(rec: StrokeRecord) {
+    if (this.cullingEnabled && rec.tool !== 'clear' && !boundsIntersect(recordBounds(rec), this.visibleWorldBounds())) { this.lastCulled++; return; }
+    this.renderRecord(rec);
+    this.perf.paintStrokes++;
+  }
+
+  /**
+   * Like paint(), spread over frames with a time budget. Each step starts by
+   * blitting the state reached so far back into the drawing buffer (the engine
+   * reads the canvas back while compositing, and on WebKit that read is only
+   * reliable for content drawn in the same frame) and ends with a snapshot.
+   */
+  private paintProgressive(baseTex: WebGLTexture, records: StrokeRecord[]) {
+    this.cancelPaint();
+    const sgl = this.sgl!;
+    const scratch = this.takeTexture();
+    sgl.blit(baseTex);
+    sgl.snapshot(scratch);
+    this.lastCulled = 0;
+    const p = { records, index: 0, scratch, raf: 0 };
+    this.pending = p;
+    const step = () => {
+      if (this.pending !== p) return;
+      const t0 = performance.now();
+      sgl.blit(scratch);
+      while (p.index < p.records.length && performance.now() - t0 < PROGRESSIVE_BUDGET_MS) this.paintOne(p.records[p.index++]);
+      sgl.snapshot(scratch);
+      this.perf.rebuildMs += performance.now() - t0;
+      if (p.index >= p.records.length) { this.finishProgressive(p); this.perf.rebuilds++; }
+      else p.raf = requestAnimationFrame(step);
+    };
+    step();
+  }
+
   private paint(baseTex: WebGLTexture, records: StrokeRecord[]) {
+    const t0 = performance.now();
+    try { this.paintInner(baseTex, records); } finally { this.perf.rebuildMs += performance.now() - t0; this.perf.rebuilds++; }
+  }
+
+  private paintInner(baseTex: WebGLTexture, records: StrokeRecord[]) {
+    this.cancelPaint();
     const sgl = this.sgl!;
     sgl.blit(baseTex);
-    const view = this.visibleWorldBounds();
     this.lastCulled = 0;
-    for (const rec of records) {
-      if (this.cullingEnabled && rec.tool !== 'clear' && !boundsIntersect(recordBounds(rec), view)) { this.lastCulled++; continue; }
-      this.renderRecord(rec);
-    }
+    for (const rec of records) this.paintOne(rec);
     sgl.snapshot(sgl.committedTex);
   }
 
@@ -826,20 +914,28 @@ export class Studio {
   }
 
   /** Rebuilds the committed image for the current stroke list from the newest usable checkpoint. */
-  private rebuild() {
+  private rebuild(progressive = false) {
     const n = this.strokes.length;
     this.truncateCheckpoints(n);
+    this.undoSnaps = this.undoSnaps.filter((s) => s.count < n || (this.releaseTexture(s.tex), false));
     const cp = this.checkpoints[this.checkpoints.length - 1];
-    if (cp) this.paint(cp.tex, this.strokes.slice(cp.count));
-    else this.paint(this.sgl!.paperTex, this.strokes);
+    const base = cp ? cp.tex : this.sgl!.paperTex;
+    const records = cp ? this.strokes.slice(cp.count) : this.strokes;
+    if (progressive && records.length > PROGRESSIVE_MIN_STROKES) this.paintProgressive(base, records);
+    else this.paint(base, records);
   }
 
   /** Appends a record whose pixels are already in the framebuffer. */
   private pushRecord(rec: StrokeRecord, clearRedo = true) {
     const sgl = this.sgl!;
+    // The old committed texture *is* the state before this stroke: keep the handle
+    // for an instant undo instead of copying anything.
+    this.undoSnaps.push({ count: this.strokes.length, tex: sgl.committedTex });
+    while (this.undoSnaps.length > MAX_STEP_SNAPS) this.releaseTexture(this.undoSnaps.shift()!.tex);
+    sgl.committedTex = this.takeTexture();
     sgl.snapshot(sgl.committedTex);
     this.strokes.push(rec);
-    if (clearRedo) this.redoStack = [];
+    if (clearRedo) { this.redoStack = []; this.dropSnaps(this.redoSnaps); }
     const n = this.strokes.length;
     if (n % CHECKPOINT_EVERY === 0) {
       const tex = sgl.createTexture();
@@ -851,6 +947,7 @@ export class Studio {
   }
 
   private commitRecord(rec: StrokeRecord, clearRedo = true) {
+    this.flushPaint();
     this.sgl!.blit(this.sgl!.committedTex);
     this.renderRecord(rec);
     this.pushRecord(rec, clearRedo);
@@ -860,8 +957,21 @@ export class Studio {
     if (this.live) this.cancelStroke();
     if (this.state.practice) { this.practiceBack(); return; }
     if (!this.strokes.length) { this.toast('Nothing to undo'); return; }
+    this.flushPaint();
     this.redoStack.push(this.strokes.pop()!);
-    this.rebuild();
+    const n = this.strokes.length, sgl = this.sgl!;
+    const snap = this.undoSnaps.length && this.undoSnaps[this.undoSnaps.length - 1].count === n ? this.undoSnaps.pop()! : null;
+    if (snap) {
+      // Instant: the state before the stroke is a texture we still hold; the current
+      // one becomes the redo state.
+      this.redoSnaps.push({ count: n + 1, tex: sgl.committedTex });
+      while (this.redoSnaps.length > MAX_STEP_SNAPS) this.releaseTexture(this.redoSnaps.shift()!.tex);
+      sgl.committedTex = snap.tex;
+      sgl.blit(sgl.committedTex);
+      this.truncateCheckpoints(n);
+    } else {
+      this.rebuild();
+    }
     this.syncHistory();
   };
 
@@ -869,6 +979,18 @@ export class Studio {
     if (this.state.practice) return;
     const rec = this.redoStack.pop();
     if (!rec) return;
+    const n = this.strokes.length, sgl = this.sgl!;
+    const snap = this.redoSnaps.length && this.redoSnaps[this.redoSnaps.length - 1].count === n + 1 ? this.redoSnaps.pop()! : null;
+    if (snap) {
+      this.flushPaint();
+      this.undoSnaps.push({ count: n, tex: sgl.committedTex });
+      while (this.undoSnaps.length > MAX_STEP_SNAPS) this.releaseTexture(this.undoSnaps.shift()!.tex);
+      sgl.committedTex = snap.tex;
+      sgl.blit(sgl.committedTex);
+      this.strokes.push(rec);
+      this.syncHistory();
+      return;
+    }
     this.commitRecord(rec, false);
   };
 
@@ -943,7 +1065,9 @@ export class Studio {
   private repaintPaper() {
     this.renderPaper();
     this.truncateCheckpoints(-1);
-    this.rebuild();
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.rebuild(true);
   }
 
   private resize(force = false) {
@@ -1180,6 +1304,7 @@ export class Studio {
     }
     if (e.pointerType === 'mouse' && e.button !== 0) return;
 
+    this.flushPaint();
     e.preventDefault(); // also suppresses the focus change, so commit any focused editor by hand
     (document.activeElement as HTMLElement | null)?.blur?.();
     try { this.canvas!.setPointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -1188,7 +1313,8 @@ export class Studio {
     const first = this.pointFromEvent(e, rect);
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, condLen: 0, stampedLen: 0, chunk: 0 };
+    if (rec.tool === 'brush') rec.zoom = this.view.zoom;
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -1279,6 +1405,11 @@ export class Studio {
    * stands in for the envelope until the exact render on lift.
    */
   private renderPreview() {
+    const t0 = performance.now();
+    try { this.renderPreviewInner(); } finally { this.perf.previewMs += performance.now() - t0; this.perf.previewFrames++; }
+  }
+
+  private renderPreviewInner() {
     this.previewQueued = false;
     const live = this.live;
     if (!live) return;
@@ -1294,6 +1425,7 @@ export class Studio {
     // the newest raw point may still move (pen samples merge into it), so chunks
     // stop one point short of it. A tap is stamped on lift.
     if (rec.points.length < CHUNK_MIN_RAW) return;
+    if (live.chunk > 0 && performance.now() - live.lastChunkAt < MIN_CHUNK_INTERVAL_MS) { this.schedulePreview(); return; }
     this.stampNextChunk(live, rec.points.length - 1, false);
   }
 
@@ -1311,15 +1443,50 @@ export class Studio {
     if (!final && len < rec.spec.spacing * 3) return false;
     const sgl = this.sgl!;
     this.liveTex ??= sgl.createTexture();
-    // Bring the stroke's current state into this frame's drawing buffer (see liveTex).
-    sgl.blit(live.chunk === 0 ? sgl.committedTex : this.liveTex);
-    this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
-    sgl.snapshot(this.liveTex);
+    const t0 = performance.now();
+    if (live.chunk === 0) {
+      // First chunk: whole canvas, once per stroke (also gives liveTex its full-size storage).
+      sgl.blit(sgl.committedTex);
+      this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
+      sgl.snapshot(this.liveTex);
+    } else {
+      // Later chunks: only the region the chunk can touch (see liveTex), so the
+      // per-frame cost no longer scales with the canvas.
+      const r = this.chunkRegion(rec, g.pts);
+      const a = performance.now();
+      sgl.blitRegion(this.liveTex, r.x, r.y, r.w, r.h);
+      const b = performance.now();
+      this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
+      const c = performance.now();
+      sgl.snapshotRegion(this.liveTex, r.x, r.y, r.w, r.h);
+      const d = performance.now();
+      this.perf.restoreMs += b - a; this.perf.stampMs += c - b; this.perf.snapMs += d - c;
+    }
+    live.lastChunkAt = performance.now();
+    this.perf.chunkMs += performance.now() - t0; this.perf.chunks++;
     (rec.chunks ??= []).push(upto);
     live.condLen = g.condLen;
     live.stampedLen += len;
     live.chunk++;
     return true;
+  }
+
+  /**
+   * Device-pixel rectangle a chunk's stamps and the engine's composite of them can
+   * reach: the chunk's points padded by the full tip footprint, scatter and the
+   * engine's own dirty-rect padding. Must cover the engine's readback region.
+   */
+  private chunkRegion(rec: BrushRecord, pts: Point[]) {
+    const v = this.committedView, dpr = this.dpr;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of pts) {
+      const sx = p.x * v.zoom + v.x, sy = p.y * v.zoom + v.y;
+      if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
+      if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
+    }
+    const maxP = Math.max(1, rec.spec.pressure.min_max[0], rec.spec.pressure.min_max[1]);
+    const pad = (rec.spec.weight * rec.size * maxP * 1.5 + rec.spec.scatter * rec.size * 3 + 12) * v.zoom + 8;
+    return { x: (minX - pad) * dpr, y: (minY - pad) * dpr, w: (maxX - minX + 2 * pad) * dpr, h: (maxY - minY + 2 * pad) * dpr };
   }
 
   /** One chunk of a hand-drawn stroke: seeded per chunk, per-stroke effects off, envelope folded into the plot. */
@@ -1329,10 +1496,21 @@ export class Studio {
     return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
   }
 
-  /** Replays a hand-drawn stroke exactly as it was stamped live. */
+  /**
+   * Replays a hand-drawn stroke. At the zoom it was drawn at, the same chunks
+   * with the same seeds: pixel-identical to what was on screen at lift. At any
+   * other zoom the picture is necessarily different (stamps are rescaled), so
+   * the stroke is stamped as one chunk-style pass instead, which costs one
+   * engine render rather than one per chunk and keeps zoomed rebuilds fast.
+   */
   private renderChunked(rec: BrushRecord): number {
     let condLen = 0, s0 = 0, stamps = 0;
     const chunks = rec.chunks!;
+    const drawnZoom = rec.zoom ?? 1;
+    if (chunks.length > 1 && Math.abs(drawnZoom - this.committedView.zoom) > 1e-9) {
+      const g = chunkPoints(rec, rec.points.length, 0, true);
+      return g ? this.stampChunk(rec, g.pts, 0, 0) : 0;
+    }
     chunks.forEach((upto, i) => {
       const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
       if (!g) return;
@@ -1394,6 +1572,7 @@ export class Studio {
   exportPNG = async () => {
     const sgl = this.sgl, canvas = this.canvas;
     if (!sgl || !canvas) return;
+    this.flushPaint();
     sgl.blit(sgl.committedTex); // a stale preview could be up
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
     if (!blob) { this.toast('Export failed'); return; }
@@ -1573,9 +1752,11 @@ export class Studio {
       setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),
       setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
       applyTemplate: (id: string) => this.applyTemplate(id), templates: BRUSH_TEMPLATES.map((t) => t.id),
-      rebuildAll: () => this.repaintPaper(), saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
+      rebuildAll: () => { this.repaintPaper(); this.flushPaint(); }, flushPaint: () => this.flushPaint(), isPainting: () => this.pending !== null, saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
       setCulling: (on: boolean) => { this.cullingEnabled = on; },
       lastCulled: () => this.lastCulled,
+      perf: () => ({ ...this.perf }),
+      resetPerf: () => { for (const k of Object.keys(this.perf) as Array<keyof typeof this.perf>) this.perf[k] = 0; },
       conditioned: (rec: BrushRecord) => conditionPoints(rec),
       practice: {
         start: (id: string) => this.startPractice(id), exit: (keep?: boolean) => this.exitPractice(keep),

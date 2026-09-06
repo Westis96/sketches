@@ -50,6 +50,8 @@ export interface BrushRecord {
    * every later render shows. Absent on programmatic strokes, rendered in one go.
    */
   chunks?: number[];
+  /** View zoom the chunks were stamped at. Replays at that zoom repeat the chunks exactly; at any other zoom the stroke is one pass. */
+  zoom?: number;
 }
 
 export interface EraserRecord {
@@ -75,7 +77,7 @@ export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
 export const SAVE_VERSION = 1;
 
 type SavedRecord =
-  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[] }
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number }
   | { t: 'e'; size: number; pts: number[] }
   | { t: 'c' };
 
@@ -93,6 +95,7 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
     const saved: SavedRecord = { t: 'b', spec: r.spec, tip: r.tipSource, size: r.size, color: r.color, pm: r.pressureMode, sens: r.sensitivity, seed: r.seed, pts: packPoints(r.points) };
     if (r.input) saved.in = r.input;
     if (r.chunks) saved.ch = r.chunks;
+    if (r.zoom !== undefined) saved.z = r.zoom;
     return saved;
   });
 }
@@ -110,6 +113,7 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
       const rec: BrushRecord = { tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points };
       if (r.in === 'pen' || r.in === 'touch' || r.in === 'mouse') rec.input = r.in;
       if (Array.isArray(r.ch) && r.ch.every((n) => Number.isInteger(n) && n > 0 && n <= points.length)) rec.chunks = r.ch;
+      if (typeof r.z === 'number' && r.z > 0) rec.zoom = r.z;
       out.push(rec);
     }
   }

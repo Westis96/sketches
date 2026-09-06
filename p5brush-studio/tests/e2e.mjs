@@ -99,6 +99,8 @@ try {
   // The pixels on screen at lift are the committed pixels: a full rebuild changes nothing.
   await studio((s) => s.rebuildAll());
   check('rebuilding a hand-drawn stroke reproduces the lifted pixels', (await checksum()).h === drawn.h);
+  const drawnZoom = await studio((s) => s.history()[s.history().length - 1].zoom);
+  check('a hand-drawn stroke remembers the zoom it was drawn at', drawnZoom === 1);
 
   // Clear is undoable.
   await studio((s) => s.clear());
@@ -162,6 +164,16 @@ try {
   await studio((s) => s.undo()); // leave the earlier strokes in place for the checks below
 
   check('zoom in then out re-renders identically', backToOne.h === atOne.h);
+
+  // Large rebuilds are spread over frames and end up identical to a synchronous one.
+  for (let i = 0; i < 16; i++) await studio((s, i) => s.commit([{ x: 120 + i * 40, y: 620, p: 0.5 }, { x: 140 + i * 40, y: 650, p: 0.6 }], { seed: 300 + i }), i);
+  const spread = await studio((s) => { s.zoomBy(1.1); return s.isPainting(); });
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 30000 });
+  const progressive = await checksum();
+  await studio((s) => s.rebuildAll());
+  check('large rebuilds are spread over frames and match a synchronous rebuild', spread === true && (await checksum()).h === progressive.h);
+  await studio((s) => { s.zoomBy(1 / 1.1); s.flushPaint(); });
+  for (let i = 0; i < 16; i++) await studio((s) => s.undo());
   await studio((s) => s.zoomToFit());
   check('zoom to fit changes the view', (await studio((s) => s.view().zoom)) !== 1 || (await studio((s) => s.view().x)) !== 0);
   await studio((s) => s.resetView());

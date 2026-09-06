@@ -34,7 +34,8 @@ export interface Dab { x: number; y: number; r: number }
 export class StudioGL {
   readonly gl: WebGL2RenderingContext;
   readonly paperTex: WebGLTexture;
-  readonly committedTex: WebGLTexture;
+  /** Mutable: undo/redo rotate texture handles instead of copying pixels. */
+  committedTex: WebGLTexture;
   private w = 1;
   private h = 1;
   private readonly blitProg: WebGLProgram;
@@ -147,6 +148,35 @@ export class StudioGL {
     gl.uniform2f(this.u.blitRes, this.w, this.h);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     this.end();
+  }
+
+  /** Draws only a device-pixel region of `tex` (y from top), 1:1; clamped to the canvas. */
+  blitRegion(tex: WebGLTexture, x: number, y: number, w: number, h: number) {
+    const r = this.clampRegion(x, y, w, h);
+    if (!r) return;
+    const gl = this.gl;
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(r.x, this.h - r.y - r.h, r.w, r.h);
+    this.blit(tex);
+    gl.disable(gl.SCISSOR_TEST);
+  }
+
+  /** Copies a device-pixel region (y from top) of the canvas into `tex`, which must already hold a full-size image. */
+  snapshotRegion(tex: WebGLTexture, x: number, y: number, w: number, h: number) {
+    const r = this.clampRegion(x, y, w, h);
+    if (!r) return;
+    const gl = this.gl;
+    this.begin();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    const gy = this.h - r.y - r.h;
+    gl.copyTexSubImage2D(gl.TEXTURE_2D, 0, r.x, gy, r.x, gy, r.w, r.h);
+    this.end();
+  }
+
+  private clampRegion(x: number, y: number, w: number, h: number) {
+    const x0 = Math.max(0, Math.floor(x)), y0 = Math.max(0, Math.floor(y));
+    const x1 = Math.min(this.w, Math.ceil(x + w)), y1 = Math.min(this.h, Math.ceil(y + h));
+    return x1 > x0 && y1 > y0 ? { x: x0, y: y0, w: x1 - x0, h: y1 - y0 } : null;
   }
 
   /** Fills the canvas with a flat colour (0..255 components). */
