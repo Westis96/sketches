@@ -152,6 +152,7 @@ export const fmt = (n: number) => (Number.isInteger(n) ? String(n) : String(+n.t
  * stamping step (segLen is a multiple of spacing), avoiding integration drift.
  */
 export function resamplePath(points: Point[], segLen: number): Point[] {
+  points = smoothPath(points);
   const out: Point[] = [{ x: points[0].x, y: points[0].y, p: points[0].p }];
   let carry = 0;
   for (let i = 1; i < points.length; i++) {
@@ -172,6 +173,41 @@ export function resamplePath(points: Point[], segLen: number): Point[] {
   if (Math.hypot(last.x - tail.x, last.y - tail.y) > segLen * 0.35) out.push({ x: last.x, y: last.y, p: last.p });
   // A tap still needs a plot with length: make it a tiny dash.
   if (out.length < 2) out.push({ x: out[0].x + segLen, y: out[0].y, p: out[0].p });
+  return out;
+}
+
+/**
+ * Replaces the straight segments between input points by a centripetal
+ * Catmull-Rom curve through them (four samples per segment). A tip swept along
+ * straight segments shows a facet at every direction change, which a chisel or
+ * any wide tip makes visible as a stepped edge; the curve turns gradually.
+ * Endpoints are clamped, so the curve still passes through every input point.
+ */
+export function smoothPath(points: Point[]): Point[] {
+  if (points.length < 3) return points;
+  const out: Point[] = [points[0]];
+  const SUB = 4;
+  for (let i = 0; i < points.length - 1; i++) {
+    const p0 = points[Math.max(0, i - 1)], p1 = points[i], p2 = points[i + 1], p3 = points[Math.min(points.length - 1, i + 2)];
+    // centripetal parameterisation (alpha = 0.5): no cusps or overshoot on uneven spacing
+    // (coincident points get a tiny non-zero interval so the divisions stay finite)
+    const t0 = 0;
+    const t1 = t0 + (Math.sqrt(Math.hypot(p1.x - p0.x, p1.y - p0.y)) || 1e-4);
+    const t2 = t1 + (Math.sqrt(Math.hypot(p2.x - p1.x, p2.y - p1.y)) || 1e-4);
+    const t3 = t2 + (Math.sqrt(Math.hypot(p3.x - p2.x, p3.y - p2.y)) || 1e-4);
+    for (let k = 1; k <= SUB; k++) {
+      const t = t1 + ((t2 - t1) * k) / SUB;
+      const c = (a: Point, b: Point, ta: number, tb: number, key: 'x' | 'y') => ((tb - t) * a[key] + (t - ta) * b[key]) / (tb - ta);
+      const a1x = c(p0, p1, t0, t1, 'x'), a1y = c(p0, p1, t0, t1, 'y');
+      const a2x = c(p1, p2, t1, t2, 'x'), a2y = c(p1, p2, t1, t2, 'y');
+      const a3x = c(p2, p3, t2, t3, 'x'), a3y = c(p2, p3, t2, t3, 'y');
+      const b1x = ((t2 - t) * a1x + (t - t0) * a2x) / (t2 - t0), b1y = ((t2 - t) * a1y + (t - t0) * a2y) / (t2 - t0);
+      const b2x = ((t3 - t) * a2x + (t - t1) * a3x) / (t3 - t1), b2y = ((t3 - t) * a2y + (t - t1) * a3y) / (t3 - t1);
+      const x = ((t2 - t) * b1x + (t - t1) * b2x) / (t2 - t1), y = ((t2 - t) * b1y + (t - t1) * b2y) / (t2 - t1);
+      const u = k / SUB;
+      out.push({ x: k === SUB ? p2.x : x, y: k === SUB ? p2.y : y, p: p1.p + (p2.p - p1.p) * u });
+    }
+  }
   return out;
 }
 
@@ -211,7 +247,25 @@ export const strokeWidthFor = (rec: BrushRecord) => clamp(rec.spec.weight * rec.
  *    p5.brush's own pressure envelope already shapes the start of a stroke.
  * Records without an `input` field predate this and are returned untouched.
  */
-export function conditionPoints(rec: BrushRecord): Point[] {
+export function conditionPoints(rec: BrushRecord, final = false): Point[] {
+  const out = conditionPressure(rec);
+  if (!rec.input || out.length < 3) return out;
+  // Causal position smoothing (prefix-stable, so chunk replays match): each point
+  // moves part of the way from the previous smoothed point toward its sample,
+  // which takes the sub-pixel jitter out of the path at the cost of a short lag.
+  // On lift the last point is the raw sample, so the stroke ends under the pen.
+  const smoothed: Point[] = [out[0]];
+  let sx = out[0].x, sy = out[0].y;
+  for (let i = 1; i < out.length; i++) {
+    sx += (out[i].x - sx) * STREAMLINE;
+    sy += (out[i].y - sy) * STREAMLINE;
+    smoothed.push({ x: Math.round(sx * 100) / 100, y: Math.round(sy * 100) / 100, p: out[i].p });
+  }
+  if (final) smoothed[smoothed.length - 1] = { ...out[out.length - 1] };
+  return smoothed;
+}
+
+function conditionPressure(rec: BrushRecord): Point[] {
   const raw = rec.points;
   if (!rec.input || raw.length < 2) return raw;
   const size = strokeWidthFor(rec);
@@ -273,6 +327,9 @@ export function conditionPoints(rec: BrushRecord): Point[] {
 // ---------------------------------------------------------------------------
 // Live chunks: strokes drawn by hand are stamped piece by piece as they arrive
 // ---------------------------------------------------------------------------
+/** Position streamline: how far each conditioned point moves toward the raw sample (tldraw's default). */
+const STREAMLINE = 0.575;
+
 /** Raw samples needed before the first chunk: conditioning's early decisions are final by then. */
 export const CHUNK_MIN_RAW = 6;
 
@@ -285,7 +342,7 @@ export const CHUNK_MIN_RAW = 6;
 export function chunkPoints(rec: BrushRecord, upto: number, prevCondLen: number, final = false): { pts: Point[]; condLen: number } | null {
   const prefix = rec.points.slice(0, upto);
   if (prefix.length === 0) return null;
-  const cond = conditionPoints({ ...rec, points: prefix });
+  const cond = conditionPoints({ ...rec, points: prefix }, final);
   const start = prevCondLen === 0 ? 0 : prevCondLen - 1;
   const pts = cond.slice(start);
   if (pts.length < (final ? 1 : 2)) return null;
@@ -325,7 +382,11 @@ export function strokeSegments(rec: BrushRecord): StrokeGeometry {
     const dx = pts[i].x - pts[i - 1].x, dy = pts[i].y - pts[i - 1].y;
     const len = Math.hypot(dx, dy);
     if (len < 1e-6) continue;
-    a = ((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360;
+    // Quantised to a thousandth of a degree, with 360 folded to 0: floating noise
+    // on a flat run otherwise flickers between 0 and 359.999…, and the engine
+    // drops a plot whose angles straddle the seam like that.
+    a = Math.round((((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360) * 1000) / 1000;
+    if (a >= 360) a = 0;
     segs.push({ a, len, p: pf(pts[i - 1]) });
     stamps += len / rec.spec.spacing;
   }

@@ -1913,6 +1913,7 @@ export class Studio {
       diagnostics: () => this.diagnostics(),
       resetPerf: () => { for (const k of Object.keys(this.perf) as Array<keyof typeof this.perf>) this.perf[k] = 0; },
       conditioned: (rec: BrushRecord) => conditionPoints(rec),
+      segments: (rec: BrushRecord) => strokeSegments(rec),
       practice: {
         start: (id: string) => this.startPractice(id), exit: (keep?: boolean) => this.exitPractice(keep),
         skip: () => this.skipStep(), restart: () => this.restartPractice(), guide: (on: boolean) => this.setPracticeGuide(on),

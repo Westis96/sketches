@@ -62,6 +62,13 @@ function p5brushInfiniteCanvas(): Plugin {
         `if(${box}){${gl2}.enable(${gl2}.SCISSOR_TEST)`;
       out = out.replace(scRe, clipped);
 
+      // Pressure per stamp: the engine re-evaluates stroke pressure only every ten
+      // stamps, so a wide hard-edged tip under changing pressure lays down visible
+      // width steps (stacked plates along a chisel stroke). Re-evaluate every stamp.
+      const pcRe = /(\w+)\.pressureCount>=10\|\|void 0===\1\.cachedPressure/;
+      if (!pcRe.test(out)) throw new Error('p5brush-infinite-canvas: pressure cache not found; check the p5.brush version');
+      out = out.replace(pcRe, '$1.pressureCount>=1||void 0===$1.cachedPressure');
+
       return { code: out, map: null };
     },
   };
