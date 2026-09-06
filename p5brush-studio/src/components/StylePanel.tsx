@@ -15,6 +15,7 @@ import { paperPresets } from '@/engine/Studio';
 import { fmt, type PaperName, type PressureMode } from '@/engine/records';
 import { setTipDegrees, tipUsesDegrees } from '@/engine/tipShim';
 import { BRUSH_TEMPLATES, matchTemplate } from '@/engine/templates';
+import { PencilTab } from '@/components/PencilTab';
 import { cn } from '@/lib/utils';
 
 const swatches = [
@@ -87,7 +88,7 @@ function NumberField({ label, value, onCommit }: { label: string; value: number;
   );
 }
 
-type Tab = 'style' | 'brush' | 'code';
+type Tab = 'style' | 'brush' | 'pencil' | 'code';
 const TAB_KEY = 'p5brush-studio:tab';
 
 export function StylePanel({ open }: { open: boolean }) {
@@ -98,7 +99,7 @@ export function StylePanel({ open }: { open: boolean }) {
   const { spec } = s;
   const activeTemplate = matchTemplate(spec, s.tipSource);
   const [tab, setTab] = useState<Tab>(() => {
-    try { const t = localStorage.getItem(TAB_KEY); return t === 'brush' || t === 'code' ? t : 'style'; } catch { return 'style'; }
+    try { const t = localStorage.getItem(TAB_KEY); return t === 'brush' || t === 'code' || t === 'pencil' ? t : 'style'; } catch { return 'style'; }
   });
   const selectTab = (t: string) => { setTab(t as Tab); try { localStorage.setItem(TAB_KEY, t); } catch { /* ignore */ } };
 
@@ -132,8 +133,8 @@ export function StylePanel({ open }: { open: boolean }) {
       )}
     >
       <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-col">
-        <TabsList className="m-1.5 mb-0 grid h-8 grid-cols-3 rounded-[9px] bg-[var(--tl-low)] p-0.5">
-          {(['style', 'brush', 'code'] as const).map((t) => (
+        <TabsList className="m-1.5 mb-0 grid h-8 grid-cols-4 rounded-[9px] bg-[var(--tl-low)] p-0.5">
+          {(['style', 'brush', 'pencil', 'code'] as const).map((t) => (
             <TabsTrigger key={t} value={t} className="h-7 rounded-[7px] text-[11.5px] font-medium capitalize text-[var(--tl-text-2)] data-[state=active]:text-[var(--tl-text-1)] data-[state=active]:shadow-[var(--tl-shadow-sm)]">
               {t}
             </TabsTrigger>
@@ -295,6 +296,23 @@ export function StylePanel({ open }: { open: boolean }) {
               </div>
             </div>
 
+            <Section label="pencil">
+              <div className="grid grid-cols-2 items-end gap-2">
+                <div>
+                  <div className="mb-1 text-[11px] text-[var(--tl-text-3)]">tip follows</div>
+                  <ToggleGroup type="single" value={s.pencil.nib} aria-label="Tip follows" onValueChange={(v) => v && studio.setPencil({ nib: v as 'stroke' | 'azimuth' })} className="grid grid-cols-2 gap-0.5">
+                    <ToggleGroupItem value="stroke" className="tl-opt h-8 rounded-[7px] text-[11px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)]">Stroke</ToggleGroupItem>
+                    <ToggleGroupItem value="azimuth" className="tl-opt h-8 rounded-[7px] text-[11px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)]">Lean</ToggleGroupItem>
+                  </ToggleGroup>
+                </div>
+                <div className="flex h-8 items-center justify-between text-[11.5px] text-[var(--tl-text-2)]">
+                  <span>barrel roll</span>
+                  <Switch checked={s.pencil.roll} onCheckedChange={(v) => studio.setPencil({ roll: v })} aria-label="Barrel roll" className="data-[state=checked]:bg-[var(--tl-selected)]" />
+                </div>
+              </div>
+              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--tl-text-3)]">"Lean" turns the tip with the pencil's azimuth like a broad nib (flat tips only); roll adds the Pencil Pro barrel twist. Set by the brush choice.</p>
+            </Section>
+
             <Section label='pressure · mode: "gaussian"'>
               <div className="grid grid-cols-4 gap-1.5">
                 <NumberField label="curve[0]" value={spec.pressure.curve[0]} onCommit={(v) => studio.setPressure({ curve: [v, spec.pressure.curve[1]] })} />
@@ -334,6 +352,11 @@ export function StylePanel({ open }: { open: boolean }) {
             </Section>
 
             <button type="button" className="text-[11px] font-medium text-[var(--tl-selected)] hover:underline" onClick={() => studio.resetDefaults()}>Reset to myBrush defaults</button>
+          </TabsContent>
+
+          {/* ----------------------------------------------------------- Pencil */}
+          <TabsContent value="pencil" className="m-0 p-3">
+            <PencilTab onBrushTab={() => selectTab('brush')} />
           </TabsContent>
 
           {/* ------------------------------------------------------------- Code */}

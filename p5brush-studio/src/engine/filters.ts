@@ -34,21 +34,33 @@ export interface FilterSettings extends FilterParams {
 /** A settings change: any channel may be given partially. */
 export type FilterPatch = { [K in keyof FilterParams]?: Partial<FilterParams[K]> } & { showRaw?: boolean };
 
-/** Reproduces the pre-filter behaviour: streamline 0.575 on position, a half-weight running average on pen pressure. */
-export const DEFAULT_FILTERS: FilterSettings = {
+/**
+ * What a stroke without stored parameters means: the pre-filter behaviour
+ * (streamline 0.575 on position, a half-weight running average on pen pressure).
+ */
+export const LEGACY_FILTERS: FilterSettings = {
   position: { mode: 'streamline', q: 0.02, r: 4, streamline: 0.575 },
   pressure: { mode: 'average', q: 0.0005, r: 0.01 },
-  tilt: { mode: 'off', q: 0.5, r: 25 },
-  twist: { mode: 'off', q: 0.5, r: 25 },
+  tilt: { mode: 'off', q: 2, r: 20 },
+  twist: { mode: 'off', q: 2, r: 20 },
+  showRaw: false,
+};
+
+/** The app's defaults: Kalman on every channel ("Balanced" position, "Medium" pressure). */
+export const DEFAULT_FILTERS: FilterSettings = {
+  position: { mode: 'kalman', q: 0.02, r: 4, streamline: 0.575 },
+  pressure: { mode: 'kalman', q: 0.0005, r: 0.01 },
+  tilt: { mode: 'kalman', q: 2, r: 20 },
+  twist: { mode: 'kalman', q: 2, r: 20 },
   showRaw: false,
 };
 
 const sameParams = (a: FilterParams, b: FilterParams) =>
   (['position', 'pressure', 'tilt', 'twist'] as const).every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
 
-/** The parameters a new stroke should store, or undefined when they are the legacy defaults. */
+/** The parameters a new stroke should store, or undefined when they are the legacy ones (absent = legacy). */
 export function activeFilters(s: FilterSettings): FilterParams | undefined {
-  if (sameParams(s, DEFAULT_FILTERS)) return undefined;
+  if (sameParams(s, LEGACY_FILTERS)) return undefined;
   const { position, pressure, tilt, twist } = s;
   return { position: { ...position }, pressure: { ...pressure }, tilt: { ...tilt }, twist: { ...twist } };
 }
@@ -59,7 +71,7 @@ const num = (v: unknown, d: number) => (typeof v === 'number' && Number.isFinite
 export function parseFilters(v: unknown): FilterParams | undefined {
   if (!v || typeof v !== 'object') return undefined;
   const f = v as Partial<Record<keyof FilterParams, Record<string, unknown>>>;
-  const D = DEFAULT_FILTERS;
+  const D = LEGACY_FILTERS;
   const mode = <T extends string>(m: unknown, allowed: readonly T[], d: T): T => (allowed.includes(m as T) ? (m as T) : d);
   return {
     position: { mode: mode(f.position?.mode, ['kalman', 'streamline', 'off'], D.position.mode), q: num(f.position?.q, D.position.q), r: num(f.position?.r, D.position.r), streamline: num(f.position?.streamline, D.position.streamline) },

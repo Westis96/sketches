@@ -31,7 +31,7 @@ export interface PencilSettings extends PencilFx {
 export const DEFAULT_PENCIL: PencilSettings = {
   tiltShade: false, tiltWidth: 2.2, tiltFade: 0.6,
   nib: 'stroke', roll: false,
-  hover: false, predict: false, calib: null,
+  hover: true, predict: true, calib: null,
 };
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));

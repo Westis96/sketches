@@ -47,24 +47,27 @@ sketch export replay the identical stamps and nothing changes when the pen lifts
 chunks of a stroke share one engine mask and are mixed with the image from before the
 stroke, so a chunk boundary leaves no mark in the ink.
 
+### Pencil
+
+The Pencil tab of the style panel holds the input smoothing (Kalman filters on position,
+pressure, tilt and roll, with one-tap presets and the q/r parameters under Advanced), the
+hover footprint, the predicted tail and a pressure calibration. Nib direction ("tip follows
+stroke" or "pencil lean", like a broad nib) and Pencil Pro barrel roll belong to the brush
+and sit in the Brush tab; brush presets bring their own: the calligraphy nib and the flat
+shader turn with the pencil, the ballpoint uses responsive smoothing, the brush pen keeps
+force changes light. Pen samples record altitude, azimuth and twist, and every stroke keeps
+the effects and filter parameters it was drawn with, so replays never depend on the current
+settings. A record without parameters replays with the pre-filter behaviour.
+
+Eleven brush presets ship: chisel marker, fine liner, graphite pencil, watercolor wash,
+calligraphy nib, dry bristle, brush pen, flat shader, ballpoint, charcoal stick and spray
+stipple.
+
 ### Pencil lab
 
-Apple Pencil features beyond pressure live behind switches in the Pencil lab, so they
-can be tried before becoming part of the app: tilt shading (a flat pencil makes a wider,
-lighter mark), an azimuth-locked nib (the tip turns with the pencil's lean, like a broad
-nib), barrel roll (Pencil Pro), a hover footprint, the browser's predicted tail, and a
-pressure calibration. Everything is off by default. Open the lab with `?lab=1` (or `#lab`)
-in the URL, or build it in with `VITE_PENCIL_LAB=1`. Pen samples record altitude, azimuth
-and twist, and every stroke keeps the effects it was drawn with, so replays never depend
-on the current switches.
-
-The lab's second card, Input filters, puts a Kalman filter on every input channel: a
-constant-velocity model per axis for position and random-walk models for pressure,
-altitude, azimuth and twist, each with its process and measurement noise on a log slider
-and a live raw-to-filtered readout. The previous behaviour (streamline on position, a
-running average on pen pressure) stays the default and is selectable per channel, as is
-"off". A stroke stores the parameters it was conditioned with, and a switch draws the raw
-input path over the ink for comparison.
+Experimental features stay behind switches in the Pencil lab: tilt shading (a flat pencil
+makes a wider, lighter mark), the raw-input overlay and the full per-channel filter card.
+Open the lab with `?lab=1` (or `#lab`) in the URL, or build it in with `VITE_PENCIL_LAB=1`.
 
 Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
 pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the

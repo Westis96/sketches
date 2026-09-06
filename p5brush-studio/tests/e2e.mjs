@@ -386,11 +386,18 @@ try {
   // Pen-like points along a screen-space wave (the view may be panned by earlier checks), with tilt fields.
   await page.evaluate(() => { window.__penPts = (alt, az, tw = 0, y = 300) => { const pts = []; for (let i = 0; i <= 60; i++) pts.push({ ...window.__studio.toWorld(300 + i * 8, y + Math.sin(i / 6) * 12), p: 0.5, alt, az, tw }); return pts; }; });
   const penPts = (alt, az, tw = 0) => [alt, az, tw];
-  const labDefaults = await studio((s) => { s.clear(); const p = s.pencil(); const r = s.commit([{ x: 300, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }, { x: 600, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }], { input: 'pen' }); return { off: !p.tiltShade && p.nib === 'stroke' && !p.roll && !p.hover && !p.predict && p.calib === null, fx: r.fx === undefined }; });
-  check('pencil lab features are off by default and leave strokes untouched', labDefaults.off && labDefaults.fx, JSON.stringify(labDefaults));
+  const labDefaults = await studio((s) => { s.clear(); s.applyTemplate('chisel'); const p = s.pencil(); const f = s.filters(); const r = s.commit([{ x: 300, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }, { x: 600, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }], { input: 'pen' }); return { defaults: !p.tiltShade && p.nib === 'stroke' && !p.roll && p.hover && p.predict && p.calib === null && f.position.mode === 'kalman' && f.pressure.mode === 'kalman', fx: r.fx === undefined, filt: r.filt?.position?.mode }; });
+  check('defaults: hover, predicted tail and Kalman smoothing on; tilt shading, nib and roll off', labDefaults.defaults && labDefaults.fx && labDefaults.filt === 'kalman', JSON.stringify(labDefaults));
+
+  // Brushes carry their own pencil behaviour and input tuning.
+  const nibBrush = await studio((s) => { s.applyTemplate('nib'); return { nib: s.pencil().nib, roll: s.pencil().roll, r: s.filters().position.r }; });
+  const linerBrush = await studio((s) => { s.applyTemplate('liner'); return { nib: s.pencil().nib, roll: s.pencil().roll, r: s.filters().position.r }; });
+  check('the calligraphy nib turns with the pencil and rolls; a round brush does not', nibBrush.nib === 'azimuth' && nibBrush.roll && nibBrush.r === 12 && linerBrush.nib === 'stroke' && !linerBrush.roll && linerBrush.r === 4, JSON.stringify({ nibBrush, linerBrush }));
+  const newBrushes = await studio((s) => ['brushpen', 'flat', 'ballpoint', 'charcoal'].map((id) => s.templates.includes(id) && !!s.state.templatePreviews?.[id]));
+  check('the four new brushes exist and rendered previews', newBrushes.every(Boolean), JSON.stringify(newBrushes));
 
   // Tilt shading: the same path drawn with a flat pencil is wider at the same darkness (fade 1), and lighter with a fade.
-  const tiltStroke = async (alt, tiltFade) => { await studio((s) => s.clear()); await studio((s, a, fx) => s.commit(window.__penPts(...a), { input: 'pen', fx, seed: 11, pressureMode: 'stylus' }), penPts(alt, 0), { tiltWidth: 2.5, tiltFade, nib: 'stroke', roll: false }); return coverage(); };
+  const tiltStroke = async (alt, tiltFade) => { await studio((s) => { s.clear(); s.applyTemplate('chisel'); }); await studio((s, a, fx) => s.commit(window.__penPts(...a), { input: 'pen', fx, seed: 11, pressureMode: 'stylus' }), penPts(alt, 0), { tiltWidth: 2.5, tiltFade, nib: 'stroke', roll: false }); return coverage(); };
   const upright = await tiltStroke(90, 1), flat = await tiltStroke(25, 1), faded = await tiltStroke(25, 0.5);
   check('tilt shading: a flat pencil makes a wider mark at the same darkness, lighter with a fade',
     flat.width > upright.width * 1.4 && Math.abs(flat.minRed - upright.minRed) <= 10 && faded.minRed > upright.minRed + 8, JSON.stringify({ upright, flat, faded }));
@@ -438,8 +445,8 @@ try {
   const filt = await studio((s, rec) => {
     const spec = s.history()[0]?.spec ?? { weight: 29, scatter: 0.45, opacity: 6, spacing: 0.4, noise: 1, pressure: { mode: 'gaussian', curve: [0.36, 0.25], min_max: [0.48, 1.06] }, rotate: 'none', markerTip: true, type: 'custom' };
     rec = { ...rec, spec };
-    const d = s.filters();
-    const defaults = { position: d.position, pressure: d.pressure, tilt: d.tilt, twist: d.twist };
+    // what a record without stored parameters means
+    const defaults = { position: { mode: 'streamline', q: 0.02, r: 4, streamline: 0.575 }, pressure: { mode: 'average', q: 0.0005, r: 0.01 }, tilt: { mode: 'off', q: 2, r: 20 }, twist: { mode: 'off', q: 2, r: 20 } };
     const legacy = s.conditioned(rec), withDefaults = s.conditioned({ ...rec, filt: defaults });
     const dev = (pts) => { const ys = pts.map((p) => p.y); const m = ys.reduce((a, b) => a + b, 0) / ys.length; return Math.sqrt(ys.reduce((a, y) => a + (y - m) ** 2, 0) / ys.length); };
     const range = (pts, k) => Math.max(...pts.slice(5).map((p) => p[k])) - Math.min(...pts.slice(5).map((p) => p[k]));
@@ -453,7 +460,7 @@ try {
       offRaw: off.slice(-20).every((p, i) => { const r = rec.points[rec.points.length - 20 + i]; return p.x === r.x && p.y === r.y && p.p === r.p; }),
     };
   }, noisy);
-  check('default filters reproduce the legacy conditioning exactly', filt.same, JSON.stringify(filt));
+  check('legacy filter parameters reproduce the pre-filter conditioning exactly', filt.same, JSON.stringify(filt));
   check('kalman filters smooth position, pressure and tilt; "off" passes the raw samples', filt.kalDev < filt.rawDev * 0.5 && filt.kalP < filt.rawP * 0.5 && filt.kalAlt < filt.rawAlt * 0.5 && filt.kalAz < filt.rawAz * 0.5 && filt.offRaw, JSON.stringify(filt));
 
   // Changed filter settings are stored on the stroke and replay identically.
@@ -466,22 +473,32 @@ try {
   check('a stroke keeps the filter parameters it was drawn with and rebuilds identically', filtRec.mode === 'kalman' && filtRec.pm === 'kalman' && (await checksum()).h === filtDrawn.h, JSON.stringify(filtRec));
   await studio((s) => s.setFilters({ position: { mode: 'streamline' }, pressure: { mode: 'average' } }));
 
+  // The Pencil tab of the style panel: presets switch the filters.
+  await page.locator('button[role=tab]:has-text("pencil")').click();
+  await page.locator('[data-testid=pencil-tab] button:has-text("Smooth")').first().click();
+  const smoothPos = await studio((s) => s.filters().position);
+  check('the Pencil tab presets set the position filter', smoothPos.mode === 'kalman' && smoothPos.q === 0.005 && smoothPos.r === 12, JSON.stringify(smoothPos));
+  await page.locator('button[role=tab]:has-text("style")').click();
+
   // The lab panel opens with a lab flag in the URL; the hover footprint follows a hovering pen.
   await page.goto(base + '?lab=1', { waitUntil: 'load' });
   await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
   const labShown = (await page.locator('[data-testid=pencil-lab]').count()) === 1;
   const labHeader = page.locator('[data-testid=pencil-lab] button[aria-expanded]');
   if ((await labHeader.getAttribute('aria-expanded')) === 'false') await labHeader.click();
+  const hoverBefore = await studio((s) => s.pencil().hover);
   await page.locator('[data-testid=pencil-lab] [aria-label="Hover footprint"]').click();
+  const hoverToggled = (await studio((s) => s.pencil().hover)) === !hoverBefore;
+  // the footprint shows the nib: hover on with an azimuth nib
+  await studio((s) => s.setPencil({ hover: true, nib: 'azimuth' }));
   await page.evaluate(() => {
     const c = document.getElementById('ink-canvas');
     c.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'pen', pointerId: 3, bubbles: true, clientX: 500, clientY: 400, pressure: 0, tiltX: 50, tiltY: 10 }));
   });
   await page.waitForTimeout(80);
   const foot = await page.evaluate(() => { const f = document.querySelector('[data-testid=hover-footprint]'); return f ? { opacity: f.style.opacity, w: parseFloat(f.style.width), h: parseFloat(f.style.height), t: f.style.transform } : null; });
-  const hoverOn = await studio((s) => s.pencil().hover);
-  check('?lab shows the pencil lab and the hover footprint follows a tilted pen', labShown && hoverOn && !!foot && foot.opacity === '1' && foot.w > 0 && /rotate\(/.test(foot.t), JSON.stringify({ labShown, hoverOn, foot }));
-  await studio((s) => s.setPencil({ hover: false }));
+  check('?lab shows the pencil lab and the hover footprint follows a tilted pen', labShown && hoverToggled && !!foot && foot.opacity === '1' && foot.w > 0 && /rotate\(/.test(foot.t), JSON.stringify({ labShown, hoverToggled, foot }));
+  await studio((s) => s.setPencil({ hover: true, nib: 'stroke' }));
   await page.locator('[data-testid=input-filters] [aria-label="Position filter"]').getByText('Kalman', { exact: true }).click();
   const posMode = await studio((s) => s.filters().position.mode);
   check('the input filters card switches the position filter', posMode === 'kalman', posMode);

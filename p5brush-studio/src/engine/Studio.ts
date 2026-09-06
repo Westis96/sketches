@@ -48,11 +48,15 @@ export interface Settings {
   pencilOnly: boolean;
   /** Auto-enable pencilOnly the first time an Apple Pencil is seen (off once set by hand). */
   pencilAuto: boolean;
-  /** Pencil lab features (all off by default). */
+  /** Pencil features (nib and roll belong to the brush; hover, predicted tail and calibration to the pen). */
   pencil: PencilSettings;
-  /** Input filters for every pointer channel (defaults reproduce the legacy conditioning). */
+  /** Input filters for every pointer channel. */
   filters: FilterSettings;
+  /** Bumped when the input defaults change, so saved settings from before pick up the new defaults once. */
+  inputVersion: number;
 }
+
+const INPUT_VERSION = 2;
 
 export interface Hud {
   pointerType: string | null;
@@ -154,6 +158,7 @@ const DEFAULT_SETTINGS: Settings = {
   pencilAuto: true,
   pencil: DEFAULT_PENCIL,
   filters: DEFAULT_FILTERS,
+  inputVersion: INPUT_VERSION,
 };
 
 /** One level of nested merge for the filter settings (each channel is its own object). */
@@ -347,7 +352,9 @@ export class Studio {
         ...s,
         spec: { ...clone(DEFAULT_SPEC), ...(s.spec ?? {}) },
         pencil: { ...DEFAULT_PENCIL, ...(s.pencil ?? {}) },
-        filters: mergeFilters(DEFAULT_FILTERS, s.filters),
+        // Settings saved before the input defaults changed start from the new defaults.
+        filters: s.inputVersion === INPUT_VERSION ? mergeFilters(DEFAULT_FILTERS, s.filters) : DEFAULT_FILTERS,
+        inputVersion: INPUT_VERSION,
         tool: 'brush',
       };
       try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
@@ -618,7 +625,13 @@ export class Studio {
   applyTemplate(id: string) {
     const t = BRUSH_TEMPLATES.find((x) => x.id === id);
     if (!t) return;
-    this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush' });
+    // A brush brings its own pencil behaviour and input tuning: nib and roll as the
+    // template says (off otherwise), filters = defaults plus the template's overrides.
+    this.set({
+      spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush',
+      pencil: { ...this.settings.pencil, nib: t.pencil?.nib ?? 'stroke', roll: t.pencil?.roll ?? false },
+      filters: mergeFilters({ ...DEFAULT_FILTERS, showRaw: this.settings.filters.showRaw }, t.filters),
+    });
     this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
     this.toast(`Brush: ${t.name}`, { duration: 1200 });
   }

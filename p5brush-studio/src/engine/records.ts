@@ -4,7 +4,7 @@
  */
 import { checkTip } from './tipShim';
 import { lerpAngle, nibAngle, tiltFactors, type PencilFx } from './pencil';
-import { DEFAULT_FILTERS, Kalman1D, KalmanCV, parseFilters, type FilterParams } from './filters';
+import { LEGACY_FILTERS, Kalman1D, KalmanCV, parseFilters, type FilterParams } from './filters';
 
 export interface GaussianPressure {
   mode: 'gaussian';
@@ -295,7 +295,7 @@ export const strokeWidthFor = (rec: BrushRecord) => clamp(rec.spec.weight * rec.
 export function conditionPoints(rec: BrushRecord, final = false): Point[] {
   const out = conditionPressure(rec);
   if (!rec.input || out.length < 3) return out;
-  const f = (rec.filt ?? DEFAULT_FILTERS).position;
+  const f = (rec.filt ?? LEGACY_FILTERS).position;
   if (f.mode === 'off') return out;
   // Causal position smoothing (prefix-stable, so chunk replays match). Streamline:
   // each point moves part of the way from the previous smoothed point toward its
@@ -356,7 +356,7 @@ function conditionPressure(rec: BrushRecord): Point[] {
   if (pts.length < 2) return pts;
 
   const out: Point[] = new Array(pts.length);
-  const pf = (rec.filt ?? DEFAULT_FILTERS).pressure;
+  const pf = (rec.filt ?? LEGACY_FILTERS).pressure;
   if (!simulate) {
     // Pen: the device pressure is the truth. A pen-down sample often carries no
     // pressure yet, so the first point borrows from the next; after that either a

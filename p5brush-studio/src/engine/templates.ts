@@ -5,6 +5,7 @@
  * stable, and only shim/p5.Graphics methods so the p5 sketch export runs too.
  */
 import { DEFAULT_SPEC, DEFAULT_TIP_SOURCE, type BrushSpec } from './records';
+import type { FilterPatch } from './filters';
 
 export interface BrushTemplate {
   id: string;
@@ -14,6 +15,10 @@ export interface BrushTemplate {
   description: string;
   spec: BrushSpec;
   tipSource: string;
+  /** Pencil behaviour that belongs to the brush: what the tip's rotation follows, and barrel roll. */
+  pencil?: { nib?: 'stroke' | 'azimuth'; roll?: boolean };
+  /** Input filter channels this brush prefers (applied over the defaults when the brush is picked). */
+  filters?: FilterPatch;
 }
 
 export const BRUSH_TEMPLATES: BrushTemplate[] = [
@@ -77,7 +82,7 @@ _m.circle(0, 0, 60);`,
     id: 'nib',
     name: 'Calligraphy nib',
     codeName: 'broadNib',
-    description: 'Fixed-angle broad edge: thick and thin follow direction.',
+    description: "Broad edge that turns with the pencil's lean and roll: thick and thin follow the hand.",
     spec: {
       type: 'custom', weight: 30, scatter: 0.05, opacity: 40, spacing: 0.3, noise: 0.2,
       pressure: { mode: 'gaussian', curve: [0.3, 0.2], min_max: [0.85, 1.05] },
@@ -87,6 +92,8 @@ _m.circle(0, 0, 60);`,
 `_m.rotate(-0.6);
 _m.fill(0);
 _m.rect(-34, -4, 68, 8, 3);`,
+    pencil: { nib: 'azimuth', roll: true },
+    filters: { position: { mode: 'kalman', q: 0.005, r: 12 } },
   },
   {
     id: 'bristle',
@@ -104,6 +111,76 @@ _m.rect(-34, -4, 68, 8, 3);`,
   _m.fill(0, 90 + (i * 53) % 120);
   _m.rect(-40 + (i % 3) * 6, y, 70 - (i % 4) * 10, 2.5 + (i % 2));
 }`,
+  },
+  {
+    id: 'brushpen',
+    name: 'Brush pen',
+    codeName: 'brushPen',
+    description: 'Soft pointed tip with a wide force range: thin hairlines to full-bodied strokes.',
+    spec: {
+      type: 'custom', weight: 18, scatter: 0.1, opacity: 70, spacing: 0.15, noise: 0.1,
+      pressure: { mode: 'gaussian', curve: [0.2, 0.3], min_max: [0.45, 1.3] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource:
+`for (let i = 0; i < 6; i++) {
+  _m.fill(0, 70);
+  _m.circle(0, 0, 64 - i * 9);
+}`,
+    filters: { pressure: { mode: 'kalman', q: 0.002, r: 0.005 } },
+  },
+  {
+    id: 'flat',
+    name: 'Flat shader',
+    codeName: 'flatShader',
+    description: 'Wide flat edge that turns with the pencil: lean for broad fills, roll for thin lines.',
+    spec: {
+      type: 'custom', weight: 36, scatter: 0.08, opacity: 26, spacing: 0.3, noise: 0.3,
+      pressure: { mode: 'gaussian', curve: [0.3, 0.25], min_max: [0.9, 1.05] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource:
+`for (let i = 0; i < 5; i++) {
+  _m.fill(0, 120 + i * 30);
+  _m.rect(-42 + i * 3, -7 + i, 84 - i * 6, 14 - i * 2, 4);
+}`,
+    pencil: { nib: 'azimuth', roll: true },
+    filters: { position: { mode: 'kalman', q: 0.005, r: 12 }, tilt: { mode: 'kalman', q: 1, r: 30 } },
+  },
+  {
+    id: 'ballpoint',
+    name: 'Ballpoint',
+    codeName: 'ballpoint',
+    description: 'Thin, dense and slightly skipping: handwriting and quick sketch lines.',
+    spec: {
+      type: 'custom', weight: 4, scatter: 0.03, opacity: 78, spacing: 0.15, noise: 0.35,
+      pressure: { mode: 'gaussian', curve: [0.25, 0.2], min_max: [0.9, 1.05] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource:
+`_m.fill(0);
+_m.circle(0, 0, 70);
+_m.fill(0, 90);
+_m.circle(0, 0, 90);`,
+    filters: { position: { mode: 'kalman', q: 0.2, r: 2 } },
+  },
+  {
+    id: 'charcoal',
+    name: 'Charcoal stick',
+    codeName: 'charcoalStick',
+    description: 'Broken, grainy edge that follows the stroke: dark masses and soft smudged tone.',
+    spec: {
+      type: 'custom', weight: 40, scatter: 1.2, opacity: 22, spacing: 0.7, noise: 0.9,
+      pressure: { mode: 'gaussian', curve: [0.2, 0.3], min_max: [1.05, 0.8] },
+      rotate: 'natural', markerTip: false,
+    },
+    tipSource:
+`for (let i = 0; i < 14; i++) {
+  const x = -42 + i * 6;
+  _m.fill(0, 60 + (i * 41) % 120);
+  _m.rect(x, -10 + (i % 3) * 3, 5, 14 + (i % 2) * 6, 2);
+}`,
+    filters: { pressure: { mode: 'kalman', q: 0.0001, r: 0.03 } },
   },
   {
     id: 'spray',
