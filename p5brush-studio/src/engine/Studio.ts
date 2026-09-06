@@ -208,16 +208,23 @@ export class Studio {
   private mirrorTex: WebGLTexture | null = null;
   private mirrorReady = false;
 
-  /** Whole-canvas refresh of the mirror; call after any non-engine write to the canvas the engine may read. */
+  /**
+   * Whole-canvas refresh of the mirror; call after any write to the canvas the
+   * engine may read. Always a full copy: partial readbacks of the drawing buffer
+   * (copyTexSubImage2D of a sub-rectangle, like the engine's own blitFramebuffer
+   * of its dirty rect) come back wrong on WebKit, and a mirror that lags one
+   * chunk erases the tail of the previous chunk on every frame, which showed as
+   * dashed and beaded strokes on iPad, worst when drawing fast. A full
+   * copyTexImage2D is the one readback that has always worked there.
+   */
   private refreshMirror() {
     const sgl = this.sgl!;
     this.mirrorTex ??= sgl.createTexture();
     sgl.snapshot(this.mirrorTex);
     this.mirrorReady = true;
   }
-  private refreshMirrorRegion(r: { x: number; y: number; w: number; h: number }) {
-    if (!this.mirrorReady) { this.refreshMirror(); return; }
-    this.sgl!.snapshotRegion(this.mirrorTex!, r.x, r.y, r.w, r.h);
+  private refreshMirrorRegion(_r: { x: number; y: number; w: number; h: number }) {
+    this.refreshMirror();
   }
   /** Engine hook: draws the mirror into the engine's bound source framebuffer instead of a canvas readback. */
   private blitSource = (gl: WebGL2RenderingContext, x0: number, y0: number, x1: number, y1: number): boolean => {
