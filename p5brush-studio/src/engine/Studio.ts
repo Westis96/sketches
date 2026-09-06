@@ -18,7 +18,7 @@ import { DEFAULT_PENCIL, activeFx, calibratePressure, calibrationFrom, eventTilt
 import { DEFAULT_FILTERS, activeFilters, type FilterPatch, type FilterSettings } from './filters';
 import { compileTip, checkTip, tipExtent } from './tipShim';
 import {
-  CHUNK_MIN_RAW, DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, chunkPoints, chunkSpec, clamp, clone, conditionPoints,
+  CHUNK_MIN_RAW, DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, chunkPoints, chunkSpec, chunkStep, clamp, clone, conditionPoints, freshCondState, type CondState,
   deserializeRecords, fmt, liveEnvelope, parseSpecCode, recordBounds, serializeRecords, specCode, strokeSegments, visibleRecords,
   type BrushRecord, type BrushSpec, type EraserRecord, type InputKind, type PaperName, type Point, type PressureMode,
   type Segment, type StrokeRecord, type Tool, mapStylus,
@@ -186,7 +186,8 @@ interface Live {
   lastRecorded: Point;
   /** Keys of the most recent raw samples: WebKit delivers each batch of coalesced pen samples twice. */
   recent: string[];
-  /** Chunked brush stroke: conditioned length reached, path length stamped, chunk count, last chunk time. */
+  /** Chunked brush stroke: conditioning state carried across chunks, conditioned length reached, path length stamped, chunk count, last chunk time. */
+  cond: CondState;
   condLen: number;
   stampedLen: number;
   chunk: number;
@@ -270,7 +271,10 @@ export class Studio {
   private detach: (() => void) | null = null;
   private extentCache = new Map<string, number>();
   /** Rolling cost counters (ms), read through the debug hook. */
-  private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, stampMs: 0, plotMs: 0, compositeMs: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0 };
+  private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, condMs: 0, stampMs: 0, plotMs: 0, compositeMs: 0, overlayMs: 0, overlays: 0, hudEmits: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0, longFrames: 0 };
+  /** Intervals between consecutive preview frames of the stroke in progress (ms), for the diagnostics. */
+  private frameLog: number[] = [];
+  private lastPreviewAt = 0;
   /** The user's drawing while a lesson occupies the canvas. */
   private practiceBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[]; settings: Settings; view: View } | null = null;
   private lessonPreviewsQueued = false;
@@ -351,8 +355,8 @@ export class Studio {
         ...clone(DEFAULT_SETTINGS),
         ...s,
         spec: { ...clone(DEFAULT_SPEC), ...(s.spec ?? {}) },
-        pencil: { ...DEFAULT_PENCIL, ...(s.pencil ?? {}) },
-        // Settings saved before the input defaults changed start from the new defaults.
+        // Settings saved before the input defaults changed start from the new defaults (keeping a calibration).
+        pencil: s.inputVersion === INPUT_VERSION ? { ...DEFAULT_PENCIL, ...(s.pencil ?? {}) } : { ...DEFAULT_PENCIL, calib: s.pencil?.calib ?? null },
         filters: s.inputVersion === INPUT_VERSION ? mergeFilters(DEFAULT_FILTERS, s.filters) : DEFAULT_FILTERS,
         inputVersion: INPUT_VERSION,
         tool: 'brush',
@@ -625,15 +629,22 @@ export class Studio {
   applyTemplate(id: string) {
     const t = BRUSH_TEMPLATES.find((x) => x.id === id);
     if (!t) return;
-    // A brush brings its own pencil behaviour and input tuning: nib and roll as the
-    // template says (off otherwise), filters = defaults plus the template's overrides.
-    this.set({
-      spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush',
-      pencil: { ...this.settings.pencil, nib: t.pencil?.nib ?? 'stroke', roll: t.pencil?.roll ?? false },
-      filters: mergeFilters({ ...DEFAULT_FILTERS, showRaw: this.settings.filters.showRaw }, t.filters),
-    });
+    this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush', ...this.brushInput(t) });
     this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
     this.toast(`Brush: ${t.name}`, { duration: 1200 });
+  }
+
+  /**
+   * The pencil behaviour and input tuning that come with a brush: nib and roll as
+   * the template says (off for anything else), filters = the defaults plus the
+   * template's overrides. Every path that changes the brush applies this, so a
+   * previous brush's azimuth nib never sticks to the next one.
+   */
+  private brushInput(t?: BrushTemplate): Pick<Settings, 'pencil' | 'filters'> {
+    return {
+      pencil: { ...this.settings.pencil, nib: t?.pencil?.nib ?? 'stroke', roll: t?.pencil?.roll ?? false },
+      filters: mergeFilters({ ...DEFAULT_FILTERS, showRaw: this.settings.filters.showRaw }, t?.filters),
+    };
   }
 
   /**
@@ -1551,7 +1562,8 @@ export class Studio {
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
     if (rec.tool === 'brush') rec.zoom = this.view.zoom;
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.frameLog.length = 0; this.lastPreviewAt = 0;
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -1615,6 +1627,8 @@ export class Studio {
 
   // -- Pencil lab: predicted tail, calibration --------------------------------
   private predictCanvas: HTMLCanvasElement | null = null;
+  /** Device-pixel box the overlay last drew into (cleared next time), null when it is empty. */
+  private overlayBox: { x: number; y: number; w: number; h: number } | null = null;
   /** Latest move of the stroke in progress whose overlay has not been drawn yet. */
   private overlayEvent: PointerEvent | null = null;
   private calib: { samples: number[]; until: number } | null = null;
@@ -1631,7 +1645,7 @@ export class Studio {
       this.predictCanvas = pc;
     }
     const pc = this.predictCanvas;
-    if (pc.width !== this.glW || pc.height !== this.glH) { pc.width = this.glW; pc.height = this.glH; }
+    if (pc.width !== this.glW || pc.height !== this.glH) { pc.width = this.glW; pc.height = this.glH; this.overlayBox = null; }
     return pc.getContext('2d');
   }
 
@@ -1645,36 +1659,51 @@ export class Studio {
   private drawLiveOverlay(e: PointerEvent | null, live: Live) {
     const ctx = this.predictCtx();
     if (!ctx) return;
-    ctx.clearRect(0, 0, this.glW, this.glH);
+    this.clearPredicted();
     const rec = live.rec;
     if (rec.tool !== 'brush') return;
     const v = this.view, dpr = this.dpr;
     const toScreen = (pt: Point) => [(pt.x * v.zoom + v.x) * dpr, (pt.y * v.zoom + v.y) * dpr] as const;
+    // Only the box drawn into is cleared next time, and the layer is hidden while empty.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, pad = 2;
+    const grow = (x: number, y: number) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
     if (this.settings.filters.showRaw && rec.points.length > 1) {
       ctx.lineCap = 'round'; ctx.lineJoin = 'round';
       ctx.strokeStyle = '#e0312d'; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1, dpr);
       ctx.beginPath();
-      rec.points.forEach((pt, i) => { const [x, y] = toScreen(pt); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+      rec.points.forEach((pt, i) => { const [x, y] = toScreen(pt); grow(x, y); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
       ctx.stroke();
     }
-    if (!e || !this.settings.pencil.predict || live.pointerType !== 'pen') return;
-    const ev = e as PointerEvent & { getPredictedEvents?: () => PointerEvent[] };
-    const pred = typeof ev.getPredictedEvents === 'function' ? ev.getPredictedEvents() : [];
-    this.queueHud({ predicted: pred.length });
-    if (!pred.length) return;
-    const last = rec.points[rec.points.length - 1];
-    const width = Math.max(2, rec.spec.weight * rec.size * this.state.tipExtent * rec.spec.pressure.min_max[1] * (rec.pressureMode === 'gaussian' ? 1 : mapStylus(last.p, rec.sensitivity))) * v.zoom * dpr;
-    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-    ctx.strokeStyle = rec.color; ctx.globalAlpha = 0.28; ctx.lineWidth = width;
-    ctx.beginPath();
-    ctx.moveTo(...toScreen(last));
-    for (const pe of pred) ctx.lineTo(...toScreen(this.pointFromEvent(pe, live.rect)));
-    ctx.stroke();
+    const ev = e as (PointerEvent & { getPredictedEvents?: () => PointerEvent[] }) | null;
+    if (ev && this.settings.pencil.predict && live.pointerType === 'pen') {
+      const pred = typeof ev.getPredictedEvents === 'function' ? ev.getPredictedEvents() : [];
+      this.queueHud({ predicted: pred.length });
+      if (pred.length) {
+        const last = rec.points[rec.points.length - 1];
+        const width = Math.max(2, rec.spec.weight * rec.size * this.state.tipExtent * rec.spec.pressure.min_max[1] * (rec.pressureMode === 'gaussian' ? 1 : mapStylus(last.p, rec.sensitivity))) * v.zoom * dpr;
+        pad = Math.max(pad, width);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.strokeStyle = rec.color; ctx.globalAlpha = 0.28; ctx.lineWidth = width;
+        ctx.beginPath();
+        const [lx, ly] = toScreen(last); grow(lx, ly);
+        ctx.moveTo(lx, ly);
+        for (const pe of pred) { const [x, y] = toScreen(this.pointFromEvent(pe, live.rect)); grow(x, y); ctx.lineTo(x, y); }
+        ctx.stroke();
+      }
+    }
+    if (minX <= maxX) {
+      this.overlayBox = { x: Math.floor(minX - pad), y: Math.floor(minY - pad), w: Math.ceil(maxX - minX + 2 * pad) + 1, h: Math.ceil(maxY - minY + 2 * pad) + 1 };
+      this.predictCanvas!.hidden = false;
+    }
   }
 
+  /** Clears what the overlay last drew and hides the layer, so an empty overlay costs nothing to composite. */
   private clearPredicted() {
-    const pc = this.predictCanvas;
-    if (pc) pc.getContext('2d')?.clearRect(0, 0, pc.width, pc.height);
+    const pc = this.predictCanvas, b = this.overlayBox;
+    if (!pc) return;
+    if (b) pc.getContext('2d')?.clearRect(b.x, b.y, b.w, b.h);
+    this.overlayBox = null;
+    pc.hidden = true;
   }
 
   /** Pencil lab settings; effects apply to the next stroke, strokes keep the effects they were drawn with. */
@@ -1750,6 +1779,11 @@ export class Studio {
    */
   private renderPreview() {
     const t0 = performance.now();
+    if (this.live && this.lastPreviewAt) {
+      const dt = t0 - this.lastPreviewAt;
+      if (dt < 1000) { this.frameLog.push(dt); if (this.frameLog.length > 900) this.frameLog.shift(); if (dt > 34) this.perf.longFrames++; }
+    }
+    this.lastPreviewAt = t0;
     try { this.renderPreviewInner(); } finally { this.perf.previewMs += performance.now() - t0; this.perf.previewFrames++; }
   }
 
@@ -1757,7 +1791,7 @@ export class Studio {
     this.previewQueued = false;
     const live = this.live;
     if (!live) return;
-    if (this.overlayEvent) { const e = this.overlayEvent; this.overlayEvent = null; this.drawLiveOverlay(e, live); }
+    if (this.overlayEvent) { const e = this.overlayEvent; this.overlayEvent = null; const to = performance.now(); this.drawLiveOverlay(e, live); this.perf.overlayMs += performance.now() - to; this.perf.overlays++; }
     const { rec } = live;
     if (rec.tool === 'eraser') {
       if (rec.points.length > live.erasedUpTo) {
@@ -1782,7 +1816,9 @@ export class Studio {
    */
   private stampNextChunk(live: Live, upto: number, final: boolean): boolean {
     const rec = live.rec as BrushRecord;
-    const g = chunkPoints(rec, upto, live.condLen, final);
+    const tc = performance.now();
+    const g = chunkStep(rec, upto, live.condLen, live.cond, final);
+    this.perf.condMs += performance.now() - tc;
     if (!g) return false;
     const lp = g.pts[g.pts.length - 1];
     this.queueHud({ filtered: { p: lp.p, alt: lp.alt ?? 90, az: lp.az ?? 0, tw: lp.tw ?? 0 } });
@@ -1854,6 +1890,7 @@ export class Studio {
       if (wait > 0) { window.setTimeout(fire, wait); return; }
       this.hudQueued = false;
       this.lastHudAt = performance.now();
+      this.perf.hudEmits++;
       this.emit({ hud: { ...this.state.hud, ...this.pendingHud } });
       this.pendingHud = {};
     };
@@ -1963,7 +2000,7 @@ export class Studio {
   }
 
   resetDefaults() {
-    this.set({ spec: clone(DEFAULT_SPEC), tipSource: DEFAULT_TIP_SOURCE, size: 1 });
+    this.set({ spec: clone(DEFAULT_SPEC), tipSource: DEFAULT_TIP_SOURCE, size: 1, ...this.brushInput(BRUSH_TEMPLATES[0]) });
     this.emit({ tipError: null, tipExtent: this.extentFor(DEFAULT_TIP_SOURCE) });
     this.toast('myBrush defaults restored');
   }
@@ -1971,7 +2008,7 @@ export class Studio {
   /** Applies a pasted brush.add(...) snippet. Throws with a readable message on failure. */
   applySpecCode(text: string): string {
     const parsed = parseSpecCode(text);
-    this.set({ spec: parsed.spec, tipSource: parsed.tipSource });
+    this.set({ spec: parsed.spec, tipSource: parsed.tipSource, ...this.brushInput(matchTemplate(parsed.spec, parsed.tipSource)) });
     this.emit({ tipError: null, tipExtent: this.extentFor(parsed.tipSource) });
     return parsed.name;
   }
@@ -2104,9 +2141,28 @@ export class Studio {
       points: last.points.slice(0, 600), chunkEnds: last.chunks!.slice(0, 600),
     } : null;
     const tests = this.renderSelfTest();
+    const perf = this.perfSummary();
     const summary = `render: paper ${tests.paper} · one-shot ${tests.oneShot} · chunked ${tests.chunked}`
       + (stroke ? ` | last stroke: ${stroke.input} ${stroke.n} pts, ${stroke.chunks} chunks, p ${stroke.p.min}–${stroke.p.max}, ${stroke.pressureMode}` : ' | no hand-drawn stroke');
-    return { env, stroke, tests, summary };
+    return { env, stroke, tests, perf, summary };
+  }
+
+  /** Where the time goes on this device: frame intervals of the last stroke, per-chunk costs, overlay and HUD work. */
+  private perfSummary() {
+    const p = this.perf;
+    const f = [...this.frameLog].sort((a, b) => a - b);
+    const q = (t: number) => (f.length ? +f[Math.min(f.length - 1, Math.floor(f.length * t))].toFixed(1) : 0);
+    const per = (ms: number, n: number) => (n ? +(ms / n).toFixed(2) : 0);
+    return {
+      canvas: { glW: this.glW, glH: this.glH, dpr: this.dpr, strokes: this.strokes.length },
+      lastStrokeFrames: { n: f.length, p50: q(0.5), p95: q(0.95), max: f.length ? +f[f.length - 1].toFixed(1) : 0 },
+      longFrames: p.longFrames,
+      perChunkMs: { total: per(p.chunkMs + p.condMs, p.chunks), conditioning: per(p.condMs, p.chunks), plot: per(p.plotMs, p.chunks), composite: per(p.compositeMs, p.chunks), stamp: per(p.stampMs, p.chunks), chunks: p.chunks },
+      previewFrameMs: per(p.previewMs, p.previewFrames),
+      overlayMs: per(p.overlayMs, p.overlays),
+      hudEmits: p.hudEmits,
+      rebuild: { n: p.rebuilds, avgMs: per(p.rebuildMs, p.rebuilds), strokes: p.paintStrokes },
+    };
   }
 
   /**
@@ -2162,7 +2218,18 @@ export class Studio {
       perf: () => ({ ...this.perf }),
       diagnostics: () => this.diagnostics(),
       resetPerf: () => { for (const k of Object.keys(this.perf) as Array<keyof typeof this.perf>) this.perf[k] = 0; },
-      conditioned: (rec: BrushRecord) => conditionPoints(rec),
+      conditioned: (rec: BrushRecord, final?: boolean) => conditionPoints(rec, final),
+      /** Chunk points via a carried state (live path) and via per-prefix reconditioning (replay path). */
+      chunkBoth: (rec: BrushRecord, uptos: number[]) => {
+        const st = freshCondState();
+        let a = 0, b = 0;
+        return uptos.map((upto, i) => {
+          const final = i === uptos.length - 1;
+          const live = chunkStep(rec, upto, a, st, final), replay = chunkPoints(rec, upto, b, final);
+          if (live) a = live.condLen; if (replay) b = replay.condLen;
+          return { live: live?.pts ?? null, replay: replay?.pts ?? null };
+        });
+      },
       segments: (rec: BrushRecord) => strokeSegments(rec),
       practice: {
         start: (id: string) => this.startPractice(id), exit: (keep?: boolean) => this.exitPractice(keep),

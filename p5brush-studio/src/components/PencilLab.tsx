@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react';
-import { ChevronDown, ChevronUp, FlaskConical, RotateCcw } from 'lucide-react';
+import { ChevronDown, ChevronUp, FlaskConical } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { usePersistedState } from '@/hooks/usePersistedState';
-import { DEFAULT_PENCIL, tiltFlat } from '@/engine/pencil';
+import { allPencilOff, anyPencilOn, tiltFlat } from '@/engine/pencil';
+import { Calibration } from '@/components/PencilTab';
 import { cn } from '@/lib/utils';
 
 /**
@@ -16,27 +16,17 @@ export function PencilLab({ defaultOpen = true }: { defaultOpen?: boolean }) {
   const studio = useStudio();
   const pencil = useStudioState((s) => s.settings.pencil);
   const hud = useStudioState((s) => s.hud);
-  const calibrating = useStudioState((s) => s.calibrating);
-  const calibration = useStudioState((s) => s.calibration);
   const [open, setOpen] = usePersistedState('p5brush-studio:lab:pencil', defaultOpen);
-  // Countdown for the calibration window.
-  const [now, setNow] = useState(() => performance.now());
-  useEffect(() => {
-    if (!calibration) return;
-    const id = window.setInterval(() => setNow(performance.now()), 100);
-    return () => window.clearInterval(id);
-  }, [calibration]);
-  const remaining = calibration ? Math.max(0, (calibration.until - now) / 1000) : 0;
   const isPen = hud.pointerType === 'pen';
   const flat = tiltFlat(hud.altitude);
-  const changed = JSON.stringify(pencil) !== JSON.stringify(DEFAULT_PENCIL);
+  const changed = anyPencilOn(pencil);
 
   return (
     <div className="tl-panel pointer-events-auto w-[min(300px,calc(100vw-16px))] text-[12px]" data-testid="pencil-lab">
       <button type="button" className="flex w-full items-center gap-2 px-3 py-2.5 text-left" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
         <FlaskConical className="h-4 w-4 text-[var(--tl-selected)]" />
         <span className="flex-1 text-[13px] font-semibold text-[var(--tl-text-1)]">Pencil lab</span>
-        {changed && <span className="rounded-full bg-[#e7f5ff] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--tl-selected)]">modified</span>}
+        {changed && <span className="rounded-full bg-[#e7f5ff] px-2 py-0.5 text-[10.5px] font-semibold text-[var(--tl-selected)]">active</span>}
         {open ? <ChevronUp className="h-4 w-4 text-[var(--tl-text-3)]" /> : <ChevronDown className="h-4 w-4 text-[var(--tl-text-3)]" />}
       </button>
       {open && (
@@ -70,35 +60,11 @@ export function PencilLab({ defaultOpen = true }: { defaultOpen?: boolean }) {
 
           <Feature title="Predicted tail" hint="Draws the browser's predicted samples ahead of the ink as a light tail; replaced as the real samples arrive." on={pencil.predict} onChange={(v) => studio.setPencil({ predict: v })} />
 
-          <div>
-            <div className="flex items-center justify-between">
-              <div className="text-[12px] font-medium text-[var(--tl-text-1)]">Pressure calibration</div>
-              {pencil.calib && <button type="button" className="tl-opt h-6 gap-1 px-1.5 text-[10.5px]" onClick={() => studio.setPencil({ calib: null })}><RotateCcw className="h-3 w-3" />Reset</button>}
-            </div>
-            <div className="mt-0.5 text-[11px] leading-snug text-[var(--tl-text-3)]">
-              {pencil.calib
-                ? <>Your range <span className="font-mono">{pencil.calib.min.toFixed(2)}–{pencil.calib.max.toFixed(2)}</span> is mapped to the full pressure curve.</>
-                : 'Maps the force range you actually use to the full pressure curve.'}
-            </div>
-            <button
-              type="button"
-              className={cn('mt-1.5 inline-flex h-8 items-center rounded-[8px] px-3 text-[11.5px] font-medium', calibrating ? 'bg-[var(--tl-hint-strong)] text-[var(--tl-text-2)]' : 'bg-[var(--tl-selected)] text-white hover:bg-[#2a74d8]')}
-              disabled={calibrating}
-              onClick={() => studio.startCalibration()}
-              data-testid="calibrate"
-            >
-              {calibrating ? (remaining > 0 ? `Draw light and hard strokes… ${Math.ceil(remaining)} s` : 'Lift the pencil to finish') : pencil.calib ? 'Calibrate again' : 'Calibrate (8 s)'}
-            </button>
-            {calibration && (
-              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--tl-hint-strong)]" aria-hidden>
-                <div className="h-full bg-[var(--tl-selected)] transition-[width] duration-100" style={{ width: `${Math.round((1 - remaining / calibration.seconds) * 100)}%` }} />
-              </div>
-            )}
-          </div>
+          <Calibration />
 
           <div className="flex items-center justify-between border-t border-[var(--tl-hint)] pt-2 text-[10.5px] text-[var(--tl-text-3)]">
             <span>Strokes remember the effects they were drawn with.</span>
-            <button type="button" className="tl-opt h-6 px-1.5 text-[10.5px]" onClick={() => studio.setPencil({ ...DEFAULT_PENCIL })}>All off</button>
+            <button type="button" className="tl-opt h-6 px-1.5 text-[10.5px]" onClick={() => studio.setPencil(allPencilOff(pencil))}>All off</button>
           </div>
         </div>
       )}

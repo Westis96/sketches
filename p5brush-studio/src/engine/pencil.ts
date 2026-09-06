@@ -1,9 +1,10 @@
 /**
  * Apple Pencil features beyond pressure: tilt shading, an azimuth-locked nib,
  * barrel roll, the hover footprint, the predicted tail and pressure calibration.
- * All of them are off by default and switched on from the Pencil lab; the ones
- * that change the ink are stored on each stroke (`BrushRecord.fx`) so replays
- * never depend on the current settings.
+ * Hover footprint and predicted tail are on by default; nib and roll come with
+ * the brush; tilt shading stays in the lab. The ones that change the ink are
+ * stored on each stroke (`BrushRecord.fx`) so replays never depend on the
+ * current settings.
  */
 
 /** Per-stroke rendering effects (what a record remembers). */
@@ -33,6 +34,10 @@ export const DEFAULT_PENCIL: PencilSettings = {
   nib: 'stroke', roll: false,
   hover: true, predict: true, calib: null,
 };
+
+/** Every feature off (the lab's "All off"); the calibration is kept. */
+export const allPencilOff = (p: PencilSettings): PencilSettings => ({ ...DEFAULT_PENCIL, hover: false, predict: false, calib: p.calib });
+export const anyPencilOn = (p: PencilSettings) => p.tiltShade || p.nib !== 'stroke' || p.roll || p.hover || p.predict;
 
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
 

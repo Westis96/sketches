@@ -3,8 +3,8 @@ import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { usePersistedState } from '@/hooks/usePersistedState';
-import { DEFAULT_FILTERS, type FilterPatch } from '@/engine/filters';
-import { KalmanSliders, LogSlider, POSITION_PRESETS, PRESSURE_PRESETS, Presets, presetMatches } from '@/components/FilterControls';
+import { DEFAULT_FILTERS, sameFilterParams, type FilterPatch } from '@/engine/filters';
+import { Chip, KalmanSliders, LogSlider, POSITION_PRESETS, PRESSURE_PRESETS, Presets, presetMatches } from '@/components/FilterControls';
 import { cn } from '@/lib/utils';
 
 /**
@@ -22,7 +22,7 @@ export function PencilTab({ onBrushTab }: { onBrushTab: () => void }) {
   const set = (patch: FilterPatch) => studio.setFilters(patch);
   const posPreset = f.position.mode === 'kalman' ? POSITION_PRESETS.find((p) => presetMatches(p, f.position)) : null;
   const prPreset = f.pressure.mode === 'kalman' ? PRESSURE_PRESETS.find((p) => presetMatches(p, f.pressure)) : null;
-  const modified = JSON.stringify({ ...f, showRaw: false }) !== JSON.stringify({ ...DEFAULT_FILTERS, showRaw: false });
+  const modified = !sameFilterParams(f, DEFAULT_FILTERS);
 
   return (
     <div className="space-y-4" data-testid="pencil-tab">
@@ -103,10 +103,6 @@ export function PencilTab({ onBrushTab }: { onBrushTab: () => void }) {
       <Calibration />
     </div>
   );
-}
-
-function Chip({ on, title, onClick, children }: { on: boolean; title: string; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" title={title} aria-pressed={on} onClick={onClick} className={cn('tl-opt h-7 rounded-[7px] px-2 text-[11px]', on && 'bg-[var(--tl-hint-strong)] text-[var(--tl-text-1)]')}>{children}</button>;
 }
 
 function Toggle({ label, hint, on, onChange }: { label: string; hint: string; on: boolean; onChange: (v: boolean) => void }) {

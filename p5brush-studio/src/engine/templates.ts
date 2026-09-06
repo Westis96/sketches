@@ -145,7 +145,7 @@ _m.rect(-34, -4, 68, 8, 3);`,
   _m.rect(-42 + i * 3, -7 + i, 84 - i * 6, 14 - i * 2, 4);
 }`,
     pencil: { nib: 'azimuth', roll: true },
-    filters: { position: { mode: 'kalman', q: 0.005, r: 12 }, tilt: { mode: 'kalman', q: 1, r: 30 } },
+    filters: { position: { mode: 'kalman', q: 0.005, r: 12 }, tilt: { mode: 'kalman', q: 1, r: 30 }, twist: { mode: 'kalman', q: 1, r: 30 } },
   },
   {
     id: 'ballpoint',

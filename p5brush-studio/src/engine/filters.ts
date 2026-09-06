@@ -55,8 +55,14 @@ export const DEFAULT_FILTERS: FilterSettings = {
   showRaw: false,
 };
 
-const sameParams = (a: FilterParams, b: FilterParams) =>
-  (['position', 'pressure', 'tilt', 'twist'] as const).every((k) => JSON.stringify(a[k]) === JSON.stringify(b[k]));
+/** Channel-by-channel equality of two parameter sets (independent of key order). */
+export const sameFilterParams = (a: FilterParams, b: FilterParams) =>
+  (['position', 'pressure', 'tilt', 'twist'] as const).every((k) => {
+    const x = a[k] as unknown as Record<string, unknown>, y = b[k] as unknown as Record<string, unknown>;
+    const keys = new Set([...Object.keys(x), ...Object.keys(y)]);
+    return [...keys].every((key) => x[key] === y[key]);
+  });
+const sameParams = sameFilterParams;
 
 /** The parameters a new stroke should store, or undefined when they are the legacy ones (absent = legacy). */
 export function activeFilters(s: FilterSettings): FilterParams | undefined {

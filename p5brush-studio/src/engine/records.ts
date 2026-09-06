@@ -282,127 +282,184 @@ const RATE_OF_PRESSURE_CHANGE = 0.275;
 export const strokeWidthFor = (rec: BrushRecord) => clamp(rec.spec.weight * rec.size * 0.5, 4, 40);
 
 /**
- * Conditions raw pointer points before geometry, the way tldraw does:
+ * Running state of the conditioning pipeline. `conditionFrom` advances it over
+ * new raw points; a fresh state fed all points is the batch result, and a
+ * state carried across live chunks gives exactly the same output for the same
+ * prefixes (every stage is causal once six raw points exist: the early-jitter
+ * decisions are made by then, and the simulated-pressure seed recomputes from
+ * scratch until it is final).
+ */
+export interface CondState {
+  /** Raw points consumed. */
+  n: number;
+  /** Pass 1 (early jitter): travel through kept points, last kept raw point, kept count. */
+  run: number;
+  last: Point | null;
+  kept: number;
+  /** Pen: the first kept point waits for the second (its pressure borrows from it). */
+  pending: Point | null;
+  /** Pressure stage: running value and optional Kalman filter. */
+  prev: number;
+  k: Kalman1D | null;
+  /** Simulated pressure: kept points buffered until the seed is final (travel > 5 widths). */
+  buf: Point[];
+  seeded: boolean;
+  /** Tilt filters (altitude, azimuth, twist); applied only when the first point carried tilt. */
+  tiltOn: boolean | null;
+  ka: Kalman1D | null; kz: Kalman1D | null; kt: Kalman1D | null;
+  /** Position stage. */
+  sx: number; sy: number; kx: KalmanCV | null; ky: KalmanCV | null;
+  /** Pressure-stage points (raw positions, filtered pressure and tilt) and the position-filtered output, index-aligned. */
+  pre: Point[];
+  out: Point[];
+}
+
+export const freshCondState = (): CondState => ({
+  n: 0, run: 0, last: null, kept: 0, pending: null, prev: 0.5, k: null, buf: [], seeded: false,
+  tiltOn: null, ka: null, kz: null, kt: null, sx: 0, sy: 0, kx: null, ky: null, pre: [], out: [],
+});
+
+/**
+ * Advances the conditioning over raw points [state.n, upto), the way tldraw's
+ * freehand pipeline does:
  *  - drops the first few samples while the stroke has travelled less than one
  *    stroke width, which removes the hook a fast pen-down leaves;
  *  - without a pressure-sensitive device, simulates pressure from velocity
  *    (slow = heavy, fast = light) so finger and mouse strokes get dynamics;
- *  - with a pen, keeps the device pressure and only takes the edge off single
- *    samples (a short moving average), so the mark tracks the pencil at once;
- *    p5.brush's own pressure envelope already shapes the start of a stroke.
- * Records without an `input` field predate this and are returned untouched.
+ *  - with a pen, keeps the device pressure and takes the edge off single
+ *    samples (a running average or a Kalman filter, per `rec.filt`);
+ *  - filters altitude, azimuth and twist when the record asks for it;
+ *  - smooths the position (streamline or a constant-velocity Kalman filter).
  */
-export function conditionPoints(rec: BrushRecord, final = false): Point[] {
-  const out = conditionPressure(rec);
-  if (!rec.input || out.length < 3) return out;
-  const f = (rec.filt ?? LEGACY_FILTERS).position;
-  if (f.mode === 'off') return out;
-  // Causal position smoothing (prefix-stable, so chunk replays match). Streamline:
-  // each point moves part of the way from the previous smoothed point toward its
-  // sample, which takes the sub-pixel jitter out of the path at the cost of a
-  // short lag. Kalman: a constant-velocity model per axis, which follows a steady
-  // hand with less lag and still averages out the jitter (see filters.ts).
-  // On lift the last point is the raw sample, so the stroke ends under the pen.
-  const smoothed: Point[] = [out[0]];
-  if (f.mode === 'kalman') {
-    const kx = new KalmanCV(f.q, f.r), ky = new KalmanCV(f.q, f.r);
-    kx.update(out[0].x); ky.update(out[0].y);
-    for (let i = 1; i < out.length; i++) smoothed.push(at(out[i], Math.round(kx.update(out[i].x) * 100) / 100, Math.round(ky.update(out[i].y) * 100) / 100, out[i].p));
-  } else {
-    let sx = out[0].x, sy = out[0].y;
-    for (let i = 1; i < out.length; i++) {
-      sx += (out[i].x - sx) * f.streamline;
-      sy += (out[i].y - sy) * f.streamline;
-      smoothed.push(at(out[i], Math.round(sx * 100) / 100, Math.round(sy * 100) / 100, out[i].p));
-    }
-  }
-  if (final) smoothed[smoothed.length - 1] = { ...out[out.length - 1] };
-  return smoothed;
-}
-
-/** Kalman filters on altitude, azimuth and twist, in place on freshly built points. */
-function filterTilt(out: Point[], filt: FilterParams | undefined) {
-  if (!filt || out.length < 2 || out[0].alt === undefined) return;
-  if (filt.tilt.mode === 'kalman') {
-    const ka = new Kalman1D(filt.tilt.q, filt.tilt.r), kz = new Kalman1D(filt.tilt.q, filt.tilt.r);
-    for (const p of out) {
-      if (p.alt === undefined) continue;
-      p.alt = clamp(Math.round(ka.update(p.alt)), 0, 90);
-      p.az = Math.round(kz.updateAngle(p.az ?? 0)) % 360;
-    }
-  }
-  if (filt.twist.mode === 'kalman') {
-    const kt = new Kalman1D(filt.twist.q, filt.twist.r);
-    for (const p of out) if (p.alt !== undefined) p.tw = Math.round(kt.updateAngle(p.tw ?? 0)) % 360;
-  }
-}
-
-function conditionPressure(rec: BrushRecord): Point[] {
+export function conditionFrom(rec: BrushRecord, st: CondState, upto: number): void {
   const raw = rec.points;
-  if (!rec.input || raw.length < 2) return raw;
   const size = strokeWidthFor(rec);
   const simulate = rec.input !== 'pen';
+  const filt = rec.filt;
+  const pf = (filt ?? LEGACY_FILTERS).pressure;
+  const pos = (filt ?? LEGACY_FILTERS).position;
+  // The simulated seed depends on the first five stroke widths of travel: until
+  // the prefix contains them, every call recomputes from the start.
+  if (simulate && !st.seeded && st.n > 0) Object.assign(st, freshCondState());
 
-  // Pass 1: early jitter. Never drop the last point.
-  const pts: Point[] = [raw[0]];
-  let run = 0;
-  for (let i = 1; i < raw.length; i++) {
-    const prev = pts[pts.length - 1];
-    const d = Math.hypot(raw[i].x - prev.x, raw[i].y - prev.y);
-    if (i < 4 && i < raw.length - 1 && run + d < size) continue;
-    run += d;
-    pts.push(raw[i]);
-  }
-  if (pts.length < 2) return pts;
-
-  const out: Point[] = new Array(pts.length);
-  const pf = (rec.filt ?? LEGACY_FILTERS).pressure;
-  if (!simulate) {
-    // Pen: the device pressure is the truth. A pen-down sample often carries no
-    // pressure yet, so the first point borrows from the next; after that either a
-    // half-weight running average removes single-sample spikes without lag, or a
-    // random-walk Kalman filter does (its gain is set by q and r), or nothing.
-    let prev = pts[0].p < 0.1 ? pts[1].p * 0.6 : (pts[0].p + pts[1].p) / 2;
-    const k = pf.mode === 'kalman' ? new Kalman1D(pf.q, pf.r) : null;
-    if (k) k.update(prev);
-    for (let i = 0; i < pts.length; i++) {
-      const z = pts[i].p;
-      const p = i === 0 ? prev : k ? k.update(z) : pf.mode === 'off' ? z : prev + (z - prev) * 0.5;
-      prev = p;
-      out[i] = at(pts[i], pts[i].x, pts[i].y, Math.round(p * 1000) / 1000);
+  const emitPre = (pt: Point) => {
+    // tilt filters
+    st.tiltOn ??= pt.alt !== undefined;
+    if (filt && st.tiltOn && pt.alt !== undefined) {
+      if (filt.tilt.mode === 'kalman') {
+        st.ka ??= new Kalman1D(filt.tilt.q, filt.tilt.r);
+        st.kz ??= new Kalman1D(filt.tilt.q, filt.tilt.r);
+        pt.alt = clamp(Math.round(st.ka.update(pt.alt)), 0, 90);
+        pt.az = Math.round(st.kz.updateAngle(pt.az ?? 0)) % 360;
+      }
+      if (filt.twist.mode === 'kalman') {
+        st.kt ??= new Kalman1D(filt.twist.q, filt.twist.r);
+        pt.tw = Math.round(st.kt.updateAngle(pt.tw ?? 0)) % 360;
+      }
     }
-    filterTilt(out, rec.filt);
-    return out;
-  }
+    st.pre.push(pt);
+    // position stage
+    if (st.pre.length === 1) {
+      st.sx = pt.x; st.sy = pt.y;
+      if (pos.mode === 'kalman') { st.kx = new KalmanCV(pos.q, pos.r); st.ky = new KalmanCV(pos.q, pos.r); st.kx.update(pt.x); st.ky.update(pt.y); }
+      st.out.push(pt);
+    } else if (pos.mode === 'kalman') {
+      st.out.push(at(pt, Math.round(st.kx!.update(pt.x) * 100) / 100, Math.round(st.ky!.update(pt.y) * 100) / 100, pt.p));
+    } else if (pos.mode === 'streamline') {
+      st.sx += (pt.x - st.sx) * pos.streamline;
+      st.sy += (pt.y - st.sy) * pos.streamline;
+      st.out.push(at(pt, Math.round(st.sx * 100) / 100, Math.round(st.sy * 100) / 100, pt.p));
+    } else {
+      st.out.push(pt);
+    }
+  };
 
-  const dists = pts.map((p, i) => (i === 0 ? 0 : Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)));
+  const penStep = (pt: Point) => {
+    const j = st.kept++;
+    if (j === 0) { st.pending = pt; return; }
+    if (j === 1) {
+      const p0 = st.pending!;
+      st.pending = null;
+      // A pen-down sample often carries no pressure yet: the first point borrows from the next.
+      st.prev = p0.p < 0.1 ? pt.p * 0.6 : (p0.p + pt.p) / 2;
+      st.k = pf.mode === 'kalman' ? new Kalman1D(pf.q, pf.r) : null;
+      st.k?.update(st.prev);
+      emitPre(at(p0, p0.x, p0.y, Math.round(st.prev * 1000) / 1000));
+    }
+    const z = pt.p;
+    const p = st.k ? st.k.update(z) : pf.mode === 'off' ? z : st.prev + (z - st.prev) * 0.5;
+    st.prev = p;
+    emitPre(at(pt, pt.x, pt.y, Math.round(p * 1000) / 1000));
+  };
 
-  // Pass 2: seed the simulated follower from the first stroke widths so the start is not a blob.
-  let prev = 0.5;
-  let running = 0;
-  for (let i = 0; i < pts.length; i++) {
-    if (running > size * 5) break;
-    const sp = Math.min(1, dists[i] / size);
+  // Simulated pressure, pass 3 for one kept point at distance d from the previous one.
+  const simStep = (pt: Point, d: number, first: boolean) => {
+    const sp = Math.min(1, d / size);
     const target = Math.min(1, 1 - sp);
-    const p = Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE));
-    prev = prev + (p - prev) * 0.5;
-    running += dists[i];
-  }
-
-  // Pass 3: simulated pressure per point, slow = heavy, fast = light. A Kalman
-  // pressure filter smooths the simulated value too.
-  const k = pf.mode === 'kalman' ? new Kalman1D(pf.q, pf.r) : null;
-  for (let i = 0; i < pts.length; i++) {
-    const sp = Math.min(1, dists[i] / size);
-    const target = Math.min(1, 1 - sp);
-    const p = i === 0 ? prev : Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE));
-    prev = p;
-    // Tempered to tldraw's effective range so it maps to a moderate size swing
-    // through mapStylus (0.5 → ×1).
+    const p = first ? st.prev : Math.min(1, st.prev + (target - st.prev) * (sp * RATE_OF_PRESSURE_CHANGE));
+    st.prev = p;
+    // Tempered to tldraw's effective range so it maps to a moderate size swing through mapStylus (0.5 → ×1).
     const v = 0.25 + 0.5 * p;
-    out[i] = at(pts[i], pts[i].x, pts[i].y, k ? Math.round(k.update(v) * 1000) / 1000 : v);
+    emitPre(at(pt, pt.x, pt.y, st.k ? Math.round(st.k.update(v) * 1000) / 1000 : v));
+  };
+
+  for (let i = st.n; i < upto; i++) {
+    const pt = raw[i];
+    let d = 0;
+    if (i > 0) {
+      d = Math.hypot(pt.x - st.last!.x, pt.y - st.last!.y);
+      // Pass 1: early jitter. Never drop the last point.
+      if (i < 4 && i < upto - 1 && st.run + d < size) continue;
+      st.run += d;
+    }
+    st.last = pt;
+    if (!simulate) penStep(pt);
+    else if (st.seeded) simStep(pt, d, false);
+    else { st.buf.push(pt); st.kept++; }
   }
-  filterTilt(out, rec.filt);
+  st.n = upto;
+
+  if (simulate && !st.seeded && st.buf.length >= 2) {
+    const pts = st.buf;
+    const dists = pts.map((p, i) => (i === 0 ? 0 : Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)));
+    // Pass 2: seed the simulated follower from the first stroke widths so the start is not a blob.
+    let prev = 0.5, running = 0, final = false;
+    for (let i = 0; i <= pts.length; i++) {
+      if (running > size * 5) { final = true; break; }
+      if (i === pts.length) break;
+      const sp = Math.min(1, dists[i] / size);
+      const target = Math.min(1, 1 - sp);
+      const p = Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE));
+      prev = prev + (p - prev) * 0.5;
+      running += dists[i];
+    }
+    st.prev = prev;
+    st.k = pf.mode === 'kalman' ? new Kalman1D(pf.q, pf.r) : null;
+    // Pass 3: simulated pressure per point, slow = heavy, fast = light.
+    pts.forEach((p, i) => simStep(p, dists[i], i === 0));
+    if (final) { st.seeded = true; st.buf = []; }
+  }
+}
+
+/** Batch conditioning of `rec.points` (replays); see conditionFrom. */
+export function conditionPoints(rec: BrushRecord, final = false): Point[] {
+  return conditionedPrefix(rec, freshCondState(), rec.points.length, final);
+}
+
+/**
+ * Output of the pipeline for the prefix [0, upto) after advancing `st` to it.
+ * Records without an `input` predate conditioning and are returned untouched;
+ * tiny prefixes keep the raw samples (there is nothing to smooth yet). On lift
+ * (`final`) the last point is the raw sample, so the stroke ends under the pen.
+ */
+export function conditionedPrefix(rec: BrushRecord, st: CondState, upto: number, final: boolean): Point[] {
+  if (!rec.input || upto < 2) return rec.points.slice(0, upto);
+  conditionFrom(rec, st, upto);
+  const kept = st.pending ? [st.pending] : rec.input !== 'pen' && !st.seeded && st.buf.length < 2 ? st.buf : null;
+  if (kept) return kept;
+  if (st.pre.length < 3) return st.pre.slice();
+  const out = st.out.slice();
+  if (final) out[out.length - 1] = { ...st.pre[st.pre.length - 1] };
   return out;
 }
 
@@ -415,14 +472,25 @@ export const CHUNK_MIN_RAW = 6;
 
 /**
  * Points of the chunk that covers raw samples up to `upto` (exclusive), given
- * the conditioned length reached by the previous chunk. Conditioning runs on
- * the frozen prefix only, so a replay computes exactly what the live stroke
- * did. Chunks overlap by one point so stamping is continuous.
+ * the conditioned length reached by the previous chunk. Replays condition each
+ * prefix from scratch; the live stroke carries a CondState across chunks (see
+ * chunkStep), which gives the same points. Chunks overlap by one point so
+ * stamping is continuous.
  */
 export function chunkPoints(rec: BrushRecord, upto: number, prevCondLen: number, final = false): { pts: Point[]; condLen: number } | null {
-  const prefix = rec.points.slice(0, upto);
-  if (prefix.length === 0) return null;
-  const cond = conditionPoints({ ...rec, points: prefix }, final);
+  if (upto === 0) return null;
+  return chunkFrom(conditionPoints({ ...rec, points: rec.points.slice(0, upto) }, final), prevCondLen, final);
+}
+
+/** Live counterpart of chunkPoints: advances `st` instead of reconditioning the whole prefix. */
+export function chunkStep(rec: BrushRecord, upto: number, prevCondLen: number, st: CondState, final = false): { pts: Point[]; condLen: number } | null {
+  if (upto === 0) return null;
+  // Below CHUNK_MIN_RAW the early-jitter decisions still depend on the prefix length: condition that prefix on its own.
+  const cond = upto < CHUNK_MIN_RAW ? conditionPoints({ ...rec, points: rec.points.slice(0, upto) }, final) : conditionedPrefix(rec, st, upto, final);
+  return chunkFrom(cond, prevCondLen, final);
+}
+
+function chunkFrom(cond: Point[], prevCondLen: number, final: boolean): { pts: Point[]; condLen: number } | null {
   const start = prevCondLen === 0 ? 0 : prevCondLen - 1;
   const pts = cond.slice(start);
   if (pts.length < (final ? 1 : 2)) return null;

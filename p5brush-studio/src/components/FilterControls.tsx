@@ -22,19 +22,20 @@ export const PRESSURE_PRESETS: FilterPreset[] = [
 
 export const presetMatches = (p: QR, current: QR) => Math.abs(p.q - current.q) / p.q < 0.05 && Math.abs(p.r - current.r) / p.r < 0.05;
 
+/** A small option chip with a pressed state (presets, filter modes). */
+export function Chip({ on, title, onClick, children }: { on: boolean; title?: string; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button type="button" title={title} aria-pressed={on} onClick={onClick} className={cn('tl-opt h-7 rounded-[7px] px-2 text-[11px]', on && 'bg-[var(--tl-hint-strong)] text-[var(--tl-text-1)]')}>
+      {children}
+    </button>
+  );
+}
+
 /** One-tap parameter sets; sliders stay available for fine-tuning. */
 export function Presets({ current, presets, onPick, extra }: { current: QR | null; presets: FilterPreset[]; onPick: (p: QR) => void; extra?: React.ReactNode }) {
   return (
     <div className="flex flex-wrap gap-1" role="group" aria-label="Presets">
-      {presets.map((p) => {
-        const active = !!current && presetMatches(p, current);
-        return (
-          <button key={p.name} type="button" title={p.hint} aria-pressed={active} onClick={() => onPick({ q: p.q, r: p.r })}
-            className={cn('tl-opt h-7 rounded-[7px] px-2 text-[11px]', active && 'bg-[var(--tl-hint-strong)] text-[var(--tl-text-1)]')}>
-            {p.name}
-          </button>
-        );
-      })}
+      {presets.map((p) => <Chip key={p.name} title={p.hint} on={!!current && presetMatches(p, current)} onClick={() => onPick({ q: p.q, r: p.r })}>{p.name}</Chip>)}
       {extra}
     </div>
   );

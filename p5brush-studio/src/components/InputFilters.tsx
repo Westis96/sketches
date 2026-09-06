@@ -4,7 +4,7 @@ import { Switch } from '@/components/ui/switch';
 import { ToggleGroup } from '@/components/ui/toggle-group';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { usePersistedState } from '@/hooks/usePersistedState';
-import { DEFAULT_FILTERS, type FilterPatch, type FilterSettings } from '@/engine/filters';
+import { DEFAULT_FILTERS, sameFilterParams, type FilterPatch, type FilterSettings } from '@/engine/filters';
 import { KalmanSliders, LogSlider, Mode, Note, POSITION_PRESETS, PRESSURE_PRESETS, Presets, Row } from '@/components/FilterControls';
 
 /**
@@ -18,7 +18,7 @@ export function InputFilters({ defaultOpen = true }: { defaultOpen?: boolean }) 
   const f = useStudioState((s) => s.settings.filters);
   const hud = useStudioState((s) => s.hud);
   const [open, setOpen] = usePersistedState('p5brush-studio:lab:filters', defaultOpen);
-  const changed = JSON.stringify(f) !== JSON.stringify(DEFAULT_FILTERS);
+  const changed = !sameFilterParams(f, DEFAULT_FILTERS) || f.showRaw !== DEFAULT_FILTERS.showRaw;
   const set = (patch: FilterPatch) => studio.setFilters(patch);
 
   return (

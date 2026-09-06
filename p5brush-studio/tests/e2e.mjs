@@ -7,6 +7,7 @@
  * runs on SwiftShader (software WebGL2), so the checks are about behaviour and
  * determinism, not pixel-exact colours.
  */
+import { readFileSync } from 'node:fs';
 import { chromium } from 'playwright';
 import http from 'node:http';
 import fs from 'node:fs';
@@ -439,6 +440,29 @@ try {
   check('pressure calibration maps the observed force range', !!calib && calib.min > 0.15 && calib.min < 0.3 && calib.max > 0.5 && calib.max < 0.65, JSON.stringify(calib));
   await studio((s) => s.setPencil({ calib: null }));
 
+  // Conditioning: bit-exact against fixtures recorded before the pipeline became incremental,
+  // and the live path (state carried across chunks) equals the replay path (per-prefix reconditioning).
+  const fixtures = JSON.parse(readFileSync(new URL('./fixtures/conditioning.json', import.meta.url), 'utf8'));
+  const condCheck = await studio((s, cases) => {
+    const spec = { type: 'custom', weight: 29, scatter: 0.45, opacity: 6, spacing: 0.4, noise: 1, pressure: { mode: 'gaussian', curve: [0.36, 0.25], min_max: [0.48, 1.06] }, rotate: 'none', markerTip: true };
+    let mismatches = [], liveMismatch = [], compared = 0;
+    for (const c of cases) {
+      const rec = { tool: 'brush', spec, tipSource: '', size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, input: c.input, points: c.points, filt: c.filt ?? undefined };
+      for (const [L, expected] of Object.entries(c.prefixes)) {
+        const got = s.conditioned({ ...rec, points: c.points.slice(0, +L) });
+        compared++;
+        if (JSON.stringify(got) !== JSON.stringify(expected)) mismatches.push(`${c.name}@${L}`);
+      }
+      for (const uptos of [[6, 9, 14, 22, 30, 41, 60], [7, 12, 60], [6, 60], [60]]) {
+        const both = s.chunkBoth(rec, uptos);
+        both.forEach((b, i) => { if (JSON.stringify(b.live) !== JSON.stringify(b.replay)) liveMismatch.push(`${c.name}@${uptos[i]}`); });
+      }
+    }
+    return { compared, mismatches: mismatches.slice(0, 5), liveMismatch: liveMismatch.slice(0, 5) };
+  }, fixtures);
+  check('conditioning matches the recorded fixtures bit for bit', condCheck.mismatches.length === 0 && condCheck.compared === fixtures.length * 10, JSON.stringify(condCheck));
+  check('live chunk conditioning equals per-prefix reconditioning', condCheck.liveMismatch.length === 0, JSON.stringify(condCheck.liveMismatch));
+
   // Input filters: the defaults reproduce the legacy conditioning exactly.
   const noisy = { tool: 'brush', spec: null, tipSource: '', size: 1, color: '#000', pressureMode: 'both', sensitivity: 1, seed: 1, input: 'pen', points: [] };
   for (let i = 0; i < 40; i++) noisy.points.push({ x: 100 + i * 4, y: 200 + (i % 2 ? 3 : -3), p: i % 2 ? 0.7 : 0.3, alt: 40 + (i % 2 ? 6 : -6), az: 90 + (i % 2 ? 10 : -10), tw: 0 });
@@ -489,8 +513,8 @@ try {
   const hoverBefore = await studio((s) => s.pencil().hover);
   await page.locator('[data-testid=pencil-lab] [aria-label="Hover footprint"]').click();
   const hoverToggled = (await studio((s) => s.pencil().hover)) === !hoverBefore;
-  // the footprint shows the nib: hover on with an azimuth nib
-  await studio((s) => s.setPencil({ hover: true, nib: 'azimuth' }));
+  // the footprint shows for any brush while hover is on
+  await studio((s) => s.setPencil({ hover: true, nib: 'stroke' }));
   await page.evaluate(() => {
     const c = document.getElementById('ink-canvas');
     c.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'pen', pointerId: 3, bubbles: true, clientX: 500, clientY: 400, pressure: 0, tiltX: 50, tiltY: 10 }));
