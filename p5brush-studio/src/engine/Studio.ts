@@ -117,6 +117,8 @@ export interface StudioState {
   progress: Progress;
   /** First visit with nothing saved: show the welcome card until dismissed. */
   firstRun: boolean;
+  /** A stroke is being drawn (pointer down on the canvas). */
+  drawing: boolean;
   /** A pencil pressure calibration is collecting samples. */
   calibrating: boolean;
   /** When the calibration window closes (performance.now() ms) and how long it was, for the progress bar. */
@@ -197,6 +199,14 @@ interface Live {
 const round = (v: number, d: number) => Math.round(v * d) / d;
 
 /**
+ * A brush as a lesson uses it: the translucent templates (watercolor wash, chisel)
+ * are tuned for layering and a single traced stroke of them is barely visible,
+ * so lessons draw them, and hand them to the learner, with an opacity floor.
+ */
+const LESSON_MIN_OPACITY = 14;
+const lessonSpec = (t: BrushTemplate): BrushSpec => ({ ...clone(t.spec), opacity: Math.max(t.spec.opacity, LESSON_MIN_OPACITY) });
+
+/**
  * Per-stamp overrides for the engine (see the custom-tip hook in vite.config.ts):
  * maps the distance along the plot to the segment it falls in and returns that
  * segment's pencil-effect angle, and whether this stamp is skipped (a hash of
@@ -237,6 +247,7 @@ export class Studio {
     lessonPreviews: null,
     progress: loadProgress(),
     firstRun: false,
+    drawing: false,
     calibrating: false,
     calibration: null,
   };
@@ -736,7 +747,7 @@ export class Studio {
   private stepRecord(st: LessonStep, i: number): BrushRecord {
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template) ?? BRUSH_TEMPLATES[0];
     return {
-      tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: st.size, color: st.color,
+      tool: 'brush', spec: lessonSpec(t), tipSource: t.tipSource, size: st.size, color: st.color,
       pressureMode: 'gaussian', sensitivity: 1.25, seed: 7000 + i, points: st.points,
     };
   }
@@ -826,7 +837,7 @@ export class Studio {
     if (!st) return;
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template);
     if (!t) return;
-    this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: st.size, color: st.color, tool: 'brush' });
+    this.set({ spec: lessonSpec(t), tipSource: t.tipSource, size: st.size, color: st.color, tool: 'brush', ...this.brushInput(t) });
     this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
   }
 
@@ -1183,6 +1194,7 @@ export class Studio {
     const live = this.live;
     this.live = null;
     this.previewQueued = false;
+    this.emit({ drawing: false });
     this.overlayEvent = null;
     this.clearPredicted();
     this.endLiveMask(live);
@@ -1564,6 +1576,7 @@ export class Studio {
     if (rec.tool === 'brush') rec.zoom = this.view.zoom;
     this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
     this.frameLog.length = 0; this.lastPreviewAt = 0;
+    this.emit({ drawing: true });
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -1745,6 +1758,7 @@ export class Studio {
     e.preventDefault();
     this.live = null;
     this.previewQueued = false;
+    this.emit({ drawing: false });
     this.queueHud({ pressure: 0, predicted: 0 });
     this.overlayEvent = null;
     if (this.settings.filters.showRaw) this.drawLiveOverlay(null, live); else this.clearPredicted();

@@ -140,6 +140,7 @@
 /* Practice mode */
 @keyframes guide-flow { to { stroke-dashoffset: -36; } }
 .guide-flow { animation: guide-flow 0.9s linear infinite; }
+.guide-layer { transition: opacity 160ms ease-out; }
 @keyframes guide-start { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .guide-start { animation: guide-start 1.2s ease-in-out infinite; }
 @keyframes guide-pulse-bar { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
