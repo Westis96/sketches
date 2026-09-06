@@ -41,6 +41,9 @@ samples of a stroke are dropped, pen pressure is eased in instead of starting on
 spike, and finger and mouse strokes get simulated pressure from speed (slow is heavier).
 Conditioning runs at render time from the stored input kind, so old drawings are untouched.
 When the canvas is rebuilt (undo, zoom, reload) strokes outside the viewport are skipped.
+Hand-drawn strokes are stamped chunk by chunk as they arrive and committed exactly as
+previewed: the chunk boundaries are stored with the stroke, so undo, zoom, reload and the
+sketch export replay the identical stamps and nothing changes when the pen lifts.
 
 Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
 pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the

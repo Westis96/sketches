@@ -43,6 +43,13 @@ export interface BrushRecord {
   points: Point[];
   /** Absent on records saved before input conditioning existed; those replay as-is. */
   input?: InputKind;
+  /**
+   * Raw point counts at which the live preview stamped each chunk (the last entry
+   * is the full count). Present on strokes drawn by hand: replays stamp the same
+   * chunks with the same seeds, so what was on screen at lift is exactly what
+   * every later render shows. Absent on programmatic strokes, rendered in one go.
+   */
+  chunks?: number[];
 }
 
 export interface EraserRecord {
@@ -68,7 +75,7 @@ export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
 export const SAVE_VERSION = 1;
 
 type SavedRecord =
-  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind }
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[] }
   | { t: 'e'; size: number; pts: number[] }
   | { t: 'c' };
 
@@ -85,6 +92,7 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
     if (r.tool === 'eraser') return { t: 'e', size: r.size, pts: packPoints(r.points) };
     const saved: SavedRecord = { t: 'b', spec: r.spec, tip: r.tipSource, size: r.size, color: r.color, pm: r.pressureMode, sens: r.sensitivity, seed: r.seed, pts: packPoints(r.points) };
     if (r.input) saved.in = r.input;
+    if (r.chunks) saved.ch = r.chunks;
     return saved;
   });
 }
@@ -101,6 +109,7 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
     if (r.t === 'b' && r.spec && typeof r.tip === 'string') {
       const rec: BrushRecord = { tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points };
       if (r.in === 'pen' || r.in === 'touch' || r.in === 'mouse') rec.input = r.in;
+      if (Array.isArray(r.ch) && r.ch.every((n) => Number.isInteger(n) && n > 0 && n <= points.length)) rec.chunks = r.ch;
       out.push(rec);
     }
   }
@@ -255,6 +264,51 @@ export function conditionPoints(rec: BrushRecord): Point[] {
     out[i] = { x: pts[i].x, y: pts[i].y, p: 0.25 + 0.5 * p };
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Live chunks: strokes drawn by hand are stamped piece by piece as they arrive
+// ---------------------------------------------------------------------------
+/** Raw samples needed before the first chunk: conditioning's early decisions are final by then. */
+export const CHUNK_MIN_RAW = 6;
+
+/**
+ * Points of the chunk that covers raw samples up to `upto` (exclusive), given
+ * the conditioned length reached by the previous chunk. Conditioning runs on
+ * the frozen prefix only, so a replay computes exactly what the live stroke
+ * did. Chunks overlap by one point so stamping is continuous.
+ */
+export function chunkPoints(rec: BrushRecord, upto: number, prevCondLen: number, final = false): { pts: Point[]; condLen: number } | null {
+  const prefix = rec.points.slice(0, upto);
+  if (prefix.length === 0) return null;
+  const cond = conditionPoints({ ...rec, points: prefix });
+  const start = prevCondLen === 0 ? 0 : prevCondLen - 1;
+  const pts = cond.slice(start);
+  if (pts.length < (final ? 1 : 2)) return null;
+  return { pts, condLen: cond.length };
+}
+
+/** Engine params for a chunk: nothing that is per-stroke, so chunks join without seams. */
+export const chunkSpec = (spec: BrushSpec): BrushSpec =>
+  ({ ...spec, noise: 0, markerTip: false, pressure: { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] } });
+
+/**
+ * Pressure envelope for chunked strokes, a function of the distance from the
+ * stroke's start only (p5.brush's own envelope is relative to the finished
+ * length, which is unknown while drawing). Same curve family with its expected
+ * random parameters: the mark rises over its first stretch, then holds.
+ */
+export function liveEnvelope(pressure: BrushSpec['pressure']): (s: number) => number {
+  const [min, max] = pressure.min_max;
+  if (min === max) return () => min;
+  const a = 0.5, b = 1 - pressure.curve[1] * 1.25, c = 3.25, REF = 300;
+  return (s: number) => {
+    const L = Math.max(REF, s * 2);
+    const peak = a * L;
+    const hw = (s < peak ? b * 1.2 : b * 0.8) * (L / 2);
+    const g = 1 / (1 + Math.pow(Math.abs((s - peak) / hw), 2 * c));
+    return min + (max - min) * g;
+  };
 }
 
 /** Segments (angle in degrees, p5.brush convention) for a brush record. */

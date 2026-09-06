@@ -94,6 +94,11 @@ try {
   const redone = await checksum();
   check('undo changes pixels', undone.h !== drawn.h);
   check('redo reproduces identical pixels', redone.h === drawn.h);
+  const drawnRec = await studio((s) => { const r = s.history()[s.history().length - 1]; return { chunks: r.chunks, n: r.points.length }; });
+  check('a hand-drawn stroke records its live chunks', Array.isArray(drawnRec.chunks) && drawnRec.chunks.length >= 2 && drawnRec.chunks[drawnRec.chunks.length - 1] === drawnRec.n, JSON.stringify(drawnRec));
+  // The pixels on screen at lift are the committed pixels: a full rebuild changes nothing.
+  await studio((s) => s.rebuildAll());
+  check('rebuilding a hand-drawn stroke reproduces the lifted pixels', (await checksum()).h === drawn.h);
 
   // Clear is undoable.
   await studio((s) => s.clear());

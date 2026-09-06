@@ -16,8 +16,8 @@ import type { BrushParams } from 'p5.brush/standalone';
 import { StudioGL, type Dab } from './StudioGL';
 import { compileTip, checkTip, tipExtent } from './tipShim';
 import {
-  DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, clamp, clone, conditionPoints, deserializeRecords, fmt,
-  parseSpecCode, recordBounds, serializeRecords, specCode, strokeSegments, visibleRecords,
+  CHUNK_MIN_RAW, DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, chunkPoints, chunkSpec, clamp, clone, conditionPoints,
+  deserializeRecords, fmt, liveEnvelope, parseSpecCode, recordBounds, serializeRecords, specCode, strokeSegments, visibleRecords,
   type BrushRecord, type BrushSpec, type EraserRecord, type InputKind, type PaperName, type Point, type PressureMode,
   type StrokeRecord, type Tool,
 } from './records';
@@ -131,8 +131,8 @@ interface Live {
   erasedUpTo: number;
   /** World position at which a point was last *recorded* (not merged), for pen/finger thinning. */
   lastRecorded: Point;
-  /** Incremental brush preview: conditioned points already stamped, their path length, chunk count. */
-  stampedFrom: number;
+  /** Chunked brush stroke: conditioned length reached, path length stamped, chunk count. */
+  condLen: number;
   stampedLen: number;
   chunk: number;
 }
@@ -142,26 +142,6 @@ const round = (v: number, d: number) => Math.round(v * d) / d;
 /** Extra shaping applied to plot pressures while stamping: `env(s)` at path length `s` from `s0`. */
 interface StrokeShape { s0: number; env: (s: number) => number }
 
-/**
- * Stand-in for p5.brush's gaussian pressure envelope during the live preview.
- * The engine's envelope is relative to the finished stroke's length (peak near
- * the middle, tapers at both ends), which cannot be known mid-stroke. This uses
- * the same curve with its expected random parameters and a length that grows
- * with the stroke, so the mark rises over its first stretch and then holds full
- * weight at the tip; the end taper appears with the exact render on lift.
- */
-function previewEnvelope(pressure: BrushSpec['pressure']): (s: number) => number {
-  const [min, max] = pressure.min_max;
-  if (min === max) return () => min;
-  const a = 0.5, b = 1 - pressure.curve[1] * 1.25, c = 3.25, REF = 300;
-  return (s: number) => {
-    const L = Math.max(REF, s * 2);
-    const peak = a * L;
-    const hw = (s < peak ? b * 1.2 : b * 0.8) * (L / 2);
-    const g = 1 / (1 + Math.pow(Math.abs((s - peak) / hw), 2 * c));
-    return min + (max - min) * g;
-  };
-}
 
 export class Studio {
   private state: StudioState = {
@@ -452,6 +432,7 @@ export class Studio {
   // ---------------------------------------------------------------------------
   /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
   private renderBrushStroke(rec: BrushRecord): number {
+    if (rec.chunks) return this.renderChunked(rec);
     return this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
   }
 
@@ -1198,7 +1179,7 @@ export class Studio {
     const first = this.pointFromEvent(e, rect);
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, stampedFrom: 0, stampedLen: 0, chunk: 0 };
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, condLen: 0, stampedLen: 0, chunk: 0 };
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -1262,10 +1243,9 @@ export class Studio {
     this.previewQueued = false;
     this.queueHud({ pressure: 0 });
     if (live.rec.tool === 'brush') {
-      // The live preview is an approximation stamped chunk by chunk; the stroke
-      // that gets committed is one exact render, identical to every later replay.
-      this.sgl!.blit(this.sgl!.committedTex);
-      this.queueHud({ stamps: this.renderBrushStroke(live.rec) });
+      // Stamp whatever is left as the last chunk. Nothing is re-rendered on lift:
+      // the chunk boundaries are recorded, so every replay repeats exactly this.
+      this.stampNextChunk(live, live.rec.points.length, true);
     } else if (live.rec.points.length > live.erasedUpTo) {
       this.sgl!.eraseDabs(this.eraserDabs(live.rec, live.erasedUpTo));
     }
@@ -1301,29 +1281,52 @@ export class Studio {
       }
       return;
     }
-    // Conditioning's early-jitter decisions are final once 5 raw samples exist;
-    // before that the chunk boundary could shift. A tap is rendered exactly on lift.
-    if (rec.points.length < 5) return;
-    const cond = conditionPoints(rec);
-    const start = live.stampedFrom === 0 ? 0 : live.stampedFrom - 1;
-    if (cond.length - start < 2) return;
-    const pts = cond.slice(start);
-    let len = 0;
-    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    // The engine places round(length / spacing) stamps per plot, so a chunk much
-    // shorter than a few stamp steps loses density to rounding; wait for more.
-    if (len < rec.spec.spacing * 3) return;
-    const chunk: BrushRecord = {
-      ...rec, points: pts, input: undefined, seed: rec.seed + 1 + live.chunk,
-      spec: { ...rec.spec, noise: 0, markerTip: false, pressure: { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] } },
-    };
-    const env = previewEnvelope(rec.spec.pressure);
-    // No priming stroke here: it only matters for marker tips (off) and cold
-    // framebuffers (warmed by the first chunk), and it would double the fixed cost per frame.
-    this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0: live.stampedLen, env });
+    // Conditioning's early decisions are final once a few raw samples exist, and
+    // the newest raw point may still move (pen samples merge into it), so chunks
+    // stop one point short of it. A tap is stamped on lift.
+    if (rec.points.length < CHUNK_MIN_RAW) return;
+    this.stampNextChunk(live, rec.points.length - 1, false);
+  }
+
+  /**
+   * Stamps the chunk covering raw points up to `upto` and records the boundary
+   * on the stroke. Returns false when there is nothing (or too little) to stamp:
+   * the engine places round(length / spacing) stamps per plot, so a chunk much
+   * shorter than a few stamp steps would lose density to rounding.
+   */
+  private stampNextChunk(live: Live, upto: number, final: boolean): boolean {
+    const rec = live.rec as BrushRecord;
+    const g = chunkPoints(rec, upto, live.condLen, final);
+    if (!g) return false;
+    const len = pathLength(g.pts);
+    if (!final && len < rec.spec.spacing * 3) return false;
+    this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
+    (rec.chunks ??= []).push(upto);
+    live.condLen = g.condLen;
     live.stampedLen += len;
-    live.stampedFrom = cond.length;
     live.chunk++;
+    return true;
+  }
+
+  /** One chunk of a hand-drawn stroke: seeded per chunk, per-stroke effects off, envelope folded into the plot. */
+  private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number): number {
+    if (index === 0) this.primeEngine(this.glW, this.glH, this.dpr);
+    const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec) };
+    return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
+  }
+
+  /** Replays a hand-drawn stroke exactly as it was stamped live. */
+  private renderChunked(rec: BrushRecord): number {
+    let condLen = 0, s0 = 0, stamps = 0;
+    const chunks = rec.chunks!;
+    chunks.forEach((upto, i) => {
+      const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
+      if (!g) return;
+      stamps += this.stampChunk(rec, g.pts, i, s0);
+      condLen = g.condLen;
+      s0 += pathLength(g.pts);
+    });
+    return stamps;
   }
 
   private queueHud(patch: Partial<Hud>) {
@@ -1505,6 +1508,32 @@ export class Studio {
         name = 'studioBrush' + names.size;
         names.set(key, name);
         lines.push('  ' + specCode(rec.spec, rec.tipSource, name).replace(/\n/g, '\n  '));
+      }
+      if (rec.chunks) {
+        // Hand-drawn: the same chunks, seeds and envelope as on the canvas.
+        const liveKey = key + '|live';
+        let liveName = names.get(liveKey);
+        if (!liveName) {
+          liveName = name + 'Live';
+          names.set(liveKey, liveName);
+          lines.push('  ' + specCode(chunkSpec(rec.spec), rec.tipSource, liveName).replace(/\n/g, '\n  '));
+        }
+        const env = liveEnvelope(rec.spec.pressure);
+        let condLen = 0, s0 = 0;
+        rec.chunks.forEach((upto, i) => {
+          const g = chunkPoints(rec, upto, condLen, i === rec.chunks!.length - 1);
+          if (!g) return;
+          const { origin, segs, endA, endP } = strokeSegments({ ...rec, points: g.pts, input: undefined });
+          lines.push(`  randomSeed(${rec.seed + 1 + i});`);
+          lines.push(`  brush.set("${liveName}", "${rec.color}", ${fmt(rec.size)});`);
+          lines.push(`  brush.beginStroke("curve", ${fmt(origin.x)}, ${fmt(origin.y)});`);
+          let s = s0;
+          for (const seg of segs) { lines.push(`  brush.move(${fmt(seg.a)}, ${fmt(seg.len)}, ${fmt(seg.p * env(s))});`); s += seg.len; }
+          lines.push(`  brush.endStroke(${fmt(endA)}, ${fmt(endP * env(s))});`);
+          condLen = g.condLen;
+          s0 += pathLength(g.pts);
+        });
+        continue;
       }
       const { origin, segs, endA, endP } = strokeSegments(rec);
       lines.push(`  randomSeed(${rec.seed});`);
