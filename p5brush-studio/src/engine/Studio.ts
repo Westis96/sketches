@@ -24,10 +24,11 @@ import {
   type Segment, type StrokeRecord, type Tool, mapStylus,
 } from './records';
 import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
-import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type Lesson, type LessonStep } from '@/practice/lessons';
+import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type LessonStep } from '@/practice/lessons';
 import { pathLength } from '@/practice/geometry';
-import { PASS_SCORE, scoreTrace, starsFor } from '@/practice/score';
-import { loadProgress, recordRun, saveProgress, type Progress } from '@/practice/progress';
+import { DEFAULT_SPEED, DIMS, PASS_SCORE, PERFORM_PASS_SCORE, STEP_DOWN_SCORE, praiseFor, scoreStroke, scoreTrace, starsFor, type Band, type Dim, type ScoreMode, type Tip } from '@/practice/score';
+import { addSeconds, loadProgress, recordGuided, recordPerform, recordTrainer, recordWarmup, saveProgress, type Progress } from '@/practice/progress';
+import { MISSIONS, TIER_LABEL, TIERS, TRAINERS, isPlayable, missionById, missionForPiece, partsOf, trainerReps, warmupReps, type Part, type Tier } from '@/practice/curriculum';
 
 export const paperPresets: Record<PaperName, { bg: [number, number, number]; grain: number; label: string }> = {
   hotpress: { bg: [255, 254, 250], grain: 2.2, label: 'Hot Press Fine Art' },
@@ -81,20 +82,75 @@ export interface View { x: number; y: number; zoom: number }
 export const MIN_ZOOM = 0.2;
 export const MAX_ZOOM = 8;
 
-export interface PracticeFeedback { step: number; score: number; reversed: boolean; accepted: boolean; at: number }
-export interface PracticeSummary { score: number; stars: number; newBest: boolean }
+export interface PracticeFeedback {
+  step: number;
+  score: number;
+  reversed: boolean;
+  accepted: boolean;
+  at: number;
+  /** One instruction (bandwidth rule), or null when the stroke was in band. */
+  tip: Tip | null;
+  /** Clean / Great / Perfect when in band. */
+  praise: string | null;
+  dims: Record<Dim, number>;
+  band: Record<Dim, Band>;
+  /** A rehearsal stroke inside a loop: scored and erased. */
+  looped?: boolean;
+}
+export interface CostlyStep { step: number; score: number; tip: Tip | null }
+export interface PracticeSummary {
+  score: number;
+  stars: number;
+  newBest: boolean;
+  /** Steps scored 70 or better. */
+  clean: number;
+  /** The three costliest steps (score below 85), worst first. */
+  costly: CostlyStep[];
+  worstDim: Dim | null;
+  worstText: string | null;
+  /** Then vs now: the first Perform of this mission, once one exists. */
+  firstScore?: number;
+  firstThumb?: string | null;
+  todayThumb?: string | null;
+}
+export type PracticePart = Part | 'warmup';
 export interface PracticeState {
-  lessonId: string;
+  /** Mission being played, or null for the warm-up. */
+  missionId: string | null;
+  /** The piece (lesson) being traced, when the part has one. */
+  lessonId: string | null;
+  part: PracticePart;
+  title: string;
+  subtitle: string;
+  /** Reference strokes: the piece's steps, or the drill's reps. */
+  steps: LessonStep[];
   /** Index of the step being traced; equals the step count once complete. */
   step: number;
   /** Per finished step: score, or null when skipped. */
   results: Array<number | null>;
+  tips: Array<Tip | null>;
   status: 'active' | 'complete';
   /** Show the remaining reference strokes on the canvas. */
   guide: boolean;
+  /** Assist tier: how much of the guide is drawn. */
+  tier: Tier;
+  /** Perform: the tier is the difficulty and does not move. */
+  tierLocked: boolean;
   feedback: PracticeFeedback | null;
   /** Consecutive steps scored 80 or better. */
   streak: number;
+  /** Consecutive misses on the current step. */
+  misses: number;
+  /** "Loop this stroke" is on offer. */
+  loopOffer: boolean;
+  /** Rehearsal strokes left in the loop. */
+  loop: number;
+  /** One-line note inside the card (auto-adjust, loops, pressure not scored). */
+  note: string | null;
+  /** Blind tier: which step to reveal, and since when. */
+  reveal: { step: number; at: number } | null;
+  /** False once a finger or mouse stroke arrived: pressure is simulated for those. */
+  pressureScored: boolean;
   summary: PracticeSummary | null;
 }
 
@@ -188,6 +244,8 @@ interface Live {
   lastRecorded: Point;
   /** Keys of the most recent raw samples: WebKit delivers each batch of coalesced pen samples twice. */
   recent: string[];
+  /** event.timeStamp of the pointerdown; points carry whole milliseconds since then. */
+  t0: number;
   /** Chunked brush stroke: conditioning state carried across chunks, conditioned length reached, path length stamped, chunk count, last chunk time. */
   cond: CondState;
   condLen: number;
@@ -205,6 +263,16 @@ const round = (v: number, d: number) => Math.round(v * d) / d;
  */
 const LESSON_MIN_OPACITY = 14;
 const lessonSpec = (t: BrushTemplate): BrushSpec => ({ ...clone(t.spec), opacity: Math.max(t.spec.opacity, LESSON_MIN_OPACITY) });
+/** Moves an assist tier `dir` steps (+1 = less help), clamped to [0, max]. */
+const stepTier = (tier: Tier, dir: number, max = TIERS.length - 1): Tier => TIERS[clamp(TIERS.indexOf(tier) + dir, 0, max)];
+const WORST_TEXT: Record<Dim, string> = {
+  shape: 'Shape cost you the most: stay on the line, even if it means slowing down.',
+  length: 'Length cost you the most: go all the way to the end of the stroke.',
+  direction: 'Direction cost you the most: start at the dot every time.',
+  pressure: 'Pressure cost you the most: match the swell and the fade, not just the path.',
+  speed: 'Speed cost you the most: one even pull at the pace of the flowing line.',
+  confidence: 'Hesitation cost you the most: ghost it in the air, then commit to one pull.',
+};
 
 /**
  * Per-stamp overrides for the engine (see the custom-tip hook in vite.config.ts):
@@ -741,9 +809,9 @@ export class Studio {
   }
 
   // ---------------------------------------------------------------------------
-  // Practice (tracing lessons)
+  // Practice: missions (trainer → guided → perform) and the warm-up
   // ---------------------------------------------------------------------------
-  /** Reference stroke of a lesson step as a brush record (world units = lesson units). */
+  /** Reference stroke of a step as a brush record (world units = lesson units). */
   private stepRecord(st: LessonStep, i: number): BrushRecord {
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template) ?? BRUSH_TEMPLATES[0];
     return {
@@ -752,28 +820,79 @@ export class Studio {
     };
   }
 
-  private practiceLesson(): { lesson: Lesson; steps: LessonStep[] } | null {
-    const pr = this.state.practice;
-    const lesson = pr && lessonById(pr.lessonId);
-    return lesson ? { lesson, steps: lessonSteps(lesson) } : null;
+  /** Per-session bookkeeping that the UI does not need. */
+  private session: { startedAt: number; seed: number; mode: ScoreMode; focus?: Dim; dims: Array<Record<Dim, number> | null> } | null = null;
+
+  /** Legacy entry point: the guided run of the mission that owns this piece. */
+  startPractice(lessonId: string) {
+    const x = missionForPiece(lessonId);
+    if (x) this.startMission(x.id, 'guided');
   }
 
-  /** Opens a lesson: the current drawing is set aside (and still autosaved) until the lesson is left. */
-  startPractice(id: string) {
-    const lesson = lessonById(id);
-    if (!lesson || !this.sgl) return;
+  /** Opens one part of a mission. The current drawing is set aside (and still autosaved) until the session is left. */
+  startMission(id: string, part: Part, opts: { tier?: Tier } = {}) {
+    const x = missionById(id);
+    if (!x || !this.sgl || !isPlayable(x)) return;
+    const parts = partsOf(x);
+    if (!parts.includes(part)) part = parts[0];
+    const seed = (Date.now() % 1_000_000) | 0;
+    let steps: LessonStep[], tier: Tier, mode: ScoreMode, focus: Dim | undefined, subtitle: string;
+    if (part === 'trainer') {
+      const t = TRAINERS[x.trainer!];
+      steps = trainerReps(t, seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
+      tier = t.tier; mode = 'trainer'; focus = t.focus; subtitle = 'Trainer';
+    } else {
+      steps = lessonSteps(lessonById(x.piece!)!);
+      mode = part;
+      tier = opts.tier ?? (part === 'guided' ? 'full' : this.defaultPerformTier(id));
+      subtitle = part === 'guided' ? 'Guided' : 'Perform';
+    }
+    this.enterSession({ missionId: id, lessonId: x.piece ?? null, part, title: `${x.id} ${x.title}`, subtitle, steps, tier, tierLocked: part === 'perform' }, { seed, mode, focus });
+    this.toast(part === 'perform' ? `${x.title}: this one counts` : `${x.title}: ${steps[0]?.hint ?? 'trace the highlighted stroke'}`, { duration: 2800 });
+  }
+
+  /** The warm-up: the Han / Drawabox set, three to five minutes. */
+  startWarmup() {
+    if (!this.sgl) return;
+    const seed = (Date.now() % 1_000_000) | 0;
+    const steps = warmupReps(seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
+    this.enterSession({ missionId: null, lessonId: null, part: 'warmup', title: 'Warm-up', subtitle: `${steps.length} strokes`, steps, tier: 'light', tierLocked: false }, { seed, mode: 'warmup', focus: 'confidence' });
+    this.toast('Warm-up: confident pulls, accuracy second', { duration: 2500 });
+  }
+
+  /** Perform starts one tier below where the last guided run ended (never past dots by default). */
+  private defaultPerformTier(id: string): Tier {
+    const g = this.state.progress.missions[id]?.guided;
+    if (!g) return 'light';
+    return stepTier(g.tier, 1, 2);
+  }
+
+  private enterSession(init: Pick<PracticeState, 'missionId' | 'lessonId' | 'part' | 'title' | 'subtitle' | 'steps' | 'tier' | 'tierLocked'>, sess: { seed: number; mode: ScoreMode; focus?: Dim }) {
     if (this.live) this.cancelStroke(true);
     this.dismissWelcome();
+    if (this.state.practice) this.bankSessionTime();
     if (!this.practiceBackup) {
       this.practiceBackup = { strokes: this.strokes, redo: this.redoStack, settings: clone(this.settings), view: { ...this.view } };
     }
     this.strokes = [];
     this.redoStack = [];
-    this.emit({ practice: { lessonId: id, step: 0, results: [], status: 'active', guide: this.state.practice?.guide ?? true, feedback: null, streak: 0, summary: null } });
+    this.session = { startedAt: performance.now(), dims: [], ...sess };
+    this.emit({ practice: {
+      ...init, step: 0, results: [], tips: [], status: 'active', guide: this.state.practice?.guide ?? true,
+      feedback: null, streak: 0, misses: 0, loopOffer: false, loop: 0, note: null, reveal: null, pressureScored: true, summary: null,
+    } });
     this.frameLesson();
     this.syncHistory();
     this.practiceApplyBrush(0);
-    this.toast(`${lesson.title}: trace the glowing stroke`, { duration: 2500 });
+  }
+
+  /** Adds the open session's time to the progress record. */
+  private bankSessionTime() {
+    const s = this.session;
+    if (!s) return;
+    const secs = Math.round((performance.now() - s.startedAt) / 1000);
+    s.startedAt = performance.now();
+    if (secs > 0) { const progress = addSeconds(this.state.progress, secs); saveProgress(progress); this.emit({ progress }); }
   }
 
   /** Fits the lesson box in the viewport, leaving room for the step card at the top. */
@@ -791,10 +910,12 @@ export class Studio {
     this.repaintPaper();
   }
 
-  /** Leaves the lesson. `keep` keeps the traced drawing as the document instead of restoring the previous one. */
+  /** Leaves the session. `keep` keeps the traced drawing as the document instead of restoring the previous one. */
   exitPractice(keep = false) {
     if (!this.state.practice) return;
     if (this.live) this.cancelStroke(true);
+    this.bankSessionTime();
+    this.session = null;
     const b = this.practiceBackup;
     this.practiceBackup = null;
     this.emit({ practice: null });
@@ -815,17 +936,12 @@ export class Studio {
     this.saveNow();
   }
 
-  /** Starts the open lesson over. */
+  /** Starts the open session over (trainers get a fresh layout). */
   restartPractice() {
     const pr = this.state.practice;
     if (!pr) return;
-    if (this.live) this.cancelStroke(true);
-    this.strokes = [];
-    this.redoStack = [];
-    this.repaintPaper();
-    this.emit({ practice: { ...pr, step: 0, results: [], status: 'active', feedback: null, streak: 0, summary: null } });
-    this.syncHistory();
-    this.practiceApplyBrush(0);
+    if (pr.part === 'warmup') { this.startWarmup(); return; }
+    if (pr.missionId) { this.startMission(pr.missionId, pr.part, { tier: pr.tierLocked ? pr.tier : undefined }); return; }
   }
 
   setPracticeGuide(guide: boolean) {
@@ -833,10 +949,23 @@ export class Studio {
     if (pr) this.emit({ practice: { ...pr, guide } });
   }
 
+  /** Changes the assist tier by hand (not in Perform, where the tier is the difficulty). */
+  setPracticeTier(tier: Tier) {
+    const pr = this.state.practice;
+    if (!pr || pr.status !== 'active' || pr.tierLocked) return;
+    this.emit({ practice: { ...pr, tier, note: null } });
+  }
+
+  /** Repeats the current step three times without it counting, then reopens it. */
+  loopStep() {
+    const pr = this.state.practice;
+    if (!pr || pr.status !== 'active' || pr.part === 'perform') return;
+    this.emit({ practice: { ...pr, loop: 3, loopOffer: false, misses: 0, note: 'Loop: draw it three times, then the one that counts' } });
+  }
+
   /** Sets the brush, colour and size the reference stroke was made with. */
   private practiceApplyBrush(i: number) {
-    const ctx = this.practiceLesson();
-    const st = ctx?.steps[i];
+    const st = this.state.practice?.steps[i];
     if (!st) return;
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template);
     if (!t) return;
@@ -849,67 +978,161 @@ export class Studio {
     this.rebuild();
   }
 
-  /** Scores the stroke just committed against the current step and advances or rejects it. */
+  /** Scores the stroke just committed against the current step and advances, rejects or loops. */
   private practiceEvaluate(rec: StrokeRecord) {
-    const pr = this.state.practice, ctx = this.practiceLesson();
-    if (!pr || !ctx || pr.status !== 'active') return;
+    const pr = this.state.practice, sess = this.session;
+    if (!pr || !sess || pr.status !== 'active') return;
     if (rec.tool !== 'brush') { this.dropLastStroke(); this.syncHistory(); this.toast('Lessons are traced with the brush'); return; }
-    const st = ctx.steps[pr.step];
+    const st = pr.steps[pr.step];
     const tol = Math.max(10, stepWidth(st) * 0.6 + 4);
     if (rec.points.length < 2 || pathLength(rec.points) < tol) {
       this.dropLastStroke();
       this.syncHistory();
       return; // a tap: nothing to score
     }
-    const res = scoreTrace(rec.points, st.points, tol);
-    const accepted = res.score >= PASS_SCORE;
-    const feedback: PracticeFeedback = { step: pr.step, score: res.score, reversed: res.reversed, accepted, at: Date.now() };
+    const isPen = rec.input === 'pen';
+    let note = pr.note, pressureScored = pr.pressureScored;
+    if (!isPen && pressureScored) { pressureScored = false; note = 'Pressure isn’t scored for a finger or mouse'; }
+    const res = scoreStroke(rec.points, st.points, { tolerance: tol, mode: sess.mode, targetSpeed: st.speed ?? DEFAULT_SPEED, hasPressure: isPen, focus: sess.focus });
+    const drill = pr.part === 'trainer' || pr.part === 'warmup';
+    const pass = pr.part === 'perform' ? PERFORM_PASS_SCORE : PASS_SCORE;
+    // Drills accept every stroke (never correct a line); Perform gives three tries, the third counts.
+    const accepted = drill || res.score >= pass || (pr.part === 'perform' && pr.misses >= 2);
+    const feedback: PracticeFeedback = {
+      step: pr.step, score: res.score, reversed: res.reversed, accepted, at: Date.now(),
+      tip: res.tip, praise: res.tip ? null : praiseFor(res.score), dims: res.dims, band: res.band, looped: pr.loop > 0,
+    };
+    const reveal = pr.tier === 'blind' ? { step: pr.step, at: Date.now() } : null;
+    if (pr.loop > 0) {
+      // A rehearsal: scored, erased, counted down.
+      this.dropLastStroke();
+      const loop = pr.loop - 1;
+      this.emit({ practice: { ...pr, feedback, loop, reveal, pressureScored, note: loop === 0 ? 'Now the one that counts' : `Loop: ${loop} more` } });
+      this.syncHistory();
+      return;
+    }
     if (!accepted) {
       this.dropLastStroke();
-      this.emit({ practice: { ...pr, feedback, streak: 0 } });
+      const misses = pr.misses + 1;
+      let tier = pr.tier, loopOffer = pr.loopOffer;
+      if (misses >= 2 && pr.part !== 'perform') {
+        loopOffer = true;
+        if (!pr.tierLocked) { const up = stepTier(tier, -1); if (up !== tier) { tier = up; note = `Guide stepped up: ${TIER_LABEL[up].toLowerCase()}`; } }
+      }
+      this.emit({ practice: { ...pr, feedback, streak: 0, misses, tier, loopOffer, note, reveal, pressureScored } });
       this.syncHistory();
       return;
     }
-    this.advancePractice(res.score, feedback);
+    sess.dims[pr.step] = res.dims;
+    this.advancePractice(res.score, feedback, { reveal, note, pressureScored });
   }
 
-  /** Leaves the current step open and moves on. */
+  /** Leaves the current step open and moves on (not in Perform: there the third try counts). */
   skipStep() {
     const pr = this.state.practice;
-    if (pr?.status === 'active') this.advancePractice(null, null);
+    if (pr?.status === 'active' && pr.part !== 'perform') this.advancePractice(null, null, {});
   }
 
-  private advancePractice(score: number | null, feedback: PracticeFeedback | null) {
-    const pr = this.state.practice, ctx = this.practiceLesson();
-    if (!pr || !ctx) return;
-    const results = [...pr.results];
+  private advancePractice(score: number | null, feedback: PracticeFeedback | null, extra: { reveal?: PracticeState['reveal']; note?: string | null; pressureScored?: boolean }) {
+    const pr = this.state.practice, sess = this.session;
+    if (!pr || !sess) return;
+    const results = [...pr.results], tips = [...pr.tips];
     results[pr.step] = score;
+    tips[pr.step] = feedback?.tip ?? null;
+    if (score === null) sess.dims[pr.step] = null;
     const step = pr.step + 1;
     const streak = score !== null && score >= 80 ? pr.streak + 1 : 0;
-    if (step >= ctx.steps.length) {
-      const total = results.reduce<number>((a, r) => a + (r ?? 0), 0) / ctx.steps.length;
-      const finalScore = Math.round(total);
-      const stars = starsFor(finalScore);
-      const { progress, newBest } = recordRun(this.state.progress, ctx.lesson.id, finalScore, stars);
-      saveProgress(progress);
-      this.emit({ progress, practice: { ...pr, results, step, streak, feedback, status: 'complete', summary: { score: finalScore, stars, newBest } } });
-      this.syncHistory();
-      return;
+    let tier = pr.tier, note = extra.note ?? null;
+    // Two strokes in a row at 85 or better: the guide steps down (drills and guided runs stop at dots).
+    const prev = pr.results[pr.step - 1];
+    if (!pr.tierLocked && score !== null && score >= STEP_DOWN_SCORE && prev !== null && prev !== undefined && prev >= STEP_DOWN_SCORE) {
+      const down = stepTier(tier, 1, 2);
+      if (down !== tier) { tier = down; note = `Guide stepped down: ${TIER_LABEL[down].toLowerCase()}`; }
     }
-    this.emit({ practice: { ...pr, results, step, streak, feedback } });
+    const common = { results, tips, streak, feedback, tier, misses: 0, loopOffer: false, loop: 0, reveal: extra.reveal ?? null, pressureScored: extra.pressureScored ?? pr.pressureScored };
+    if (step >= pr.steps.length) { this.completePractice({ ...pr, ...common, step, note: null }); return; }
+    this.emit({ practice: { ...pr, ...common, step, note } });
     this.syncHistory();
     this.practiceApplyBrush(step);
   }
 
-  /** Undo inside a lesson: removes the last traced stroke and reopens its step. */
+  /** Ends the run: the summary, the critique data, and the progress record. */
+  private completePractice(pr: PracticeState) {
+    const sess = this.session!;
+    const n = pr.steps.length;
+    const skipped = pr.results.filter((r) => r === null).length;
+    const mean = Math.round(pr.results.reduce<number>((a, r) => a + (r ?? 0), 0) / n);
+    const clean = pr.results.filter((r) => r !== null && r >= 70).length;
+    const costly = pr.steps.map((_, i) => ({ step: i, score: pr.results[i] ?? 0, tip: pr.tips[i] ?? null }))
+      .sort((a, b) => a.score - b.score).slice(0, 3).filter((c) => c.score < 85);
+    // The dimension that cost the most across the run.
+    let worstDim: Dim | null = null, worstMean = 1;
+    for (const d of DIMS) {
+      const vals = sess.dims.map((x) => x?.[d]).filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
+      if (vals.length < Math.max(2, n / 3)) continue;
+      const m = vals.reduce((a, v) => a + v, 0) / vals.length;
+      if (m < worstMean) { worstMean = m; worstDim = d; }
+    }
+    const summary: PracticeSummary = { score: mean, stars: 0, newBest: false, clean, costly, worstDim: worstMean < 0.8 ? worstDim : null, worstText: worstMean < 0.8 && worstDim ? WORST_TEXT[worstDim] : null };
+    let progress = this.state.progress;
+    if (pr.part === 'trainer' && pr.missionId) progress = recordTrainer(progress, pr.missionId, mean, clean, n);
+    else if (pr.part === 'warmup') progress = recordWarmup(progress);
+    else if (pr.part === 'guided' && pr.missionId) progress = recordGuided(progress, pr.missionId, mean, pr.tier);
+    else if (pr.part === 'perform' && pr.missionId) {
+      const stars = starsFor(mean, skipped);
+      const first = progress.missions[pr.missionId]?.first;
+      const r = recordPerform(progress, pr.missionId, mean, stars, pr.tier, serializeRecords(this.strokes));
+      progress = r.progress;
+      summary.stars = stars; summary.newBest = r.newBest;
+      if (first) { summary.firstScore = first.score; this.queueThenVsNow(pr.missionId, first.strokes, this.strokes); }
+    }
+    this.bankSessionTime();
+    saveProgress(progress);
+    this.emit({ progress, practice: { ...pr, status: 'complete', summary } });
+    this.syncHistory();
+  }
+
+  /** Engine-rendered thumbnails of the first Perform and today's, for the critique. */
+  private queueThenVsNow(missionId: string, firstSaved: unknown[], today: StrokeRecord[]) {
+    const first = deserializeRecords(firstSaved);
+    const W = 320, H = 240;
+    const zoom = Math.min(W / (LESSON_BOX.w + 40), H / (LESSON_BOX.h + 40));
+    const view: View = { zoom, x: (W - LESSON_BOX.w * zoom) / 2, y: (H - LESSON_BOX.h * zoom) / 2 };
+    const render = (records: StrokeRecord[]) => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      let url: string | null = null;
+      this.renderOffscreen(c, (clearPaper) => {
+        clearPaper();
+        for (const rec of visibleRecords(records)) if (rec.tool === 'brush') this.stampRecord(rec, W, H, 1, view);
+        url = c.toDataURL('image/png');
+      });
+      return url;
+    };
+    const run = () => {
+      if (this.live) { requestAnimationFrame(run); return; }
+      const pr = this.state.practice;
+      if (!pr || pr.status !== 'complete' || pr.missionId !== missionId || !pr.summary) return;
+      try {
+        const firstThumb = render(first), todayThumb = render(today);
+        this.emit({ practice: { ...pr, summary: { ...pr.summary, firstThumb, todayThumb } } });
+      } catch (err) {
+        console.warn('[studio] then-vs-now render failed', err);
+      }
+    };
+    requestAnimationFrame(run);
+  }
+
+  /** Undo inside a session: removes the last traced stroke and reopens its step. */
   private practiceBack() {
     const pr = this.state.practice;
     if (!pr || pr.status !== 'active') return;
     if (pr.step === 0) { this.toast('Nothing to undo'); return; }
     const prev = pr.step - 1;
-    const results = pr.results.slice(0, prev);
+    const results = pr.results.slice(0, prev), tips = pr.tips.slice(0, prev);
     if (pr.results[prev] !== null && this.strokes.length) this.dropLastStroke();
-    this.emit({ practice: { ...pr, step: prev, results, feedback: null, streak: 0 } });
+    if (this.session) this.session.dims.length = prev;
+    this.emit({ practice: { ...pr, step: prev, results, tips, feedback: null, streak: 0, misses: 0, loopOffer: false, loop: 0, note: null } });
     this.syncHistory();
     this.practiceApplyBrush(prev);
   }
@@ -1431,6 +1654,7 @@ export class Studio {
     const w = this.toWorld((e.clientX - rect.left) * kx, (e.clientY - rect.top) * ky);
     // Quantise at capture so autosaved replays are identical to the live stroke.
     const pt: Point = { x: round(w.x, 100), y: round(w.y, 100), p: round(p, 1000) };
+    if (this.live && e.pointerId === this.live.id) pt.t = Math.max(0, Math.round(e.timeStamp - this.live.t0));
     const tilt = eventTilt(e);
     if (tilt) { pt.alt = tilt.alt; pt.az = tilt.az; pt.tw = tilt.tw; }
     return pt;
@@ -1572,12 +1796,13 @@ export class Studio {
     const rect = this.canvas!.getBoundingClientRect();
     const input: InputKind = e.pointerType === 'pen' ? 'pen' : e.pointerType === 'touch' ? 'touch' : 'mouse';
     const first = this.pointFromEvent(e, rect);
+    first.t = 0;
     if (this.predictCanvas) this.clearPredicted();
     this.queueHud({ filtered: null });
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
     if (rec.tool === 'brush') rec.zoom = this.view.zoom;
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], t0: e.timeStamp, cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
     this.frameLog.length = 0; this.lastPreviewAt = 0;
     this.emit({ drawing: true });
     this.updateHud(e);
@@ -1630,6 +1855,7 @@ export class Studio {
         // next distance check stays where a point was last recorded.
         if (pts.length > 1) { last.x = pt.x; last.y = pt.y; }
         last.p = Math.max(last.p, pt.p);
+        if (pt.t !== undefined) last.t = pt.t;
         if (pt.alt !== undefined) { last.alt = pt.alt; last.az = pt.az; last.tw = pt.tw; }
         continue;
       }
@@ -2250,11 +2476,17 @@ export class Studio {
       segments: (rec: BrushRecord) => strokeSegments(rec),
       practice: {
         start: (id: string) => this.startPractice(id), exit: (keep?: boolean) => this.exitPractice(keep),
+        mission: (id: string, part: Part, tier?: Tier) => this.startMission(id, part, { tier }), warmup: () => this.startWarmup(),
         skip: () => this.skipStep(), restart: () => this.restartPractice(), guide: (on: boolean) => this.setPracticeGuide(on),
+        tier: (t: Tier) => this.setPracticeTier(t), loop: () => this.loopStep(),
         previews: () => this.ensureLessonPreviews(),
         lessons: LESSONS.map((l) => l.id),
-        steps: (id: string) => lessonSteps(lessonById(id)!).map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points })),
+        missions: MISSIONS.map((x) => x.id),
+        steps: (id: string) => lessonSteps(lessonById(id)!).map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed })),
+        current: () => this.state.practice?.steps.map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed })) ?? null,
         score: (user: Point[], ref: Point[], tol: number) => scoreTrace(user, ref, tol),
+        scoreFull: (user: Point[], ref: Point[], opts: Parameters<typeof scoreStroke>[2]) => scoreStroke(user, ref, opts),
+        progress: () => this.state.progress,
       },
       // low-level primitives for determinism experiments
       gl: {

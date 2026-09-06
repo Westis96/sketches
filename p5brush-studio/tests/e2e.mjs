@@ -284,67 +284,162 @@ try {
   const sketch = await studio((s) => s.sketchCode());
   check('sketch export contains brush.add and strokes', /brush\.add\(/.test(sketch) && (sketch.match(/beginStroke/g) || []).length === 2);
 
-  // --- Practice (tracing lessons) --------------------------------------------
-  const freeBefore = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource }));
-  await studio((s) => s.practice.start('waves'));
-  const lessonSteps = await studio((s) => s.practice.steps('waves'));
-  let pr = await studio((s) => s.state.practice);
-  check('lesson opens on an empty canvas at step 1', pr && pr.step === 0 && pr.status === 'active' && (await studio((s) => s.history().length)) === 0);
-  const brush0 = await studio((s) => ({ size: s.state.settings.size, color: s.state.settings.color }));
-  check('each step sets the brush, size and colour', brush0.size === lessonSteps[0].size && brush0.color === lessonSteps[0].color, JSON.stringify(brush0));
-  check('guide shows the current stroke and the remaining ghosts',
-    (await page.locator('[data-guide=current]').count()) === 1 && (await page.locator('[data-guide=ghost]').count()) === lessonSteps.length - 1);
+  // --- Practice: missions (trainer → guided → perform) ------------------------
+  // Timestamped trace of the current step's reference at its target speed, with a little wobble.
+  const traceStep = async (i, { jitter = 1.2, speedMul = 1, input = 'pen', fraction = 1 } = {}) => {
+    const st = (await studio((s) => s.practice.current()))[i];
+    const v = (st.speed || 0.45) * speedMul;
+    let t = 0; const pts = [];
+    const n = Math.max(2, Math.floor(st.points.length * fraction));
+    for (let k = 0; k < n; k++) {
+      const p = st.points[k];
+      if (k > 0) { const q = st.points[k - 1]; t += Math.hypot(p.x - q.x, p.y - q.y) / v; }
+      pts.push({ x: p.x + Math.sin(k * 1.7 + i) * jitter, y: p.y + Math.cos(k * 1.3 + i) * jitter, p: p.p, t: Math.round(t) });
+    }
+    await studio((s, a) => s.commit(a.pts, { input: a.input }), { pts, input });
+    return studio((s) => s.state.practice);
+  };
 
-  // Step 1 traced with real pointer events along the reference.
-  const lv = await studio((s) => s.view());
-  const toScreen = (p) => [p.x * lv.zoom + lv.x, p.y * lv.zoom + lv.y];
-  const ref0 = lessonSteps[0].points;
-  await page.mouse.move(...toScreen(ref0[0]));
-  await page.mouse.down();
-  for (let i = 1; i < ref0.length; i += 2) { const [x, y] = toScreen(ref0[i]); await page.mouse.move(x + Math.sin(i) * 2, y + Math.cos(i) * 2); }
-  await page.mouse.move(...toScreen(ref0[ref0.length - 1]));
+  // Scoring v2: six dimensions, bandwidth tips.
+  const refLine = Array.from({ length: 20 }, (_, k) => ({ x: 100 + k * 20, y: 300, p: 0.6 }));
+  const perfect = refLine.map((q, k) => ({ ...q, t: k * 45 }));
+  const slow = refLine.map((q, k) => ({ ...q, t: k * 300 }));
+  const lightMiddle = refLine.map((q, k) => ({ ...q, p: k > 6 && k < 13 ? 0.2 : 0.6, t: k * 45 }));
+  const bellRef = refLine.map((q, k) => ({ ...q, p: 0.3 + 0.5 * Math.sin((k / 19) * Math.PI) }));
+  const sPerfect = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45 }), { u: perfect, r: refLine });
+  const sSlow = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45 }), { u: slow, r: refLine });
+  const sLight = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45, hasPressure: true }), { u: lightMiddle, r: bellRef });
+  const sFinger = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45, hasPressure: false }), { u: lightMiddle, r: bellRef });
+  const sNoTime = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'guided' }), { u: refLine, r: refLine });
+  check('a perfect timed stroke is in band on every dimension', sPerfect.score >= 95 && sPerfect.tip === null && Object.values(sPerfect.band).every((b) => b === 'ok'), JSON.stringify(sPerfect.band));
+  check('a slow stroke is told to go faster', sSlow.tip?.dim === 'speed' && sSlow.band.speed === 'low' && sSlow.score < sPerfect.score, JSON.stringify(sSlow.tip));
+  check('a light middle is told to press harder in the middle', sLight.tip?.dim === 'pressure' && /harder at the middle/.test(sLight.tip.text), JSON.stringify(sLight.tip));
+  check('pressure is not scored for a finger', sFinger.band.pressure === 'na' && sFinger.tip === null, JSON.stringify(sFinger.band));
+  check('without timestamps speed drops out and shape still scores', sNoTime.band.speed === 'na' && sNoTime.dims.shape === 1 && sNoTime.score >= 90, JSON.stringify(sNoTime));
+
+  // Timestamps are captured from real pointer input and survive a save.
+  await studio((s) => s.clear());
+  await page.mouse.move(200, 300); await page.mouse.down();
+  for (let i = 1; i <= 12; i++) { await page.mouse.move(200 + i * 20, 300 + Math.sin(i) * 3); await page.waitForTimeout(12); }
   await page.mouse.up();
   await page.waitForTimeout(150);
-  pr = await studio((s) => s.state.practice);
-  check('a clean trace scores high and advances', pr.step === 1 && pr.feedback?.accepted && pr.feedback.score >= 90, `score ${pr.feedback?.score}`);
+  const timed = await studio((s) => { const r = s.history().at(-1); return { first: r.points[0].t, last: r.points.at(-1).t, all: r.points.every((p) => typeof p.t === 'number') }; });
+  await studio((s) => s.saveNow());
+  const savedTm = await page.evaluate((key) => { const d = JSON.parse(localStorage.getItem(key)); const r = d.strokes.at(-1); return Array.isArray(r.tm) && r.tm.length === r.pts.length / 3 && r.tm[0] === 0; }, await studio((s) => s.saveKey));
+  check('points carry milliseconds since the pen landed and the save keeps them', timed.first === 0 && timed.last > 50 && timed.all && savedTm, JSON.stringify(timed));
 
-  await studio((s, pts) => s.commit(pts), [...lessonSteps[1].points].reverse());
-  pr = await studio((s) => s.state.practice);
-  check('a reversed stroke is accepted but flagged and penalised', pr.step === 2 && pr.feedback.reversed && pr.feedback.score >= 60 && pr.feedback.score < 95, `score ${pr.feedback.score}`);
+  const freeBefore = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource }));
 
+  // The curriculum: all missions declared, Level 0–2 playable, the rest visible.
+  const missions = await studio((s) => s.practice.missions);
+  check('the path declares 27 missions across 7 levels', missions.length === 27 && missions[0] === '0.1' && missions.at(-1) === '6.4', missions.join(','));
+
+  // Trainer: generated reps, every stroke accepted, feedback words.
+  await studio((s) => s.practice.mission('1.1', 'trainer'));
+  let pr = await studio((s) => s.state.practice);
+  check('a trainer opens with generated reps at the dots tier', pr.part === 'trainer' && pr.steps.length === 10 && pr.tier === 'dots' && pr.step === 0, JSON.stringify({ part: pr.part, n: pr.steps.length, tier: pr.tier }));
+  await page.waitForTimeout(100);
+  check('the mission shows in the URL', (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer', await page.evaluate(() => location.hash));
+  pr = await traceStep(0, { jitter: 14 });
+  check('a drill accepts a rough stroke and says what to fix', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip !== null, JSON.stringify(pr.feedback.tip));
+  for (let i = 1; i < 10; i++) pr = await traceStep(i);
+  check('finishing the drill summarises clean reps and records it', pr.status === 'complete' && pr.summary.clean >= 8 && (await studio((s) => s.practice.progress())).missions['1.1'].trainer.plays === 1, JSON.stringify(pr.summary));
+
+  // Guided: full guide, bandwidth pill, pressure note for a mouse, auto-adjust.
+  await studio((s) => s.practice.mission('1.1', 'guided'));
+  pr = await studio((s) => s.state.practice);
+  const nSteps = pr.steps.length;
+  check('a guided run opens the piece with the full guide', pr.part === 'guided' && pr.lessonId === 'fence' && pr.tier === 'full' && (await page.locator('[data-guide=current]').count()) === 1 && (await page.locator('[data-guide=ghost]').count()) === nSteps - 1);
+  pr = await traceStep(0, { fraction: 0.5 });
+  check('a half-length stroke is accepted with a "too short" instruction', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip?.dim === 'length', JSON.stringify(pr.feedback.tip));
+  pr = await traceStep(1, { input: 'mouse' });
+  check('a mouse stroke turns pressure scoring off with a note', pr.pressureScored === false && /Pressure/.test(pr.note || ''), pr.note);
+  pr = await traceStep(2);
+  check('two clean strokes in a row step the guide down', pr.tier === 'light' && /stepped down/.test(pr.note || ''), JSON.stringify({ tier: pr.tier, note: pr.note }));
   const nBefore = await studio((s) => s.history().length);
   await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
   pr = await studio((s) => s.state.practice);
-  check('a stroke far from the reference is rejected and removed', pr.step === 2 && pr.feedback.accepted === false && (await studio((s) => s.history().length)) === nBefore, `score ${pr.feedback.score}`);
-
+  check('two misses step the guide back up, remove the strokes and offer a loop', pr.step === 3 && pr.misses === 2 && pr.loopOffer && pr.tier === 'full' && (await studio((s) => s.history().length)) === nBefore, JSON.stringify({ misses: pr.misses, tier: pr.tier, loopOffer: pr.loopOffer }));
+  await studio((s) => s.practice.loop());
+  pr = await traceStep(3);
+  check('a loop rehearsal is scored and erased', pr.step === 3 && pr.loop === 2 && pr.feedback.looped && (await studio((s) => s.history().length)) === nBefore, JSON.stringify({ loop: pr.loop, step: pr.step }));
+  pr = await traceStep(3); pr = await traceStep(3);
+  pr = await traceStep(3);
+  check('after the loop the real attempt counts', pr.step === 4 && pr.loop === 0, JSON.stringify({ loop: pr.loop, step: pr.step }));
   await studio((s) => s.practice.skip());
   const afterSkip = await studio((s) => s.state.practice);
   await studio((s) => s.undo());
   pr = await studio((s) => s.state.practice);
-  check('skip counts as zero and undo reopens the step', afterSkip.step === 3 && afterSkip.results[2] === null && pr.step === 2 && pr.results.length === 2);
-
-  for (let i = 2; i < lessonSteps.length; i++) await studio((s, pts) => s.commit(pts), lessonSteps[i].points);
-  pr = await studio((s) => s.state.practice);
-  const savedProgress = await page.evaluate(() => JSON.parse(localStorage.getItem('p5brush-studio:practice:v1') || 'null'));
-  check('finishing every step completes the lesson with stars and a saved best',
-    pr.status === 'complete' && pr.summary?.stars === 3 && pr.summary.newBest && savedProgress?.waves?.best === pr.summary.score, JSON.stringify(pr.summary));
-  check('finished lesson shows the whole reference for comparing', (await page.locator('[data-guide=ghost]').count()) === lessonSteps.length);
+  check('skip counts as zero and undo reopens the step', afterSkip.step === 5 && afterSkip.results[4] === null && pr.step === 4 && pr.results.length === 4);
+  for (let i = 4; i < nSteps; i++) pr = await traceStep(i);
+  check('finishing a guided run records a best but no stars', pr.status === 'complete' && pr.summary.stars === 0 && (await studio((s) => s.practice.progress())).missions['1.1'].guided.best === pr.summary.score, JSON.stringify(pr.summary));
   await studio((s) => s.saveNow()); // the autosave is debounced; flush it before reading
   const savedDoc = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).strokes.length, await studio((s) => s.saveKey));
-  check('autosave keeps the free drawing while a lesson is open', savedDoc === freeBefore.n, `${savedDoc} vs ${freeBefore.n}`);
+  check('autosave keeps the free drawing while a session is open', savedDoc === freeBefore.n, `${savedDoc} vs ${freeBefore.n}`);
 
+  // Perform: fixed tier, three tries, stars, critique, then vs now.
+  await studio((s) => s.practice.mission('1.1', 'perform', 'dots'));
+  pr = await studio((s) => s.state.practice);
+  check('a perform opens at the chosen tier and locks it', pr.part === 'perform' && pr.tier === 'dots' && pr.tierLocked && (await page.locator('[data-guide=ghost]').count()) === 0);
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('perform rejects a bad stroke twice without loops or tier changes', pr.step === 0 && pr.misses === 2 && !pr.loopOffer && pr.tier === 'dots');
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('the third try counts even when it is poor', pr.step === 1 && pr.results[0] !== null && pr.results[0] < 50);
+  for (let i = 1; i < nSteps; i++) pr = await traceStep(i, { jitter: 5, speedMul: 0.6 });
+  const first = pr.summary;
+  check('a rough perform ends with a critique: costly strokes and the worst dimension', pr.status === 'complete' && first.costly.length === 3 && first.costly[0].step === 0 && first.newBest && (await page.locator('[data-guide=costly]').count()) === 3, JSON.stringify(first));
+  await studio((s) => s.practice.restart());
+  for (let i = 0; i < nSteps; i++) pr = await traceStep(i);
+  await page.waitForTimeout(600);
+  pr = await studio((s) => s.state.practice);
+  const prog = await studio((s) => s.practice.progress());
+  check('a clean perform earns three stars and shows then vs now',
+    pr.summary.stars === 3 && pr.summary.newBest && pr.summary.firstScore === first.score && !!pr.summary.firstThumb && !!pr.summary.todayThumb && prog.missions['1.1'].perform.stars === 3 && prog.missions['1.1'].perform.byTier.dots === pr.summary.score && prog.missions['1.1'].first.score === first.score,
+    JSON.stringify({ s: pr.summary.score, stars: pr.summary.stars, first: pr.summary.firstScore, thumbs: !!pr.summary.firstThumb }));
+  check('the result card lists the then-vs-now thumbnails', (await page.locator('[data-testid=then-vs-now] img').count()) === 2);
+
+  // Leaving restores the drawing, brush and view.
   await studio((s) => s.practice.exit(false));
   const freeAfter = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource, practice: s.state.practice }));
-  check('leaving a lesson restores the drawing, brush and view',
+  check('leaving a session restores the drawing, brush and view',
     freeAfter.practice === null && freeAfter.n === freeBefore.n && freeAfter.size === freeBefore.size && freeAfter.tip === freeBefore.tip && Math.abs(freeAfter.zoom - freeBefore.zoom) < 1e-9,
     JSON.stringify({ freeBefore, freeAfter: { ...freeAfter, practice: undefined } }));
 
+  // Legacy entry and v1 migration.
+  await page.evaluate(() => { localStorage.setItem('p5brush-studio:practice:v1', JSON.stringify({ leaf: { best: 77, stars: 2, plays: 3 } })); localStorage.removeItem('p5brush-studio:practice:v2'); });
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews);
+  const migrated = await studio((s) => s.practice.progress());
+  check('version 1 bests migrate onto the mission that owns the piece', migrated.v === 2 && migrated.missions['3.5']?.perform?.best === 77 && migrated.missions['3.5'].perform.stars === 2 && migrated.missions['3.5'].perform.tier === 'full', JSON.stringify(migrated.missions));
   await studio((s) => s.practice.start('leaf'));
-  const leafSteps = await studio((s) => s.practice.steps('leaf'));
-  await studio((s, pts) => s.commit(pts), leafSteps[0].points);
+  pr = await studio((s) => s.state.practice);
+  check('the legacy start opens the guided run of the piece', pr && pr.missionId === '3.5' && pr.part === 'guided');
+  await traceStep(0);
   await studio((s) => s.practice.exit(true));
   const kept = await studio((s) => ({ n: s.history().length, practice: s.state.practice }));
   check('keeping the traced drawing replaces the document', kept.practice === null && kept.n === 1);
+
+  // Routes: the Path and a mission sheet open from the URL; Escape and back close them.
+  await page.goto(page.url().split('#')[0] + '#/learn/1.2');
+  await page.waitForSelector('[data-testid="mission-sheet"]');
+  check('a mission URL opens the path and the mission sheet', (await page.locator('[data-testid="path"]').count()) === 1 && (await page.locator('[data-testid="mission-sheet"]').count()) === 1);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('[data-testid="mission-sheet"]', { state: 'detached', timeout: 3000 }).catch(() => {});
+  check('Escape closes the top sheet and updates the URL', (await page.evaluate(() => location.hash)) === '#/learn' && (await page.locator('[data-testid="mission-sheet"]').count()) === 0);
+  await page.click('[data-testid="today-warmup"]');
+  await page.waitForTimeout(400);
+  pr = await studio((s) => s.state.practice);
+  check('the warm-up starts from Today', (await page.evaluate(() => location.hash)) === '#/warmup' && pr?.part === 'warmup' && pr.steps.length === 24, JSON.stringify({ part: pr?.part, n: pr?.steps.length }));
+  await page.goBack();
+  await page.waitForTimeout(400);
+  check('the back button leaves the session', (await studio((s) => s.state.practice)) === null && (await page.evaluate(() => location.hash)) === '#/learn');
+  await page.goto(page.url().split('#')[0] + '#/');
+  await page.waitForTimeout(300);
+  await studio((s) => s.clear());
 
   // Render self-test: all four ways of drawing the same line agree on this renderer.
   // (The self-test measures the middle of the viewport, so this stroke stays clear of it.)

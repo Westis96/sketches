@@ -189,6 +189,9 @@
 @keyframes guide-start { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .guide-start { animation: guide-start 1.2s ease-in-out infinite; }
 @keyframes guide-pulse-bar { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* Blind tier: the reference appears over the stroke once the pen lifts, then goes. */
+@keyframes guide-reveal { 0% { opacity: 0; } 15% { opacity: 0.95; } 70% { opacity: 0.95; } 100% { opacity: 0; } }
+.guide-reveal { animation: guide-reveal 1.2s var(--ease-out) both; }
 .guide-pulse-bar { animation: guide-pulse-bar 1.2s ease-in-out infinite; }
 /* Score badge after each traced stroke: a new element per stroke, so the keyframe
    restarting is the point. Pops in, holds, fades out on its own. */
@@ -218,6 +221,7 @@
   /* Fewer and gentler, not none: opacity stays (it carries meaning), movement goes. */
   .guide-flow { animation: none; }
   .star-pop, .enter-up { animation-name: fade-in; }
+  [data-guide='speed-ghost'] { display: none; }
   .feedback-pop { animation-name: fade-hold; }
   .press:active:not(:disabled) { transform: none; }
 }

@@ -29,7 +29,12 @@ export type Tool = 'brush' | 'eraser';
 export type PaperName = 'hotpress' | 'washi' | 'bristol';
 
 /** A path point; `alt`/`az`/`tw` (whole degrees) are present on pen samples: altitude, azimuth, barrel twist. */
-export interface Point { x: number; y: number; p: number; alt?: number; az?: number; tw?: number }
+export interface Point {
+  x: number; y: number; p: number;
+  alt?: number; az?: number; tw?: number;
+  /** Milliseconds since the stroke began (whole ms); absent on synthetic or legacy points. Used for speed and confidence scoring only. */
+  t?: number;
+}
 
 /** Copies a point's extra fields (tilt) onto a new position. */
 const at = (src: Point, x: number, y: number, p: number): Point => {
@@ -107,17 +112,24 @@ export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
 export const SAVE_VERSION = 1;
 
 type SavedRecord =
-  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number; tl?: number[]; fx?: PencilFx; fl?: FilterParams }
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number; tl?: number[]; fx?: PencilFx; fl?: FilterParams; tm?: number[] }
   | { t: 'e'; size: number; pts: number[] }
   | { t: 'c' };
 
 const packPoints = (pts: Point[]) => pts.flatMap((p) => [p.x, p.y, p.p]);
 /** Tilt triples (altitude, azimuth, twist) per point, or undefined when no point carries tilt. */
 const packTilt = (pts: Point[]) => (pts.some((p) => p.alt !== undefined) ? pts.flatMap((p) => [p.alt ?? 90, p.az ?? 0, p.tw ?? 0]) : undefined);
-const unpackPoints = (a: number[], tilt?: number[]): Point[] => {
+/** Timestamps as deltas between consecutive points (ms), or undefined when no point carries time. */
+const packTime = (pts: Point[]) => {
+  if (!pts.some((p) => p.t !== undefined)) return undefined;
+  let prev = 0;
+  return pts.map((p) => { const t = p.t ?? prev; const d = t - prev; prev = t; return d; });
+};
+const unpackPoints = (a: number[], tilt?: number[], time?: number[]): Point[] => {
   const out: Point[] = [];
   for (let i = 0; i + 2 < a.length; i += 3) out.push({ x: a[i], y: a[i + 1], p: a[i + 2] });
   if (tilt && tilt.length === out.length * 3) out.forEach((p, i) => { p.alt = tilt[i * 3]; p.az = tilt[i * 3 + 1]; p.tw = tilt[i * 3 + 2]; });
+  if (time && time.length === out.length) { let acc = 0; out.forEach((p, i) => { acc += time[i]; p.t = acc; }); }
   return out;
 };
 const isFx = (fx: unknown): fx is PencilFx => {
@@ -137,6 +149,8 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
     if (tl) saved.tl = tl;
     if (r.fx) saved.fx = r.fx;
     if (r.filt) saved.fl = r.filt;
+    const tm = packTime(r.points);
+    if (tm) saved.tm = tm;
     return saved;
   });
 }
@@ -148,7 +162,7 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
     if (!r || typeof r !== 'object') continue;
     if (r.t === 'c') { out.push({ tool: 'clear' }); continue; }
     if (!Array.isArray(r.pts) || r.pts.length < 3) continue;
-    const points = unpackPoints(r.pts, r.t === 'b' && Array.isArray(r.tl) ? r.tl : undefined);
+    const points = unpackPoints(r.pts, r.t === 'b' && Array.isArray(r.tl) ? r.tl : undefined, r.t === 'b' && Array.isArray(r.tm) ? r.tm : undefined);
     if (r.t === 'e') { out.push({ tool: 'eraser', size: +r.size || 24, points }); continue; }
     if (r.t === 'b' && r.spec && typeof r.tip === 'string') {
       const rec: BrushRecord = { tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points };

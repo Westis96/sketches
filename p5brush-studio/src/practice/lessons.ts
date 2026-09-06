@@ -16,6 +16,8 @@ export interface LessonStep {
   points: Point[];
   /** Coaching line for the step card; falls back to the previous step's hint. */
   hint?: string;
+  /** Target speed in lesson units per ms (defaults to the scorer's unhurried pull). */
+  speed?: number;
 }
 
 export interface Lesson {
@@ -159,10 +161,100 @@ function buildBloom(): LessonStep[] {
   return out;
 }
 
+// --- Fence (1.1 Dot to dot) ------------------------------------------------------
+function buildFence(): LessonStep[] {
+  const out: LessonStep[] = [];
+  for (let i = 0; i < 6; i++) {
+    const x = 120 + i * 112;
+    out.push({ ...step('liner', '#3a3128', 1.3, spline([[x, 175], [x + 1, 320], [x, 470]], 10, flat(0.62)), i === 0 ? 'Posts: one pull from top to bottom. Ghost it in the air first.' : undefined), speed: 0.7 });
+  }
+  out.push({ ...step('liner', '#3a3128', 1.3, spline([[80, 250], [400, 246], [720, 250]], 12, flat(0.62)), 'Rails: left to right, the same speed all the way across.'), speed: 0.75 });
+  out.push({ ...step('liner', '#3a3128', 1.3, spline([[80, 400], [400, 404], [720, 400]], 12, flat(0.62))), speed: 0.75 });
+  return out;
+}
+
+// --- Mountains (1.3 Corners) -----------------------------------------------------
+function buildMountains(): LessonStep[] {
+  const ridge = (pts: XY[], color: string, size: number, hint?: string): LessonStep => ({ ...step('graphite', color, size, spline(pts, 8, flat(0.65)), hint), speed: 0.5 });
+  const out: LessonStep[] = [
+    ridge([[60, 330], [170, 210], [260, 290], [380, 150], [500, 280], [610, 190], [740, 320]], '#8a8378', 0.9, 'The far ridge: stop at every peak, then change direction. Corners stay sharp.'),
+    ridge([[60, 420], [200, 300], [320, 380], [450, 250], [580, 370], [740, 410]], '#5e5850', 1.05, 'The middle ridge, a little darker.'),
+    ridge([[60, 500], [240, 400], [400, 470], [560, 380], [740, 490]], '#3b3630', 1.2, 'The near ridge, darkest and heaviest.'),
+    { ...step('graphite', '#3b3630', 1.0, spline([[60, 540], [400, 542], [740, 540]], 12, flat(0.55)), 'The ground: one straight pull.'), speed: 0.7 },
+  ];
+  // snow: short ticks on the two tallest peaks
+  for (const [x, y] of [[380, 150], [450, 250]] as XY[]) {
+    out.push({ ...step('graphite', '#8a8378', 0.8, spline([[x - 22, y + 26], [x - 8, y + 18], [x + 8, y + 18], [x + 22, y + 26]], 6, flat(0.5)), x === 380 ? 'Snow lines: a small zigzag just under the peak.' : undefined), speed: 0.5 });
+  }
+  return out;
+}
+
+// --- Kite strings (1.4 Start at the dot) ------------------------------------------
+function buildKites(): LessonStep[] {
+  const out: LessonStep[] = [];
+  const hand: XY = [400, 560];
+  const kites: Array<[number, number, number]> = [[190, 180, 0.15], [420, 120, -0.1], [620, 220, 0.3]];
+  kites.forEach(([cx, cy, tilt], i) => {
+    const R = frame(cx, cy, tilt);
+    const w = 52, h = 70;
+    // The diamond starts at the top and is drawn clockwise: the arrow says which way.
+    out.push({ ...step('liner', ['#c9407c', '#2c3e8f', '#d98b1f'][i], 1.2, spline([R(0, -h), R(w, 0), R(0, h), R(-w, 0), R(0, -h)], 10, flat(0.6)), i === 0 ? 'The kite: start at the dot and go the way the arrow points, all the way round.' : undefined), speed: 0.5 });
+    const [bx, by] = R(0, h);
+    out.push({ ...step('liner', '#3a3128', 0.9, spline([[bx, by], [(bx + hand[0]) / 2 + (i - 1) * 40, (by + hand[1]) / 2 + 30], hand], 14, flat(0.5)), i === 0 ? 'The string: from the kite down to the hand, not the other way.' : undefined), speed: 0.6 });
+  });
+  out.push({ ...step('liner', '#3a3128', 1.2, spline([[380, 560], [400, 548], [420, 560]], 6, flat(0.6)), 'The hand: a small cup at the bottom.'), speed: 0.45 });
+  return out;
+}
+
+// --- Grass (2.1 Taper out) ----------------------------------------------------------
+function buildGrass(): LessonStep[] {
+  const out: LessonStep[] = [];
+  const blades: Array<[number, number, number]> = [[90, 190, -26], [150, 150, 12], [215, 210, -8], [280, 130, 24], [340, 175, -18], [405, 145, 6], [470, 200, -28], [530, 120, 16], [590, 180, -4], [650, 140, 22], [705, 195, -14], [740, 160, 8]];
+  blades.forEach(([x, h, lean], i) => {
+    out.push({ ...step('bristle', i % 3 === 0 ? '#3f6b3a' : i % 3 === 1 ? '#4f8a48' : '#2f5a33', 1.0,
+      spline([[x, 520], [x + lean * 0.35, 520 - h * 0.5], [x + lean, 520 - h]], 12, taperOut),
+      i === 0 ? 'Blades: press at the root and lift as you flick up. The tip should vanish.' : undefined), speed: 0.65 });
+  });
+  out.push({ ...step('bristle', '#2f5a33', 1.2, spline([[60, 524], [400, 520], [740, 524]], 14, flat(0.6)), 'The ground: a steady line to sit them on.'), speed: 0.6 });
+  return out;
+}
+
+// --- Rain (2.2 Swell) -----------------------------------------------------------------
+function buildRain(): LessonStep[] {
+  const out: LessonStep[] = [];
+  const drops: XY[] = [[120, 110], [250, 90], [380, 130], [510, 100], [640, 120], [180, 260], [320, 240], [460, 280], [600, 250], [700, 290]];
+  drops.forEach(([x, y], i) => {
+    out.push({ ...step('nib', '#2c3e8f', 0.6, spline([[x, y], [x - 14, y + 60], [x - 28, y + 120]], 10, bell), i === 0 ? 'A drop: light in, heavy in the middle, light out. One motion.' : undefined), speed: 0.55 });
+  });
+  out.push({ ...step('nib', '#2c3e8f', 0.6, spline([[140, 470], [300, 452], [500, 456], [660, 470]], 14, bell), 'The puddle edge: the same swell, stretched long.'), speed: 0.45 });
+  out.push({ ...step('nib', '#2c3e8f', 0.6, spline([[200, 500], [400, 490], [600, 500]], 12, bell)), speed: 0.45 });
+  return out;
+}
+
+// --- Reeds (2.4 Fade and lift) ----------------------------------------------------------
+function buildReeds(): LessonStep[] {
+  const out: LessonStep[] = [];
+  const stems: Array<[number, number, number]> = [[170, 130, -12], [280, 90, 10], [400, 150, -6], [520, 100, 14], [640, 140, -10]];
+  stems.forEach(([x, top, sway], i) => {
+    out.push({ ...step('bristle', '#3f6b3a', 1.3, spline([[x, 560], [x - sway, 380], [x + sway * 1.4, top]], 16, taperOut), i === 0 ? 'A stem: firm at the water, fading to nothing at the tip.' : undefined), speed: 0.5 });
+  });
+  for (const [x, top, sway] of [stems[1], stems[3], stems[4]]) {
+    out.push({ ...step('nib', '#5a4630', 0.7, spline([[x + sway * 1.4, top + 8], [x + sway * 1.4 + 3, top - 22], [x + sway * 1.4, top - 48]], 8, bell), x === stems[1][0] ? 'Seed heads: a short swell at three of the tips.' : undefined), speed: 0.4 });
+  }
+  out.push({ ...step('bristle', '#5e7f96', 1.2, spline([[60, 566], [400, 560], [740, 566]], 14, taperOut), 'The water: one long fade across the bottom.'), speed: 0.5 });
+  return out;
+}
+
 export const LESSONS: Lesson[] = [
+  { id: 'fence', title: 'Fence', subtitle: 'Posts and rails', difficulty: 1, build: buildFence },
   { id: 'waves', title: 'Warm-up waves', subtitle: 'Five strokes, five brushes', difficulty: 1, build: buildWaves },
+  { id: 'mountains', title: 'Mountains', subtitle: 'Three ridges, sharp corners', difficulty: 1, build: buildMountains },
+  { id: 'kites', title: 'Kite strings', subtitle: 'Start at the dot', difficulty: 1, build: buildKites },
+  { id: 'grass', title: 'Grass', subtitle: 'Twelve tapering blades', difficulty: 1, build: buildGrass },
+  { id: 'rain', title: 'Rain', subtitle: 'Swelling drops', difficulty: 2, build: buildRain },
   { id: 'leaf', title: 'Leaf', subtitle: 'Wash, outline, veins', difficulty: 1, build: buildLeaf },
   { id: 'bamboo', title: 'Bamboo', subtitle: 'Pressure control with the bristle and nib', difficulty: 2, build: buildBamboo },
+  { id: 'reeds', title: 'Reeds', subtitle: 'Long fades', difficulty: 2, build: buildReeds },
   { id: 'dusk', title: 'Hills at dusk', subtitle: 'Flat washes and layered ridges', difficulty: 2, build: buildDusk },
   { id: 'bloom', title: 'Bloom', subtitle: 'Petals, centre, stem and leaves', difficulty: 3, build: buildBloom },
 ];

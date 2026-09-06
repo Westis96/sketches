@@ -81,19 +81,22 @@ a pointer can actually hover, so a tap on the iPad never leaves a stuck highligh
 
 Experimental features stay behind switches in the Pencil lab: tilt shading (a flat pencil
 makes a wider, lighter mark), the raw-input overlay and the full per-channel filter card.
-Open the lab with `?lab=1` (or `#lab`) in the URL, or build it in with `VITE_PENCIL_LAB=1`.
+Open the lab with `?lab=1` in the URL, or build it in with `VITE_PENCIL_LAB=1`.
 
-Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
-pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the
-thumbnails are rendered by the engine) and trace it stroke by stroke. Each step sets the
-brush, size and colour for you, shows a coaching hint, and highlights the stroke to draw
-with a flowing dashed line, a start dot and an arrowhead. Every stroke is scored on shape,
-size and direction against the reference: good strokes advance, strokes far off the mark
-are removed so you can try again, Skip counts a step as zero and Undo reopens it. A lesson
-ends with stars (1 to 3), a score out of 100 and a per-step bar, with your best kept per
-lesson. Your own drawing is set aside while a lesson is open (autosave keeps saving it) and
-comes back when you leave; you can also keep the traced drawing instead. Lessons live in
-`src/practice/lessons.ts` as ordered brush steps built from deterministic splines.
+Learn (`L`, or the graduation-cap button) is the Yousician-style path: seven levels, one
+skill per mission, each mission a short generated drill, a guided piece traced with the
+full guide, then the same piece performed with less guide for stars. Every stroke is
+scored on shape, length, direction, pressure profile, speed and confidence (one pull, no
+hesitation); the pill only speaks when a dimension is out of band, and always with an
+instruction ("Press harder at the end", "Slower", "Start at the dot"). The guide fades as
+you improve (full, centreline, dots, blind), steps back up after two misses and offers a
+three-stroke loop; Perform gives three tries and a critique at the end with the
+costliest strokes, the dimension that cost the most, and your first Perform of that
+piece next to today's. A three-minute warm-up (lines, arcs, ellipses, waves) sits on the
+Path. Levels 0–2 are built; Levels 3–6 show as "soon". Routes live in the URL hash
+(`#/learn`, `#/learn/1.2`, `#/learn/1.2/perform`, `#/warmup`, `#/progress`), so the
+back button works and links can be shared. Progress is local; older bests migrate. The
+plan is in `p5brush-studio/docs/curriculum-plan.md`, the UX spec in `docs/practice-ux.md`.
 
 WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are
