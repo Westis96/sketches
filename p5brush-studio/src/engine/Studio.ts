@@ -1,0 +1,2676 @@
+/**
+ * Studio — drives the real p5.brush 2.2.2 engine from pointer input.
+ *
+ *  - One WebGL2 canvas. p5.brush owns the compositing (spectral pigment mixing);
+ *    StudioGL adds the paper texture, snapshots and a paper eraser.
+ *  - Live preview: while the pointer is down the committed image is restored
+ *    from a texture and the in-progress plot is re-stamped every frame with the
+ *    same seed (brush.seed), so the stroke you see is the stroke you get on lift.
+ *  - Strokes are vector records, so undo, paper changes, resize, autosave and
+ *    the sketch export all replay deterministically. Clear is a record too.
+ *
+ * The class is framework-free; React subscribes through `subscribe/getState`.
+ */
+import * as brush from 'p5.brush/standalone';
+import type { BrushParams } from 'p5.brush/standalone';
+import { StudioGL, type Dab } from './StudioGL';
+import { DEFAULT_PENCIL, activeFx, calibratePressure, calibrationFrom, eventTilt, type PencilSettings } from './pencil';
+import { DEFAULT_FILTERS, activeFilters, type FilterPatch, type FilterSettings } from './filters';
+import { compileTip, checkTip, tipExtent } from './tipShim';
+import {
+  CHUNK_MIN_RAW, DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, chunkPoints, chunkSpec, chunkStep, clamp, clone, conditionPoints, freshCondState, type CondState,
+  deserializeRecords, fmt, liveEnvelope, parseSpecCode, recordBounds, serializeRecords, specCode, strokeSegments, visibleRecords,
+  type BrushRecord, type BrushSpec, type EraserRecord, type InputKind, type PaperName, type Point, type PressureMode,
+  type Segment, type StrokeRecord, type Tool, mapStylus,
+} from './records';
+import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
+import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type LessonStep } from '@/practice/lessons';
+import { pathLength } from '@/practice/geometry';
+import { DEFAULT_SPEED, DIMS, PASS_SCORE, PERFORM_PASS_SCORE, STEP_DOWN_SCORE, praiseFor, scoreStroke, scoreTrace, starsFor, type Band, type Dim, type ScoreMode, type Tip } from '@/practice/score';
+import { addSeconds, loadProgress, recordGuided, recordPerform, recordTaught, recordTrainer, recordWarmup, saveProgress, type Progress } from '@/practice/progress';
+import { teachCue, type DemoStroke } from '@/practice/teach';
+import { MISSIONS, TIER_LABEL, TIERS, TRAINERS, isPlayable, missionById, missionForPiece, partsOf, trainerReps, warmupReps, type Part, type Tier } from '@/practice/curriculum';
+
+export const paperPresets: Record<PaperName, { bg: [number, number, number]; grain: number; label: string }> = {
+  hotpress: { bg: [255, 254, 250], grain: 2.2, label: 'Hot Press Fine Art' },
+  washi: { bg: [250, 247, 240], grain: 3.8, label: 'Warm Japanese Washi' },
+  bristol: { bg: [255, 255, 255], grain: 1.0, label: 'Smooth Bristol Pure White' },
+};
+
+export interface Settings {
+  spec: BrushSpec;
+  tipSource: string;
+  size: number;              // brush.set(name, color, size) → strokeWeight
+  color: string;
+  paper: PaperName;
+  tool: Tool;
+  eraserSize: number;
+  pressureMode: PressureMode;
+  forceSensitivity: number;
+  pencilOnly: boolean;
+  /** Auto-enable pencilOnly the first time an Apple Pencil is seen (off once set by hand). */
+  pencilAuto: boolean;
+  /** Pencil features (nib and roll belong to the brush; hover, predicted tail and calibration to the pen). */
+  pencil: PencilSettings;
+  /** Input filters for every pointer channel. */
+  filters: FilterSettings;
+  /** Bumped when the input defaults change, so saved settings from before pick up the new defaults once. */
+  inputVersion: number;
+}
+
+const INPUT_VERSION = 2;
+
+export interface Hud {
+  pointerType: string | null;
+  pressure: number;
+  tiltX: number;
+  tiltY: number;
+  /** Pencil telemetry (degrees): altitude 90 = upright, azimuth clockwise from +x, barrel twist. */
+  altitude: number;
+  azimuth: number;
+  twist: number;
+  /** A pen is hovering over the canvas (not drawing). */
+  hovering: boolean;
+  /** Predicted samples the browser offered on the last move. */
+  predicted: number;
+  /** The last conditioned (filtered) sample of the stroke in progress. */
+  filtered: { p: number; alt: number; az: number; tw: number } | null;
+  stamps: number;
+}
+
+/** Camera: screen (CSS px) = world * zoom + pan. World units are CSS px at zoom 1. */
+export interface View { x: number; y: number; zoom: number }
+export const MIN_ZOOM = 0.2;
+export const MAX_ZOOM = 8;
+
+export interface PracticeFeedback {
+  step: number;
+  score: number;
+  reversed: boolean;
+  accepted: boolean;
+  at: number;
+  /** One instruction (bandwidth rule), or null when the stroke was in band. */
+  tip: Tip | null;
+  /** Clean / Great / Perfect when in band. */
+  praise: string | null;
+  dims: Record<Dim, number>;
+  band: Record<Dim, Band>;
+  /** A rehearsal stroke inside a loop: scored and erased. */
+  looped?: boolean;
+}
+export interface CostlyStep { step: number; score: number; tip: Tip | null }
+export interface PracticeSummary {
+  score: number;
+  stars: number;
+  newBest: boolean;
+  /** Steps scored 70 or better. */
+  clean: number;
+  /** The three costliest steps (score below 85), worst first. */
+  costly: CostlyStep[];
+  worstDim: Dim | null;
+  worstText: string | null;
+  /** The drill's focus dimension and how much of it was in band, as a percentage. */
+  focus?: { dim: Dim; mean: number };
+  /** Then vs now: the first Perform of this mission, once one exists. */
+  firstScore?: number;
+  firstThumb?: string | null;
+  todayThumb?: string | null;
+}
+export type PracticePart = Part | 'warmup';
+
+/** One reading from a stroke in progress (a pen or a lesson demo), for the brush sound. */
+export interface StrokeSample {
+  phase: 'down' | 'move' | 'up';
+  /** Screen pixels per millisecond. */
+  speed: number;
+  pressure: number;
+  /** Template id of the brush in hand, when known. */
+  brush: string | null;
+  tool: Tool;
+}
+/** Discrete things the studio did that the UI may want to sound or show. */
+export type StudioEvent = 'undo' | 'redo' | 'clear' | 'export' | 'tool';
+export interface PracticeState {
+  /** Mission being played, or null for the warm-up. */
+  missionId: string | null;
+  /** The piece (lesson) being traced, when the part has one. */
+  lessonId: string | null;
+  part: PracticePart;
+  title: string;
+  subtitle: string;
+  /** The lesson's cue, repeated inside the session. */
+  cue: string | null;
+  /** Reference strokes: the piece's steps, or the drill's reps. */
+  steps: LessonStep[];
+  /** Index of the step being traced; equals the step count once complete. */
+  step: number;
+  /** Per finished step: score, or null when skipped. */
+  results: Array<number | null>;
+  tips: Array<Tip | null>;
+  status: 'active' | 'complete';
+  /** Show the remaining reference strokes on the canvas. */
+  guide: boolean;
+  /** Assist tier: how much of the guide is drawn. */
+  tier: Tier;
+  /** Perform: the tier is the difficulty and does not move. */
+  tierLocked: boolean;
+  feedback: PracticeFeedback | null;
+  /** Consecutive steps scored 80 or better. */
+  streak: number;
+  /** Consecutive misses on the current step. */
+  misses: number;
+  /** "Loop this stroke" is on offer. */
+  loopOffer: boolean;
+  /** Rehearsal strokes left in the loop. */
+  loop: number;
+  /** One-line note inside the card (auto-adjust, loops, pressure not scored). */
+  note: string | null;
+  /** Blind tier: which step to reveal, and since when. */
+  reveal: { step: number; at: number } | null;
+  /** False once a finger or mouse stroke arrived: pressure is simulated for those. */
+  pressureScored: boolean;
+  summary: PracticeSummary | null;
+}
+
+export interface StudioState {
+  settings: Settings;
+  hud: Hud;
+  canUndo: boolean;
+  canRedo: boolean;
+  strokeCount: number;       // visible strokes (after the last clear)
+  tipExtent: number;         // ink extent of the current tip, fraction of the 100-unit space
+  tipError: string | null;
+  fatal: string | null;
+  /** Template id → PNG data URL of a stroke rendered by the engine; null until generated. */
+  templatePreviews: Record<string, string> | null;
+  view: View;
+  /** Tracing lesson in progress, or null in free drawing. */
+  practice: PracticeState | null;
+  /** Lesson id → engine-rendered PNG data URL; null until requested. */
+  lessonPreviews: Record<string, string> | null;
+  progress: Progress;
+  /** First visit with nothing saved: show the welcome card until dismissed. */
+  firstRun: boolean;
+  /** A stroke is being drawn (pointer down on the canvas). */
+  drawing: boolean;
+  /** A lesson demo stroke is being drawn by the engine. */
+  demo: boolean;
+  /** A pencil pressure calibration is collecting samples. */
+  calibrating: boolean;
+  /** When the calibration window closes (performance.now() ms) and how long it was, for the progress bar. */
+  calibration: { until: number; seconds: number } | null;
+}
+
+export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
+export type Toast = (message: string, opts?: ToastOptions) => void;
+
+const CHECKPOINT_EVERY = 8;
+const MAX_CHECKPOINTS = 2;
+/** Canvas snapshots kept around the most recent strokes so undo/redo of those is a texture swap. */
+const MAX_STEP_SNAPS = 2;
+/** Live chunks are stamped at most this often; fewer chunks make replays cheaper. */
+const MIN_CHUNK_INTERVAL_MS = 15;
+/** Raw samples remembered for duplicate detection (a coalesced batch is at most a few samples). */
+const RECENT_SAMPLES = 24;
+/** Rebuilds with more strokes than this are spread over frames so the UI never freezes. */
+const PROGRESSIVE_MIN_STROKES = 12;
+const PROGRESSIVE_BUDGET_MS = 9;
+const POOL = 8;
+const SAVE_KEY = `p5brush-studio:v${SAVE_VERSION}`;
+const SAVE_DEBOUNCE_MS = 700;
+/** HUD state reaches React at most this often; the panels do not need every frame. */
+const HUD_MIN_INTERVAL_MS = 50;
+const WELCOME_KEY = 'p5brush-studio:welcomed';
+
+const DEFAULT_SETTINGS: Settings = {
+  spec: DEFAULT_SPEC,
+  tipSource: DEFAULT_TIP_SOURCE,
+  size: 1,
+  color: '#1a1c23',
+  paper: 'hotpress',
+  tool: 'brush',
+  eraserSize: 24,
+  pressureMode: 'gaussian',
+  forceSensitivity: 1.25,
+  pencilOnly: false,
+  pencilAuto: true,
+  pencil: DEFAULT_PENCIL,
+  filters: DEFAULT_FILTERS,
+  inputVersion: INPUT_VERSION,
+};
+
+/** One level of nested merge for the filter settings (each channel is its own object). */
+function mergeFilters(base: FilterSettings, patch: FilterPatch | undefined): FilterSettings {
+  const p = patch ?? {};
+  return {
+    showRaw: typeof p.showRaw === 'boolean' ? p.showRaw : base.showRaw,
+    position: { ...base.position, ...(p.position ?? {}) },
+    pressure: { ...base.pressure, ...(p.pressure ?? {}) },
+    tilt: { ...base.tilt, ...(p.tilt ?? {}) },
+    twist: { ...base.twist, ...(p.twist ?? {}) },
+  };
+}
+
+/** A previous committed image and the view it was rendered at, shown transformed while a rebuild runs. */
+interface Overlay { tex: WebGLTexture; view: View }
+
+interface Live {
+  id: number;
+  pointerType: string;
+  rect: DOMRect;
+  rec: BrushRecord | EraserRecord;
+  erasedUpTo: number;
+  /** World position at which a point was last *recorded* (not merged), for pen/finger thinning. */
+  lastRecorded: Point;
+  /** Keys of the most recent raw samples: WebKit delivers each batch of coalesced pen samples twice. */
+  recent: string[];
+  /** event.timeStamp of the pointerdown; points carry whole milliseconds since then. */
+  t0: number;
+  /** Chunked brush stroke: conditioning state carried across chunks, conditioned length reached, path length stamped, chunk count, last chunk time. */
+  cond: CondState;
+  condLen: number;
+  stampedLen: number;
+  chunk: number;
+  lastChunkAt: number;
+}
+
+const round = (v: number, d: number) => Math.round(v * d) / d;
+
+/**
+ * A brush as a lesson uses it: the translucent templates (watercolor wash, chisel)
+ * are tuned for layering and a single traced stroke of them is barely visible,
+ * so lessons draw them, and hand them to the learner, with an opacity floor.
+ */
+const LESSON_MIN_OPACITY = 14;
+const lessonSpec = (t: BrushTemplate): BrushSpec => ({ ...clone(t.spec), opacity: Math.max(t.spec.opacity, LESSON_MIN_OPACITY) });
+/** Room the session chrome (or a docked panel) takes around the lesson box, CSS px. */
+interface Dock { top?: number; right?: number; bottom?: number }
+/** Pointer id of the engine's own demo strokes (never a real pointer). */
+const DEMO_POINTER = -7;
+/** A constant-pace timeline for reference points that carry none. */
+function demoTimeline(pts: Point[], speed: number): Point[] {
+  let t = 0;
+  return pts.map((p, i) => {
+    if (i > 0) { const q = pts[i - 1]; t += Math.hypot(p.x - q.x, p.y - q.y) / speed; }
+    return { ...p, t: Math.round(t) };
+  });
+}
+/** Moves an assist tier `dir` steps (+1 = less help), clamped to [0, max]. */
+const stepTier = (tier: Tier, dir: number, max = TIERS.length - 1): Tier => TIERS[clamp(TIERS.indexOf(tier) + dir, 0, max)];
+const WORST_TEXT: Record<Dim, string> = {
+  shape: 'Shape cost you the most: stay on the line, even if it means slowing down.',
+  length: 'Length cost you the most: go all the way to the end of the stroke.',
+  direction: 'Direction cost you the most: start at the dot every time.',
+  pressure: 'Pressure cost you the most: match the swell and the fade, not just the path.',
+  speed: 'Speed cost you the most: one even pull at the pace of the flowing line.',
+  confidence: 'Hesitation cost you the most: ghost it in the air, then commit to one pull.',
+};
+
+/**
+ * Per-stamp overrides for the engine (see the custom-tip hook in vite.config.ts):
+ * maps the distance along the plot to the segment it falls in and returns that
+ * segment's pencil-effect angle, and whether this stamp is skipped (a hash of
+ * the distance decides, so live strokes and replays skip the same stamps).
+ * Null when no segment carries an override.
+ */
+function stampHook(segs: Segment[], zoom: number): ((d: number) => { angle?: number; alpha?: number; skip?: boolean }) | null {
+  if (!segs.some((s) => s.keep !== undefined || s.alpha !== undefined || s.angle !== undefined)) return null;
+  const cum: number[] = [];
+  let acc = 0;
+  for (const s of segs) { acc += s.len * zoom; cum.push(acc); }
+  const hash = (d: number) => { const x = Math.sin(Math.round(d * 100) * 0.0129898) * 43758.5453; return x - Math.floor(x); };
+  return (d: number) => {
+    let lo = 0, hi = cum.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] > d) hi = mid; else lo = mid + 1; }
+    const s = segs[lo];
+    return { angle: s.angle, alpha: s.alpha, skip: s.keep !== undefined && hash(d) >= s.keep };
+  };
+}
+
+/** Extra shaping applied to plot pressures while stamping: `env(s)` at path length `s` from `s0`. */
+interface StrokeShape { s0: number; env: (s: number) => number }
+
+
+export class Studio {
+  private state: StudioState = {
+    settings: clone(DEFAULT_SETTINGS),
+    hud: { pointerType: null, pressure: 0, tiltX: 0, tiltY: 0, altitude: 90, azimuth: 0, twist: 0, hovering: false, predicted: 0, filtered: null, stamps: 0 },
+    canUndo: false,
+    canRedo: false,
+    strokeCount: 0,
+    tipExtent: 0.5,
+    tipError: null,
+    fatal: null,
+    templatePreviews: null,
+    view: { x: 0, y: 0, zoom: 1 },
+    practice: null,
+    lessonPreviews: null,
+    progress: loadProgress(),
+    firstRun: false,
+    drawing: false,
+    demo: false,
+    calibrating: false,
+    calibration: null,
+  };
+  private listeners = new Set<() => void>();
+
+  private canvas: HTMLCanvasElement | null = null;
+  private sgl: StudioGL | null = null;
+  private cssW = 0; private cssH = 0; private dpr = 1; private glW = 1; private glH = 1;
+
+  private strokes: StrokeRecord[] = [];
+  private redoStack: StrokeRecord[] = [];
+  private checkpoints: Array<{ count: number; tex: WebGLTexture }> = [];
+  /** Canvas as it was with `count` strokes, kept for the most recent strokes: undo swaps it in. */
+  private undoSnaps: Array<{ count: number; tex: WebGLTexture }> = [];
+  /** Canvas after an undone stroke, so redo of it is a swap too. */
+  private redoSnaps: Array<{ count: number; tex: WebGLTexture }> = [];
+  private texPool: WebGLTexture[] = [];
+  /** The drawing removed by the last Clear, restorable until the next stroke. */
+  private clearedBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[] } | null = null;
+  /** Progressive rebuild in flight (large drawings after a view or paper change). */
+  private pending: { records: StrokeRecord[]; index: number; scratch: WebGLTexture; raf: number; overlay: Overlay | null } | null = null;
+
+  private live: Live | null = null;
+  private previewQueued = false;
+  private strokeListeners = new Set<(s: StrokeSample) => void>();
+  private eventListeners = new Set<(e: StudioEvent) => void>();
+  /** Template last applied by name (lesson specs differ from the template, so exact matching fails). */
+  private brushId: string | null = null;
+  private hudQueued = false;
+  private pendingHud: Partial<Hud> = {};
+  private resizeTimer = 0;
+  private saveTimer = 0;
+  private saveWarned = false;
+  private restored = false;
+  private sampleQueued = false;
+  private detach: (() => void) | null = null;
+  private extentCache = new Map<string, number>();
+  /** Rolling cost counters (ms), read through the debug hook. */
+  private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, condMs: 0, stampMs: 0, plotMs: 0, compositeMs: 0, overlayMs: 0, overlays: 0, hudEmits: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0, longFrames: 0 };
+  /** Intervals between consecutive preview frames of the stroke in progress (ms), for the diagnostics. */
+  private frameLog: number[] = [];
+  private lastPreviewAt = 0;
+  /** The user's drawing while a lesson occupies the canvas. */
+  private practiceBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[]; settings: Settings; view: View } | null = null;
+  private lessonPreviewsQueued = false;
+
+  // Camera. `committedView` is the view the committed texture was rendered at.
+  private view: View = { x: 0, y: 0, zoom: 1 };
+  private committedView: View = { x: 0, y: 0, zoom: 1 };
+  private gesture: {
+    touches: Map<number, { x: number; y: number }>;
+    start: Map<number, { x: number; y: number }>;
+    startView: View;
+    maxFingers: number;
+    startedAt: number;
+    moved: number;
+    mode: 'touch' | 'mouse';
+  } | null = null;
+  private viewPreviewQueued = false;
+  private wheelTimer = 0;
+  private spaceHeld = false;
+
+  // One p5.brush brush per distinct tip source (the only thing that needs the
+  // 500×500 rasterisation). p5.brush reads the params object by reference at
+  // stroke time — the contract its own scaleBrushes() relies on — so the
+  // per-stroke numbers are patched in place.
+  private registry = new Map<string, { name: string; params: BrushParams; tick: number }>();
+  private regTick = 0;
+
+  constructor(private toast: Toast = () => {}) {
+    this.restoreSaved();
+    this.state.tipExtent = this.extentFor(this.state.settings.tipSource);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Store
+  // ---------------------------------------------------------------------------
+  subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
+  getState = () => this.state;
+
+  /** Stroke readings while a pen or a demo draws: down, moves with speed and pressure, up. */
+  onStroke = (fn: (s: StrokeSample) => void) => { this.strokeListeners.add(fn); return () => { this.strokeListeners.delete(fn); }; };
+  /** Discrete studio events (undo, redo, clear, export, tool change). */
+  onEvent = (fn: (e: StudioEvent) => void) => { this.eventListeners.add(fn); return () => { this.eventListeners.delete(fn); }; };
+  private sample(phase: StrokeSample['phase'], speed: number, pressure: number, tool: Tool) {
+    if (!this.strokeListeners.size) return;
+    const brush = tool === 'eraser' ? null : this.activeTemplate()?.id ?? this.brushId;
+    for (const l of this.strokeListeners) l({ phase, speed, pressure, brush, tool });
+  }
+  private signal(e: StudioEvent) { for (const l of this.eventListeners) l(e); }
+  /** Speed of the last recorded segment in screen px per ms. */
+  private lastSpeed(pts: Point[]): number {
+    const n = pts.length;
+    if (n < 2) return 0;
+    const a = pts[n - 2], b = pts[n - 1];
+    return (Math.hypot(b.x - a.x, b.y - a.y) * this.view.zoom) / Math.max(1, (b.t ?? 0) - (a.t ?? 0));
+  }
+
+  private emit(patch: Partial<StudioState>) {
+    this.state = { ...this.state, ...patch };
+    for (const fn of this.listeners) fn();
+  }
+  private set(patch: Partial<Settings>) {
+    this.emit({ settings: { ...this.state.settings, ...patch } });
+    this.scheduleSave();
+    if (patch.tipSource !== undefined || patch.spec !== undefined) this.warmBrush();
+  }
+
+  /** Registers (rasterises) the current tip ahead of the first stroke that needs it. */
+  private warmBrush() {
+    if (!this.sgl || this.live) return;
+    try { this.ensureRegistered({ spec: this.settings.spec, tipSource: this.settings.tipSource } as BrushRecord, this.view.zoom); } catch { /* invalid tip: reported by setTipSource */ }
+  }
+  get settings() { return this.state.settings; }
+  isDrawing() { return this.live !== null; }
+
+  private syncHistory() {
+    const pr = this.state.practice;
+    this.emit({
+      canUndo: pr ? pr.status === 'active' && pr.step > 0 : this.strokes.length > 0 || this.clearedBackup !== null,
+      canRedo: pr ? false : this.redoStack.length > 0,
+      strokeCount: visibleRecords(this.strokes).length,
+    });
+    this.scheduleSave();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Persistence
+  // ---------------------------------------------------------------------------
+  private restoreSaved() {
+    try {
+      const raw = localStorage.getItem(SAVE_KEY);
+      if (!raw) return;
+      const doc = JSON.parse(raw) as { v?: number; settings?: Partial<Settings>; strokes?: unknown };
+      if (doc?.v !== SAVE_VERSION) return;
+      const s = doc.settings ?? {};
+      const settings: Settings = {
+        ...clone(DEFAULT_SETTINGS),
+        ...s,
+        spec: { ...clone(DEFAULT_SPEC), ...(s.spec ?? {}) },
+        // Settings saved before the input defaults changed start from the new defaults (keeping a calibration).
+        pencil: s.inputVersion === INPUT_VERSION ? { ...DEFAULT_PENCIL, ...(s.pencil ?? {}) } : { ...DEFAULT_PENCIL, calib: s.pencil?.calib ?? null },
+        filters: s.inputVersion === INPUT_VERSION ? mergeFilters(DEFAULT_FILTERS, s.filters) : DEFAULT_FILTERS,
+        inputVersion: INPUT_VERSION,
+        tool: 'brush',
+      };
+      try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
+      this.state = { ...this.state, settings };
+      const v = (doc as { view?: View }).view;
+      if (v && Number.isFinite(v.x) && Number.isFinite(v.y) && Number.isFinite(v.zoom)) {
+        this.view = { x: v.x, y: v.y, zoom: clamp(v.zoom, MIN_ZOOM, MAX_ZOOM) };
+        this.committedView = { ...this.view };
+        this.state = { ...this.state, view: { ...this.view } };
+      }
+      this.strokes = deserializeRecords(doc.strokes);
+      this.restored = this.strokes.length > 0;
+    } catch {
+      /* corrupt or unavailable storage: start fresh */
+    }
+  }
+
+  private scheduleSave() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => this.saveNow(), SAVE_DEBOUNCE_MS);
+  }
+
+  /** Serialises the whole drawing; while a stroke is in progress it waits (unless forced, on hide/dispose). */
+  private saveNow(force = false) {
+    clearTimeout(this.saveTimer);
+    if (this.live && !force) { this.scheduleSave(); return; }
+    try {
+      // A lesson never overwrites the user's drawing: while one is open the backup is what gets saved.
+      const b = this.practiceBackup;
+      const doc = b
+        ? { v: SAVE_VERSION, settings: b.settings, view: b.view, strokes: serializeRecords(b.strokes) }
+        : { v: SAVE_VERSION, settings: this.settings, view: this.view, strokes: serializeRecords(this.strokes) };
+      localStorage.setItem(SAVE_KEY, JSON.stringify(doc));
+    } catch {
+      if (!this.saveWarned) {
+        this.saveWarned = true;
+        this.toast('Autosave paused: the drawing no longer fits in browser storage', { duration: 5000 });
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Lifecycle
+  // ---------------------------------------------------------------------------
+  attach(canvas: HTMLCanvasElement) {
+    // React StrictMode mounts twice: keep GL resources when re-attaching to the same canvas.
+    if (this.canvas !== canvas || !this.sgl) {
+      this.canvas = canvas;
+      const gl = canvas.getContext('webgl2', { premultipliedAlpha: true, preserveDrawingBuffer: true, antialias: false, depth: false, stencil: false });
+      if (!gl) { this.emit({ fatal: 'WebGL2 is required (p5.brush renders its stamps and spectral blending on the GPU).' }); return; }
+      try {
+        this.sgl = new StudioGL(gl);
+      } catch (err) {
+        this.emit({ fatal: 'Could not compile the studio shaders: ' + (err as Error).message });
+        return;
+      }
+    }
+
+    const onDown = (e: PointerEvent) => this.onPointerDown(e);
+    const onMove = (e: PointerEvent) => this.onPointerMove(e);
+    const onUp = (e: PointerEvent) => this.onPointerUp(e);
+    const prevent = (e: Event) => e.preventDefault();
+    const onResize = () => this.onResize();
+    const onLost = (e: Event) => { e.preventDefault(); this.emit({ fatal: 'WebGL context lost. Reload the page to continue.' }); };
+    const onHide = () => { if (document.visibilityState === 'hidden') this.saveNow(true); };
+    const onWheel = (e: WheelEvent) => this.onWheel(e);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const tag = (e.target as HTMLElement).tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      this.spaceHeld = e.type === 'keydown';
+      if (e.type === 'keydown' && !e.repeat) e.preventDefault();
+    };
+
+    canvas.addEventListener('pointerdown', onDown, { passive: false });
+    window.addEventListener('pointermove', onMove, { passive: false });
+    window.addEventListener('pointerup', onUp, { passive: false });
+    window.addEventListener('pointercancel', onUp, { passive: false });
+    canvas.addEventListener('touchstart', prevent, { passive: false });
+    canvas.addEventListener('touchmove', prevent, { passive: false });
+    canvas.addEventListener('contextmenu', prevent);
+    canvas.addEventListener('webglcontextlost', onLost);
+    window.addEventListener('resize', onResize);
+    window.visualViewport?.addEventListener('resize', onResize);
+    document.addEventListener('visibilitychange', onHide);
+    window.addEventListener('pagehide', onHide);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    document.addEventListener('gesturestart', prevent, { passive: false }); // Safari page pinch
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('keyup', onKey);
+    this.detach = () => {
+      canvas.removeEventListener('wheel', onWheel);
+      document.removeEventListener('gesturestart', prevent);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKey);
+      canvas.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      canvas.removeEventListener('touchstart', prevent);
+      canvas.removeEventListener('touchmove', prevent);
+      canvas.removeEventListener('contextmenu', prevent);
+      canvas.removeEventListener('webglcontextlost', onLost);
+      window.removeEventListener('resize', onResize);
+      window.visualViewport?.removeEventListener('resize', onResize);
+      document.removeEventListener('visibilitychange', onHide);
+      window.removeEventListener('pagehide', onHide);
+    };
+
+    this.resize(true);
+    this.syncHistory();
+    setTimeout(() => { try { this.renderTemplatePreviews(); } catch (err) { console.warn('[studio] template previews failed', err); } }, 500);
+    if (!this.sampleQueued) {
+      this.sampleQueued = true;
+      if (this.restored) {
+        try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* ignore */ } // returning users never need the card
+        this.toast(`Restored your drawing (${visibleRecords(this.strokes).length} strokes)`);
+      } else {
+        setTimeout(() => this.drawSampleStroke(), 120);
+        let welcomed = false;
+        try { welcomed = localStorage.getItem(WELCOME_KEY) === '1'; } catch { /* ignore */ }
+        if (!welcomed) this.emit({ firstRun: true });
+      }
+    }
+  }
+
+  dispose() {
+    this.detach?.();
+    this.detach = null;
+    clearTimeout(this.resizeTimer);
+    this.saveNow(true);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Brush registration
+  // ---------------------------------------------------------------------------
+  private ensureRegistered(rec: BrushRecord, zoom = 1): string {
+    let entry = this.registry.get(rec.tipSource);
+    if (!entry) {
+      let name = 'studio-' + this.registry.size;
+      if (this.registry.size >= POOL) {
+        let oldestKey: string | null = null;
+        for (const [k, e] of this.registry) if (oldestKey === null || e.tick < this.registry.get(oldestKey)!.tick) oldestKey = k;
+        name = this.registry.get(oldestKey!)!.name;
+        this.registry.delete(oldestKey!);
+      }
+      const params: BrushParams = { ...clone(rec.spec), tip: compileTip(rec.tipSource) };
+      brush.add(name, params);
+      entry = { name, params, tick: 0 };
+      this.registry.set(rec.tipSource, entry);
+    }
+    entry.tick = ++this.regTick;
+    const { params } = entry, sp = rec.spec;
+    // Zoom scales weight, scatter and spacing exactly like p5.brush's scaleBrushes(),
+    // so stamp count, seed sequence and alpha are identical at every zoom level.
+    params.weight = sp.weight * zoom; params.scatter = sp.scatter * zoom; params.opacity = sp.opacity;
+    params.spacing = sp.spacing * zoom; params.noise = clamp(sp.noise, 0, 1);
+    params.rotate = sp.rotate; params.markerTip = sp.markerTip;
+    params.pressure = { type: 'gaussian', mode: 'gaussian', curve: sp.pressure.curve, min_max: sp.pressure.min_max };
+    return entry.name;
+  }
+
+  private extentFor(tipSource: string): number {
+    let v = this.extentCache.get(tipSource);
+    if (v === undefined) { v = tipExtent(tipSource); this.extentCache.set(tipSource, v); }
+    return v;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Rendering
+  // ---------------------------------------------------------------------------
+  /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
+  private renderBrushStroke(rec: BrushRecord): number {
+    if (rec.chunks) return this.renderChunked(rec);
+    return this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
+  }
+
+  /**
+   * p5.brush carries a small amount of state from one stroke into the next: the
+   * pressure cache consulted by the start-of-stroke marker tip is only reset
+   * after that tip is drawn, and the first stroke after brush.load() sees cold
+   * blend framebuffers. Both make a stroke's first stamps depend on what was
+   * rendered before it, which would let live strokes drift from their replays.
+   * Rendering a fixed, invisible (opacity 0) priming stroke before every real
+   * render puts the engine in the same state each time.
+   */
+  private static readonly PRIME_SPEC: BrushSpec = { ...DEFAULT_SPEC, opacity: 0, weight: 4, spacing: 1, noise: 0, markerTip: false };
+  private primeEngine(glW: number, glH: number, dpr: number) {
+    const cx = glW / dpr / 2, cy = glH / dpr / 2;
+    const rec: BrushRecord = {
+      tool: 'brush', spec: Studio.PRIME_SPEC, tipSource: DEFAULT_TIP_SOURCE, size: 1, color: '#000000',
+      pressureMode: 'gaussian', sensitivity: 1, seed: 1,
+      points: [{ x: cx - 4, y: cy, p: 0.5 }, { x: cx + 4, y: cy, p: 0.5 }],
+    };
+    this.stampRaw(rec, glW, glH, dpr, { x: 0, y: 0, zoom: 1 });
+  }
+
+  /**
+   * Engine call for one record on the currently loaded p5.brush target.
+   * Geometry is resampled in world space (zoom-independent), then mapped to
+   * screen space; the brush itself is scaled by zoom in ensureRegistered().
+   */
+  private stampRecord(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View, shape?: StrokeShape): number {
+    this.primeEngine(glW, glH, dpr);
+    return this.stampRaw(rec, glW, glH, dpr, view, shape);
+  }
+
+  /** `flush` = false leaves the stamps in the engine's mask for a later brush.render(). */
+  private stampRaw(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View, shape?: StrokeShape, flush = true): number {
+    const name = this.ensureRegistered(rec, view.zoom);
+    const { origin, segs, endA, endP, stamps } = strokeSegments(rec);
+    const plot = new brush.Plot('curve');
+    let s0 = shape?.s0 ?? 0;
+    for (const s of segs) {
+      plot.addSegment(s.a, s.len * view.zoom, shape ? s.p * shape.env(s0) : s.p, true);
+      s0 += s.len;
+    }
+    plot.endPlot(endA, shape ? endP * shape.env(s0) : endP, true);
+    brush.seed(rec.seed);
+    brush.push();
+    brush.translate(-glW / 2, -glH / 2); // p5.brush origin is the canvas centre
+    brush.scale(dpr);                    // work in CSS (screen) pixels
+    brush.set(name, rec.color, rec.size);
+    const t0 = performance.now();
+    const g = globalThis as unknown as { __p5brushStamp?: (d: number) => { angle?: number; alpha?: number; skip?: boolean } };
+    const hook = stampHook(segs, view.zoom);
+    if (hook) g.__p5brushStamp = hook;
+    try { plot.draw(origin.x * view.zoom + view.x, origin.y * view.zoom + view.y, 1); }
+    finally { if (hook) delete g.__p5brushStamp; }
+    brush.pop();
+    const t1 = performance.now();
+    if (flush) brush.render();
+    this.perf.plotMs += t1 - t0; this.perf.compositeMs += performance.now() - t1;
+    return stamps;
+  }
+
+  /**
+   * Chunked strokes share one engine mask. The engine mixes the mask with the
+   * canvas under it and clears the mask on every brush.render(), so a stroke
+   * rendered chunk by chunk used to mix each chunk with the previous ones where
+   * their stamps overlap (a darker plate at every chunk boundary). With the mask
+   * kept (see vite.config.ts) and the composite reading from the image the stroke
+   * started on, every render mixes the whole stroke so far with the untouched
+   * base in the newest chunk's rectangle, which is exactly what one render of the
+   * whole stroke would produce there.
+   */
+  private setSharedMask(on: boolean, source: WebGLFramebuffer | null) {
+    const g = globalThis as unknown as { __p5brushKeepMask?: boolean; __p5brushBlitSource?: WebGLFramebuffer | null };
+    if (on) { g.__p5brushKeepMask = true; g.__p5brushBlitSource = source; }
+    else { delete g.__p5brushKeepMask; delete g.__p5brushBlitSource; }
+  }
+
+  /** Ends a live stroke's shared mask: the priming render clears what the chunks left in it. */
+  private endLiveMask(live: Live) {
+    if (live.chunk === 0) return;
+    this.setSharedMask(false, null);
+    this.primeEngine(this.glW, this.glH, this.dpr);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Templates
+  // ---------------------------------------------------------------------------
+  /** Template matching the current spec + tip exactly, if any. */
+  activeTemplate(): BrushTemplate | undefined {
+    return matchTemplate(this.settings.spec, this.settings.tipSource);
+  }
+
+  applyTemplate(id: string) {
+    const t = BRUSH_TEMPLATES.find((x) => x.id === id);
+    if (!t) return;
+    this.brushId = t.id;
+    this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush', ...this.brushInput(t) });
+    this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
+    this.toast(`Brush: ${t.name}`, { duration: 1200 });
+  }
+
+  /**
+   * The pencil behaviour and input tuning that come with a brush: nib and roll as
+   * the template says (off for anything else), filters = the defaults plus the
+   * template's overrides. Every path that changes the brush applies this, so a
+   * previous brush's azimuth nib never sticks to the next one.
+   */
+  private brushInput(t?: BrushTemplate): Pick<Settings, 'pencil' | 'filters'> {
+    return {
+      pencil: { ...this.settings.pencil, nib: t?.pencil?.nib ?? 'stroke', roll: t?.pencil?.roll ?? false },
+      filters: mergeFilters({ ...DEFAULT_FILTERS, showRaw: this.settings.filters.showRaw }, t?.filters),
+    };
+  }
+
+  /**
+   * Renders one short stroke per template with the real engine on an offscreen
+   * canvas. p5.brush has a single active target, so the main canvas is
+   * re-loaded afterwards; the committed image lives in a texture and is untouched.
+   */
+  private renderTemplatePreviews() {
+    if (this.state.templatePreviews || !this.canvas || this.live) return;
+    const W = 240, H = 80;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const points: Point[] = [];
+    for (let i = 0; i <= 48; i++) {
+      const t = i / 48;
+      points.push({ x: round(22 + t * (W - 44), 100), y: round(H / 2 + Math.sin(t * Math.PI * 2) * 16 - (t - 0.5) * 10, 100), p: round(0.5 + 0.35 * Math.sin(t * Math.PI), 1000) });
+    }
+    const out: Record<string, string> = {};
+    this.renderOffscreen(c, (clearPaper) => {
+      for (const t of BRUSH_TEMPLATES) {
+        clearPaper();
+        const rec: BrushRecord = { tool: 'brush', spec: clone(t.spec), tipSource: t.tipSource, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 20240611, points };
+        this.stampRecord(rec, W, H, 1, { x: 0, y: 0, zoom: 1 });
+        out[t.id] = c.toDataURL('image/png');
+      }
+    });
+    this.emit({ templatePreviews: out });
+  }
+
+  /**
+   * Runs `draw` with p5.brush loaded on an offscreen canvas, then re-loads the
+   * main canvas. `clearPaper` clears through the offscreen canvas's own context
+   * rather than brush.clear(): right after a load() the engine's mask
+   * framebuffers still belong to the previous context (they are rebuilt lazily
+   * on the first stroke), and brush.clear() would try to bind them.
+   */
+  private renderOffscreen(c: HTMLCanvasElement, draw: (clearPaper: () => void) => void) {
+    const bg = paperPresets[this.settings.paper].bg;
+    const pgl = c.getContext('webgl2')!;
+    const clearPaper = () => {
+      pgl.bindFramebuffer(pgl.FRAMEBUFFER, null);
+      pgl.disable(pgl.SCISSOR_TEST);
+      pgl.clearColor(bg[0] / 255, bg[1] / 255, bg[2] / 255, 1);
+      pgl.clear(pgl.COLOR_BUFFER_BIT | pgl.DEPTH_BUFFER_BIT);
+    };
+    try {
+      brush.load(c);
+      brush.noFill(); brush.noHatch(); brush.noField();
+      draw(clearPaper);
+    } finally {
+      brush.load(this.canvas!);
+      brush.noFill(); brush.noHatch(); brush.noField();
+    }
+  }
+
+  /** Engine-rendered thumbnails of every lesson, one lesson per frame; no-op once done. */
+  ensureLessonPreviews() {
+    if (this.state.lessonPreviews || this.lessonPreviewsQueued || !this.canvas) return;
+    this.lessonPreviewsQueued = true;
+    const W = 320, H = 240;
+    const c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    const zoom = Math.min(W / (LESSON_BOX.w + 40), H / (LESSON_BOX.h + 40));
+    const view: View = { zoom, x: (W - LESSON_BOX.w * zoom) / 2, y: (H - LESSON_BOX.h * zoom) / 2 };
+    const out: Record<string, string> = {};
+    const queue = [...LESSONS];
+    const next = () => {
+      const lesson = queue.shift();
+      if (!lesson) { this.lessonPreviewsQueued = false; this.emit({ lessonPreviews: out }); return; }
+      if (this.live) { requestAnimationFrame(next); return; } // never steal the engine mid-stroke
+      try {
+        this.renderOffscreen(c, (clearPaper) => {
+          clearPaper();
+          lessonSteps(lesson).forEach((st, i) => this.stampRecord(this.stepRecord(st, i), W, H, 1, view));
+          out[lesson.id] = c.toDataURL('image/png');
+        });
+      } catch (err) {
+        console.warn('[studio] lesson preview failed', lesson.id, err);
+      }
+      requestAnimationFrame(next);
+    };
+    requestAnimationFrame(next);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Practice: missions (trainer → guided → perform) and the warm-up
+  // ---------------------------------------------------------------------------
+  /** Reference stroke of a step as a brush record (world units = lesson units). */
+  private stepRecord(st: LessonStep, i: number): BrushRecord {
+    const t = BRUSH_TEMPLATES.find((x) => x.id === st.template) ?? BRUSH_TEMPLATES[0];
+    return {
+      tool: 'brush', spec: lessonSpec(t), tipSource: t.tipSource, size: st.size, color: st.color,
+      pressureMode: 'gaussian', sensitivity: 1.25, seed: 7000 + i, points: st.points,
+    };
+  }
+
+  /** Per-session bookkeeping that the UI does not need. */
+  private session: { startedAt: number; seed: number; mode: ScoreMode; focus?: Dim; dims: Array<Record<Dim, number> | null> } | null = null;
+
+  /** Legacy entry point: the guided run of the mission that owns this piece. */
+  startPractice(lessonId: string) {
+    const x = missionForPiece(lessonId);
+    if (x) this.startMission(x.id, 'guided');
+  }
+
+  /** Opens one part of a mission. The current drawing is set aside (and still autosaved) until the session is left. */
+  startMission(id: string, part: Part, opts: { tier?: Tier } = {}) {
+    const x = missionById(id);
+    if (!x || !this.sgl || !isPlayable(x)) return;
+    const parts = partsOf(x);
+    if (!parts.includes(part)) part = parts[0];
+    const seed = (Date.now() % 1_000_000) | 0;
+    if (part === 'teach') {
+      // The lesson: slides beside the paper, demos drawn on it, nothing scored.
+      this.enterSession({ missionId: id, lessonId: x.piece ?? null, part, title: `${x.id} ${x.title}`, subtitle: 'Lesson', steps: [], tier: 'full', tierLocked: false }, { seed, mode: 'guided' }, this.teachDock());
+      return;
+    }
+    let steps: LessonStep[], tier: Tier, mode: ScoreMode, focus: Dim | undefined, subtitle: string;
+    if (part === 'trainer') {
+      const t = TRAINERS[x.trainer!];
+      steps = trainerReps(t, seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
+      tier = t.tier; mode = 'trainer'; focus = t.focus; subtitle = 'Trainer';
+    } else {
+      steps = lessonSteps(lessonById(x.piece!)!);
+      mode = part;
+      tier = opts.tier ?? (part === 'guided' ? 'full' : this.defaultPerformTier(id));
+      subtitle = part === 'guided' ? 'Guided' : 'Perform';
+    }
+    this.enterSession({ missionId: id, lessonId: x.piece ?? null, part, title: `${x.id} ${x.title}`, subtitle, steps, tier, tierLocked: part === 'perform' }, { seed, mode, focus });
+    this.toast(part === 'perform' ? `${x.title}: this one counts` : `${x.title}: ${steps[0]?.hint ?? 'trace the highlighted stroke'}`, { duration: 2800 });
+  }
+
+  /** The warm-up: the Han / Drawabox set, three to five minutes. */
+  startWarmup() {
+    if (!this.sgl) return;
+    const seed = (Date.now() % 1_000_000) | 0;
+    const steps = warmupReps(seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
+    this.enterSession({ missionId: null, lessonId: null, part: 'warmup', title: 'Warm-up', subtitle: `${steps.length} strokes`, steps, tier: 'light', tierLocked: false }, { seed, mode: 'warmup', focus: 'confidence' });
+    this.toast('Warm-up: confident pulls, accuracy second', { duration: 2500 });
+  }
+
+  /** Perform starts one tier below where the last guided run ended (never past dots by default). */
+  private defaultPerformTier(id: string): Tier {
+    const g = this.state.progress.missions[id]?.guided;
+    if (!g) return 'light';
+    return stepTier(g.tier, 1, 2);
+  }
+
+  private enterSession(init: Pick<PracticeState, 'missionId' | 'lessonId' | 'part' | 'title' | 'subtitle' | 'steps' | 'tier' | 'tierLocked'>, sess: { seed: number; mode: ScoreMode; focus?: Dim }, dock: Dock = {}) {
+    this.stopDemo();
+    if (this.live) this.cancelStroke(true);
+    this.dismissWelcome();
+    if (this.state.practice) this.bankSessionTime();
+    if (!this.practiceBackup) {
+      this.practiceBackup = { strokes: this.strokes, redo: this.redoStack, settings: clone(this.settings), view: { ...this.view } };
+    }
+    this.strokes = [];
+    this.redoStack = [];
+    this.session = { startedAt: performance.now(), dims: [], ...sess };
+    this.emit({ practice: {
+      ...init, cue: init.missionId ? teachCue(init.missionId) : null, step: 0, results: [], tips: [], status: 'active', guide: this.state.practice?.guide ?? true,
+      feedback: null, streak: 0, misses: 0, loopOffer: false, loop: 0, note: null, reveal: null, pressureScored: true, summary: null,
+    } });
+    this.frameLesson(dock);
+    this.syncHistory();
+    this.practiceApplyBrush(0);
+  }
+
+  /** Where the lesson panel sits: a right column on wide screens, the lower half on phones. */
+  private teachDock(): Dock {
+    return this.cssW >= 768 ? { right: 400, top: 72 } : { bottom: Math.round(this.cssH * 0.5), top: 64 };
+  }
+
+  /** Adds the open session's time to the progress record. */
+  private bankSessionTime() {
+    const s = this.session;
+    if (!s) return;
+    const secs = Math.round((performance.now() - s.startedAt) / 1000);
+    s.startedAt = performance.now();
+    if (secs > 0) { const progress = addSeconds(this.state.progress, secs); saveProgress(progress); this.emit({ progress }); }
+  }
+
+  /** Fits the lesson box in the viewport, leaving room for the session chrome; `dock` reserves room for the results panel. */
+  private frameLesson(dock: Dock = {}) {
+    const { w, h } = LESSON_BOX;
+    // The session chrome: a top bar with the progress and the instruction, controls
+    // and the feedback bar along the bottom. A phone held sideways gets less of both.
+    const short = this.cssH <= 500;
+    const top = dock.top ?? (short ? 96 : this.cssW >= 640 ? 140 : 164), bottom = Math.max(short ? 76 : 104, dock.bottom ?? 0);
+    const left = 24, right = 24 + (dock.right ?? 0);
+    const zoom = clamp(Math.min((this.cssW - left - right) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
+    this.setViewLive({ zoom, x: left + (this.cssW - left - right) / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
+    this.committedView = { ...this.view };
+    this.repaintPaper();
+  }
+
+  /** Leaves the session. `keep` keeps the traced drawing as the document instead of restoring the previous one. */
+  exitPractice(keep = false) {
+    if (!this.state.practice) return;
+    this.stopDemo();
+    if (this.live) this.cancelStroke(true);
+    this.bankSessionTime();
+    this.session = null;
+    const b = this.practiceBackup;
+    this.practiceBackup = null;
+    this.emit({ practice: null });
+    if (b) {
+      if (!keep) {
+        this.strokes = b.strokes;
+        this.redoStack = b.redo;
+        this.setViewLive(b.view);
+        this.committedView = { ...this.view };
+        this.repaintPaper();
+      } else {
+        this.redoStack = [];
+      }
+      this.set({ ...b.settings, tool: 'brush' });
+      this.emit({ tipError: null, tipExtent: this.extentFor(b.settings.tipSource) });
+    }
+    this.syncHistory();
+    this.saveNow();
+  }
+
+  /** Starts the open session over (trainers get a fresh layout). */
+  restartPractice() {
+    const pr = this.state.practice;
+    if (!pr) return;
+    if (pr.part === 'warmup') { this.startWarmup(); return; }
+    if (pr.missionId) { this.startMission(pr.missionId, pr.part, { tier: pr.tierLocked ? pr.tier : undefined }); return; }
+  }
+
+  setPracticeGuide(guide: boolean) {
+    const pr = this.state.practice;
+    if (pr) this.emit({ practice: { ...pr, guide } });
+  }
+
+  /** Changes the assist tier by hand (not in Perform, where the tier is the difficulty). */
+  setPracticeTier(tier: Tier) {
+    const pr = this.state.practice;
+    if (!pr || pr.status !== 'active' || pr.tierLocked) return;
+    this.emit({ practice: { ...pr, tier, note: null } });
+  }
+
+  /** Repeats the current step three times without it counting, then reopens it. */
+  loopStep() {
+    const pr = this.state.practice;
+    if (!pr || pr.status !== 'active' || pr.part === 'perform') return;
+    this.emit({ practice: { ...pr, loop: 3, loopOffer: false, misses: 0, note: 'Loop: draw it three times, then the one that counts' } });
+  }
+
+  /** Sets the brush, colour and size the reference stroke was made with. */
+  private practiceApplyBrush(i: number) {
+    const st = this.state.practice?.steps[i];
+    if (!st) return;
+    const t = BRUSH_TEMPLATES.find((x) => x.id === st.template);
+    if (!t) return;
+    this.brushId = t.id;
+    this.set({ spec: lessonSpec(t), tipSource: t.tipSource, size: st.size, color: st.color, tool: 'brush', ...this.brushInput(t) });
+    this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
+  }
+
+  private dropLastStroke() {
+    this.strokes.pop();
+    this.rebuild();
+  }
+
+  // -- Lessons: demo strokes drawn by the engine --------------------------------
+  private demo: { live: Live; raf: number; resolve: (done: boolean) => void } | null = null;
+
+  /**
+   * Draws a demo stroke on the paper with the real brush at its own pace, through
+   * the same live pipeline as a pen: points arrive as their timestamps come due and
+   * are stamped chunk by chunk, so the learner sees the mark form the way theirs
+   * will. Resolves true when the stroke is down, false when it was stopped.
+   */
+  playDemo(d: DemoStroke): Promise<boolean> {
+    if (!this.sgl || !this.canvas || d.points.length < 2) return Promise.resolve(false);
+    this.stopDemo();
+    if (this.live) this.cancelStroke(true);
+    this.flushPaint();
+    const t = BRUSH_TEMPLATES.find((x) => x.id === d.template) ?? BRUSH_TEMPLATES[0];
+    this.brushId = t.id;
+    this.set({ spec: lessonSpec(t), tipSource: t.tipSource, size: d.size, color: d.color, tool: 'brush', ...this.brushInput(t) });
+    this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
+    const src = d.points[0].t !== undefined ? d.points : demoTimeline(d.points, d.speed ?? DEFAULT_SPEED);
+    // No input kind: the pressures are the reference's and are not re-simulated or filtered.
+    const rec = { ...(this.newRecord('brush', { ...src[0], t: 0 }) as BrushRecord), input: undefined, zoom: this.view.zoom, seed: 5000 + ((src.length * 31 + Math.round(src[0].x)) % 997) };
+    const live: Live = { id: DEMO_POINTER, pointerType: 'demo', rect: this.canvas.getBoundingClientRect(), rec, erasedUpTo: 0, lastRecorded: { ...rec.points[0] }, recent: [], t0: 0, cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.live = live;
+    this.frameLog.length = 0; this.lastPreviewAt = 0;
+    this.emit({ drawing: true, demo: true });
+    const start = performance.now() + (d.delay ?? 0);
+    let next = 1, landed = false;
+    return new Promise<boolean>((resolve) => {
+      const tick = () => {
+        if (this.live !== live) { this.demo = null; this.emit({ demo: false }); resolve(false); return; } // a finger turned it into a gesture
+        const el = performance.now() - start;
+        if (el >= 0 && !landed) { landed = true; this.sample('down', 0, src[0].p, 'brush'); }
+        const before = next;
+        while (next < src.length && (src[next].t ?? 0) <= el) { rec.points.push({ ...src[next] }); next++; }
+        if (next > before) this.sample('move', this.lastSpeed(src.slice(0, next)), src[next - 1].p, 'brush');
+        if (next < src.length) { if (el >= 0) this.schedulePreview(); this.demo!.raf = requestAnimationFrame(tick); return; }
+        // Lift: the same finish as a pen leaving the paper.
+        this.sample('up', 0, 0, 'brush');
+        this.live = null;
+        this.previewQueued = false;
+        this.stampNextChunk(live, rec.points.length, true);
+        this.endLiveMask(live);
+        this.pushRecord(rec);
+        this.demo = null;
+        this.emit({ drawing: false, demo: false });
+        resolve(true);
+      };
+      this.demo = { live, raf: requestAnimationFrame(tick), resolve };
+    });
+  }
+
+  /** Stops the demo stroke in progress, if any; its promise resolves false. */
+  stopDemo() {
+    const dm = this.demo;
+    if (!dm) return;
+    cancelAnimationFrame(dm.raf);
+    this.demo = null;
+    if (this.live === dm.live) this.cancelStroke(true);
+    this.emit({ demo: false });
+    dm.resolve(false);
+  }
+
+  /** Wipes the demos (and any try-out strokes) off the lesson paper. */
+  clearDemo() {
+    this.stopDemo();
+    if (this.live) this.cancelStroke(true);
+    if (!this.strokes.length || !this.sgl) return;
+    this.flushPaint();
+    this.strokes = [];
+    this.redoStack = [];
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.paint(this.sgl.paperTex, []);
+    this.syncHistory();
+  }
+
+  /** The lesson slides were read to the end. */
+  markTaught(missionId: string) {
+    if (this.state.progress.missions[missionId]?.taught) return;
+    const progress = recordTaught(this.state.progress, missionId);
+    saveProgress(progress);
+    this.emit({ progress });
+  }
+
+  /** Scores the stroke just committed against the current step and advances, rejects or loops. */
+  private practiceEvaluate(rec: StrokeRecord) {
+    const pr = this.state.practice, sess = this.session;
+    if (!pr || !sess || pr.status !== 'active') return;
+    if (pr.part === 'teach') return; // trying it out beside the lesson: nothing is scored
+    if (rec.tool !== 'brush') { this.dropLastStroke(); this.syncHistory(); this.toast('Lessons are traced with the brush'); return; }
+    const st = pr.steps[pr.step];
+    const tol = Math.max(10, stepWidth(st) * 0.6 + 4);
+    if (rec.points.length < 2 || pathLength(rec.points) < tol) {
+      this.dropLastStroke();
+      this.syncHistory();
+      return; // a tap: nothing to score
+    }
+    const isPen = rec.input === 'pen';
+    let note = pr.note, pressureScored = pr.pressureScored;
+    if (!isPen && pressureScored) { pressureScored = false; note = 'Pressure isn’t scored for a finger or mouse'; }
+    const res = scoreStroke(rec.points, st.points, { tolerance: tol, mode: sess.mode, targetSpeed: st.speed ?? DEFAULT_SPEED, hasPressure: isPen, focus: sess.focus });
+    const drill = pr.part === 'trainer' || pr.part === 'warmup';
+    const pass = pr.part === 'perform' ? PERFORM_PASS_SCORE : PASS_SCORE;
+    // Drills accept every stroke (never correct a line); Perform gives three tries, the third counts.
+    const accepted = drill || res.score >= pass || (pr.part === 'perform' && pr.misses >= 2);
+    const feedback: PracticeFeedback = {
+      step: pr.step, score: res.score, reversed: res.reversed, accepted, at: Date.now(),
+      tip: res.tip, praise: res.tip ? null : praiseFor(res.score), dims: res.dims, band: res.band, looped: pr.loop > 0,
+    };
+    const reveal = pr.tier === 'blind' ? { step: pr.step, at: Date.now() } : null;
+    if (pr.loop > 0) {
+      // A rehearsal: scored, erased, counted down.
+      this.dropLastStroke();
+      const loop = pr.loop - 1;
+      this.emit({ practice: { ...pr, feedback, loop, reveal, pressureScored, note: loop === 0 ? 'Now the one that counts' : `Loop: ${loop} more` } });
+      this.syncHistory();
+      return;
+    }
+    if (!accepted) {
+      this.dropLastStroke();
+      const misses = pr.misses + 1;
+      let tier = pr.tier, loopOffer = pr.loopOffer;
+      if (misses >= 2 && pr.part !== 'perform') {
+        loopOffer = true;
+        if (!pr.tierLocked) { const up = stepTier(tier, -1); if (up !== tier) { tier = up; note = `Guide stepped up: ${TIER_LABEL[up].toLowerCase()}`; } }
+      }
+      this.emit({ practice: { ...pr, feedback, streak: 0, misses, tier, loopOffer, note, reveal, pressureScored } });
+      this.syncHistory();
+      return;
+    }
+    sess.dims[pr.step] = res.dims;
+    this.advancePractice(res.score, feedback, { reveal, note, pressureScored });
+  }
+
+  /** Leaves the current step open and moves on (not in Perform: there the third try counts). */
+  skipStep() {
+    const pr = this.state.practice;
+    if (pr?.status === 'active' && pr.part !== 'perform' && pr.steps.length) this.advancePractice(null, null, {});
+  }
+
+  private advancePractice(score: number | null, feedback: PracticeFeedback | null, extra: { reveal?: PracticeState['reveal']; note?: string | null; pressureScored?: boolean }) {
+    const pr = this.state.practice, sess = this.session;
+    if (!pr || !sess) return;
+    const results = [...pr.results], tips = [...pr.tips];
+    results[pr.step] = score;
+    tips[pr.step] = feedback?.tip ?? null;
+    if (score === null) sess.dims[pr.step] = null;
+    const step = pr.step + 1;
+    const streak = score !== null && score >= 80 ? pr.streak + 1 : 0;
+    let tier = pr.tier, note = extra.note ?? null;
+    // Two strokes in a row at 85 or better: the guide steps down (drills and guided runs stop at dots).
+    const prev = pr.results[pr.step - 1];
+    if (!pr.tierLocked && score !== null && score >= STEP_DOWN_SCORE && prev !== null && prev !== undefined && prev >= STEP_DOWN_SCORE) {
+      const down = stepTier(tier, 1, 2);
+      if (down !== tier) { tier = down; note = `Guide stepped down: ${TIER_LABEL[down].toLowerCase()}`; }
+    }
+    const common = { results, tips, streak, feedback, tier, misses: 0, loopOffer: false, loop: 0, reveal: extra.reveal ?? null, pressureScored: extra.pressureScored ?? pr.pressureScored };
+    if (step >= pr.steps.length) { this.completePractice({ ...pr, ...common, step, note: null }); return; }
+    this.emit({ practice: { ...pr, ...common, step, note } });
+    this.syncHistory();
+    this.practiceApplyBrush(step);
+  }
+
+  /** Ends the run: the summary, the critique data, and the progress record. */
+  private completePractice(pr: PracticeState) {
+    const sess = this.session!;
+    const n = pr.steps.length;
+    const skipped = pr.results.filter((r) => r === null).length;
+    const mean = Math.round(pr.results.reduce<number>((a, r) => a + (r ?? 0), 0) / n);
+    const clean = pr.results.filter((r) => r !== null && r >= 70).length;
+    const costly = pr.steps.map((_, i) => ({ step: i, score: pr.results[i] ?? 0, tip: pr.tips[i] ?? null }))
+      .sort((a, b) => a.score - b.score).slice(0, 3).filter((c) => c.score < 85);
+    // The dimension that cost the most across the run.
+    let worstDim: Dim | null = null, worstMean = 1;
+    for (const d of DIMS) {
+      const vals = sess.dims.map((x) => x?.[d]).filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
+      if (vals.length < Math.max(2, n / 3)) continue;
+      const m = vals.reduce((a, v) => a + v, 0) / vals.length;
+      if (m < worstMean) { worstMean = m; worstDim = d; }
+    }
+    const summary: PracticeSummary = { score: mean, stars: 0, newBest: false, clean, costly, worstDim: worstMean < 0.8 ? worstDim : null, worstText: worstMean < 0.8 && worstDim ? WORST_TEXT[worstDim] : null };
+    // The drill's focus: how much of the taught dimension was in band.
+    if (sess.focus) {
+      const vals = sess.dims.map((x) => x?.[sess.focus!]).filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
+      if (vals.length) summary.focus = { dim: sess.focus, mean: Math.round((100 * vals.reduce((a, v) => a + v, 0)) / vals.length) };
+    }
+    let progress = this.state.progress;
+    if (pr.part === 'trainer' && pr.missionId) progress = recordTrainer(progress, pr.missionId, mean, clean, n);
+    else if (pr.part === 'warmup') progress = recordWarmup(progress);
+    else if (pr.part === 'guided' && pr.missionId) progress = recordGuided(progress, pr.missionId, mean, pr.tier);
+    else if (pr.part === 'perform' && pr.missionId) {
+      const stars = starsFor(mean, skipped);
+      const first = progress.missions[pr.missionId]?.first;
+      const r = recordPerform(progress, pr.missionId, mean, stars, pr.tier, serializeRecords(this.strokes));
+      progress = r.progress;
+      summary.stars = stars; summary.newBest = r.newBest;
+      if (first) { summary.firstScore = first.score; this.queueThenVsNow(pr.missionId, first.strokes, this.strokes); }
+    }
+    this.bankSessionTime();
+    saveProgress(progress);
+    this.emit({ progress, practice: { ...pr, status: 'complete', summary } });
+    this.syncHistory();
+    // The results dock on the right on wide screens and rise from the bottom on phones: keep the drawing beside them.
+    this.frameLesson(this.cssW >= 768 ? { right: 400 } : { bottom: Math.round(this.cssH * 0.58) });
+  }
+
+  /** Engine-rendered thumbnails of the first Perform and today's, for the critique. */
+  private queueThenVsNow(missionId: string, firstSaved: unknown[], today: StrokeRecord[]) {
+    const first = deserializeRecords(firstSaved);
+    const W = 320, H = 240;
+    const zoom = Math.min(W / (LESSON_BOX.w + 40), H / (LESSON_BOX.h + 40));
+    const view: View = { zoom, x: (W - LESSON_BOX.w * zoom) / 2, y: (H - LESSON_BOX.h * zoom) / 2 };
+    const render = (records: StrokeRecord[]) => {
+      const c = document.createElement('canvas');
+      c.width = W; c.height = H;
+      let url: string | null = null;
+      this.renderOffscreen(c, (clearPaper) => {
+        clearPaper();
+        for (const rec of visibleRecords(records)) if (rec.tool === 'brush') this.stampRecord(rec, W, H, 1, view);
+        url = c.toDataURL('image/png');
+      });
+      return url;
+    };
+    const run = () => {
+      if (this.live) { requestAnimationFrame(run); return; }
+      const pr = this.state.practice;
+      if (!pr || pr.status !== 'complete' || pr.missionId !== missionId || !pr.summary) return;
+      try {
+        const firstThumb = render(first), todayThumb = render(today);
+        this.emit({ practice: { ...pr, summary: { ...pr.summary, firstThumb, todayThumb } } });
+      } catch (err) {
+        console.warn('[studio] then-vs-now render failed', err);
+      }
+    };
+    requestAnimationFrame(run);
+  }
+
+  /** Undo inside a session: removes the last traced stroke and reopens its step. */
+  private practiceBack() {
+    const pr = this.state.practice;
+    if (!pr || pr.status !== 'active') return;
+    if (pr.step === 0) { this.toast('Nothing to undo'); return; }
+    const prev = pr.step - 1;
+    const results = pr.results.slice(0, prev), tips = pr.tips.slice(0, prev);
+    if (pr.results[prev] !== null && this.strokes.length) this.dropLastStroke();
+    if (this.session) this.session.dims.length = prev;
+    this.emit({ practice: { ...pr, step: prev, results, tips, feedback: null, streak: 0, misses: 0, loopOffer: false, loop: 0, note: null } });
+    this.syncHistory();
+    this.practiceApplyBrush(prev);
+  }
+
+  /** Eraser dabs (device px) for the record's points from index `from` on. */
+  private eraserDabs(rec: EraserRecord, from: number): Dab[] {
+    const dabs: Dab[] = [];
+    const { dpr } = this, v = this.committedView;
+    const sx = (x: number) => (x * v.zoom + v.x) * dpr, sy = (y: number) => (y * v.zoom + v.y) * dpr;
+    const r = (rec.size / 2) * v.zoom * dpr;
+    const step = Math.max(0.75, rec.size * 0.12);
+    const pts = rec.points;
+    if (from === 0) dabs.push({ x: sx(pts[0].x), y: sy(pts[0].y), r });
+    for (let i = Math.max(1, from); i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i];
+      const n = Math.max(1, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / step));
+      for (let k = 1; k <= n; k++) {
+        const t = k / n;
+        dabs.push({ x: sx(a.x + (b.x - a.x) * t), y: sy(a.y + (b.y - a.y) * t), r });
+      }
+    }
+    return dabs;
+  }
+
+  private renderRecord(rec: StrokeRecord) {
+    if (rec.tool === 'clear') this.sgl!.blit(this.sgl!.paperTex);
+    else if (rec.tool === 'eraser') this.sgl!.eraseDabs(this.eraserDabs(rec, 0));
+    else this.renderBrushStroke(rec);
+  }
+
+  private cullingEnabled = true;
+  /** Records skipped by culling during the last paint (for tests and tuning). */
+  private lastCulled = 0;
+
+  /** World-space rectangle currently visible at the committed view. */
+  private visibleWorldBounds() {
+    const v = this.committedView;
+    return { minX: -v.x / v.zoom, minY: -v.y / v.zoom, maxX: (this.cssW - v.x) / v.zoom, maxY: (this.cssH - v.y) / v.zoom };
+  }
+
+  /**
+   * Restores `baseTex`, draws `records` on top, and stores the result as committed.
+   * Records whose padded bounds miss the viewport are skipped: they cannot touch a
+   * visible pixel, and off-screen strokes dominate the cost of large drawings.
+   */
+  private takeTexture(): WebGLTexture { return this.texPool.pop() ?? this.sgl!.createTexture(); }
+  private releaseTexture(tex: WebGLTexture) { this.texPool.push(tex); }
+  private dropSnaps(list: Array<{ count: number; tex: WebGLTexture }>) {
+    for (const s of list) this.releaseTexture(s.tex);
+    list.length = 0;
+  }
+
+  /** Finishes a progressive rebuild synchronously (before anything else touches the canvas). */
+  private flushPaint() {
+    const p = this.pending;
+    if (!p) return;
+    cancelAnimationFrame(p.raf);
+    this.sgl!.blit(p.scratch);
+    while (p.index < p.records.length) this.paintOne(p.records[p.index++]);
+    this.finishProgressive(p);
+  }
+
+  /** Cancels a progressive rebuild; returns its overlay (still valid) for the caller to reuse or release. */
+  private cancelPaint(): Overlay | null {
+    const p = this.pending;
+    if (!p) return null;
+    cancelAnimationFrame(p.raf);
+    this.releaseTexture(p.scratch);
+    this.pending = null;
+    return p.overlay;
+  }
+
+  private finishProgressive(p: NonNullable<typeof this.pending>) {
+    const sgl = this.sgl!;
+    sgl.snapshot(sgl.committedTex);
+    this.releaseTexture(p.scratch);
+    if (p.overlay) this.releaseTexture(p.overlay.tex);
+    this.pending = null;
+  }
+
+  /** What to show for a cheap transformed preview: the image being replaced while a rebuild runs, else the committed one. */
+  private displaySource(): Overlay {
+    return this.pending?.overlay ?? { tex: this.sgl!.committedTex, view: this.committedView };
+  }
+
+  /** Draws `o.tex` (rendered at `o.view`) transformed to the current committed view, over the paper colour. */
+  private drawOverlay(o: Overlay) {
+    const sgl = this.sgl!, v = this.committedView, c = o.view, dpr = this.dpr;
+    const k = v.zoom / c.zoom;
+    const bg = paperPresets[this.settings.paper].bg;
+    sgl.clearColor(bg[0], bg[1], bg[2]);
+    sgl.blitRect(o.tex, (v.x - c.x * k) * dpr, (v.y - c.y * k) * dpr, this.glW * k, this.glH * k);
+  }
+
+  private paintOne(rec: StrokeRecord) {
+    if (this.cullingEnabled && rec.tool !== 'clear' && !boundsIntersect(recordBounds(rec), this.visibleWorldBounds())) { this.lastCulled++; return; }
+    this.renderRecord(rec);
+    this.perf.paintStrokes++;
+  }
+
+  /**
+   * Like paint(), spread over frames with a time budget. Each step starts by
+   * blitting the state reached so far back into the drawing buffer (the engine
+   * reads the canvas back while compositing, and on WebKit that read is only
+   * reliable for content drawn in the same frame) and ends with a snapshot.
+   */
+  private paintProgressive(baseTex: WebGLTexture, records: StrokeRecord[], overlay: Overlay | null = null) {
+    const stale = this.cancelPaint();
+    if (stale && stale !== overlay) this.releaseTexture(stale.tex);
+    const sgl = this.sgl!;
+    const scratch = this.takeTexture();
+    sgl.blit(baseTex);
+    sgl.snapshot(scratch);
+    this.lastCulled = 0;
+    const p = { records, index: 0, scratch, raf: 0, overlay };
+    this.pending = p;
+    const step = () => {
+      if (this.pending !== p) return;
+      const t0 = performance.now();
+      sgl.blit(scratch);
+      while (p.index < p.records.length && performance.now() - t0 < PROGRESSIVE_BUDGET_MS) this.paintOne(p.records[p.index++]);
+      sgl.snapshot(scratch);
+      this.perf.rebuildMs += performance.now() - t0;
+      if (p.index >= p.records.length) { this.finishProgressive(p); this.perf.rebuilds++; return; }
+      // Keep the previous image on screen (transformed) until the exact one is ready.
+      if (p.overlay) this.drawOverlay(p.overlay);
+      p.raf = requestAnimationFrame(step);
+    };
+    step();
+  }
+
+  private paint(baseTex: WebGLTexture, records: StrokeRecord[]) {
+    const t0 = performance.now();
+    try { this.paintInner(baseTex, records); } finally { this.perf.rebuildMs += performance.now() - t0; this.perf.rebuilds++; }
+  }
+
+  private paintInner(baseTex: WebGLTexture, records: StrokeRecord[]) {
+    const stale = this.cancelPaint();
+    if (stale) this.releaseTexture(stale.tex);
+    const sgl = this.sgl!;
+    sgl.blit(baseTex);
+    this.lastCulled = 0;
+    for (const rec of records) this.paintOne(rec);
+    sgl.snapshot(sgl.committedTex);
+  }
+
+  /** Drops checkpoints taken after `count` strokes. */
+  private truncateCheckpoints(count: number) {
+    while (this.checkpoints.length && this.checkpoints[this.checkpoints.length - 1].count > count) {
+      this.sgl!.deleteTexture(this.checkpoints.pop()!.tex);
+    }
+  }
+
+  /** Rebuilds the committed image for the current stroke list from the newest usable checkpoint. */
+  private rebuild(progressive = false, overlay: Overlay | null = null) {
+    const n = this.strokes.length;
+    this.truncateCheckpoints(n);
+    this.undoSnaps = this.undoSnaps.filter((s) => s.count < n || (this.releaseTexture(s.tex), false));
+    const cp = this.checkpoints[this.checkpoints.length - 1];
+    const base = cp ? cp.tex : this.sgl!.paperTex;
+    const records = cp ? this.strokes.slice(cp.count) : this.strokes;
+    if (progressive && records.length > PROGRESSIVE_MIN_STROKES) { this.paintProgressive(base, records, overlay); return; }
+    this.paint(base, records);
+    if (overlay) this.releaseTexture(overlay.tex);
+  }
+
+  /** Appends a record whose pixels are already in the framebuffer. */
+  private pushRecord(rec: StrokeRecord, clearRedo = true) {
+    const sgl = this.sgl!;
+    // The old committed texture *is* the state before this stroke: keep the handle
+    // for an instant undo instead of copying anything.
+    this.undoSnaps.push({ count: this.strokes.length, tex: sgl.committedTex });
+    while (this.undoSnaps.length > MAX_STEP_SNAPS) this.releaseTexture(this.undoSnaps.shift()!.tex);
+    sgl.committedTex = this.takeTexture();
+    sgl.snapshot(sgl.committedTex);
+    this.strokes.push(rec);
+    this.clearedBackup = null; // a new stroke forfeits the restore of a cleared drawing
+    if (clearRedo) { this.redoStack = []; this.dropSnaps(this.redoSnaps); }
+    const n = this.strokes.length;
+    if (n % CHECKPOINT_EVERY === 0) {
+      const tex = sgl.createTexture();
+      sgl.snapshot(tex);
+      this.checkpoints.push({ count: n, tex });
+      while (this.checkpoints.length > MAX_CHECKPOINTS) sgl.deleteTexture(this.checkpoints.shift()!.tex);
+    }
+    this.syncHistory();
+  }
+
+  private commitRecord(rec: StrokeRecord, clearRedo = true) {
+    this.flushPaint();
+    this.sgl!.blit(this.sgl!.committedTex);
+    this.renderRecord(rec);
+    this.pushRecord(rec, clearRedo);
+  }
+
+  undo = () => {
+    if (this.live) this.cancelStroke();
+    if (this.state.practice && this.state.practice.part !== 'teach') { this.practiceBack(); return; }
+    if (!this.strokes.length) {
+      if (this.clearedBackup) { this.restoreCleared(); return; }
+      this.toast('Nothing to undo');
+      return;
+    }
+    this.flushPaint();
+    this.redoStack.push(this.strokes.pop()!);
+    const n = this.strokes.length, sgl = this.sgl!;
+    const snap = this.undoSnaps.length && this.undoSnaps[this.undoSnaps.length - 1].count === n ? this.undoSnaps.pop()! : null;
+    if (snap) {
+      // Instant: the state before the stroke is a texture we still hold; the current
+      // one becomes the redo state.
+      this.redoSnaps.push({ count: n + 1, tex: sgl.committedTex });
+      while (this.redoSnaps.length > MAX_STEP_SNAPS) this.releaseTexture(this.redoSnaps.shift()!.tex);
+      sgl.committedTex = snap.tex;
+      sgl.blit(sgl.committedTex);
+      this.truncateCheckpoints(n);
+    } else {
+      this.rebuild();
+    }
+    this.syncHistory();
+    this.signal('undo');
+  };
+
+  redo = () => {
+    if (this.state.practice) return;
+    const rec = this.redoStack.pop();
+    if (!rec) return;
+    const n = this.strokes.length, sgl = this.sgl!;
+    const snap = this.redoSnaps.length && this.redoSnaps[this.redoSnaps.length - 1].count === n + 1 ? this.redoSnaps.pop()! : null;
+    if (snap) {
+      this.flushPaint();
+      this.undoSnaps.push({ count: n, tex: sgl.committedTex });
+      while (this.undoSnaps.length > MAX_STEP_SNAPS) this.releaseTexture(this.undoSnaps.shift()!.tex);
+      sgl.committedTex = snap.tex;
+      sgl.blit(sgl.committedTex);
+      this.strokes.push(rec);
+      this.syncHistory();
+      this.signal('redo');
+      return;
+    }
+    this.commitRecord(rec, false);
+    this.signal('redo');
+  };
+
+  dismissWelcome() {
+    if (!this.state.firstRun) return;
+    this.emit({ firstRun: false });
+    try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* ignore */ }
+  }
+
+  /** Clears the paper as an undoable history entry. */
+  /**
+   * Clears the drawing and its history: strokes, redo, checkpoints and undo
+   * snapshots all go, and the autosave shrinks to an empty drawing. The old
+   * drawing is held in memory until the next stroke, so Undo (or the toast)
+   * can bring it back if the clear was a slip.
+   */
+  clear = () => {
+    if (this.live) this.cancelStroke();
+    if (this.state.practice) { this.restartPractice(); return; }
+    if (!this.strokes.length) { this.toast('This sketch is already blank'); return; }
+    this.flushPaint();
+    this.clearedBackup = { strokes: this.strokes, redo: this.redoStack };
+    this.strokes = [];
+    this.redoStack = [];
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.paint(this.sgl!.paperTex, []);
+    this.syncHistory();
+    this.signal('clear');
+    this.toast('New sketch', { action: { label: 'Undo', onClick: this.restoreCleared }, duration: 6000 });
+  };
+
+  /** Brings back the drawing removed by the last Clear, if nothing has been drawn since. */
+  restoreCleared = () => {
+    const b = this.clearedBackup;
+    if (!b || this.strokes.length) return;
+    this.clearedBackup = null;
+    this.strokes = b.strokes;
+    this.redoStack = b.redo;
+    this.repaintPaper();
+    this.syncHistory();
+    this.toast('Previous sketch restored');
+  };
+
+  /** Discards the stroke in progress (Escape, or a second finger turning it into a gesture). */
+  cancelStroke = (quiet = false) => {
+    if (!this.live) return;
+    const live = this.live;
+    this.live = null;
+    this.previewQueued = false;
+    this.emit({ drawing: false });
+    this.overlayEvent = null;
+    this.clearPredicted();
+    this.endLiveMask(live);
+    this.sgl!.blit(this.sgl!.committedTex);
+    this.queueHud({ pressure: 0 });
+    this.sample('up', 0, 0, live.rec.tool);
+    if (!quiet) this.toast('Stroke cancelled');
+  };
+
+  // ---------------------------------------------------------------------------
+  // Paper + sizing
+  // ---------------------------------------------------------------------------
+  /** Seeded paper grain, anchored to world space so it scrolls and scales with the drawing. */
+  private renderPaper() {
+    const { glW, glH, dpr, cssW, cssH } = this;
+    const v = this.committedView;
+    const conf = paperPresets[this.settings.paper];
+    const c = document.createElement('canvas');
+    c.width = glW; c.height = glH;
+    const ctx = c.getContext('2d')!;
+    ctx.fillStyle = `rgb(${conf.bg[0]}, ${conf.bg[1]}, ${conf.bg[2]})`;
+    ctx.fillRect(0, 0, glW, glH);
+
+    const grainSize = 256;
+    const g = document.createElement('canvas');
+    g.width = g.height = grainSize;
+    const gctx = g.getContext('2d')!;
+    const img = gctx.createImageData(grainSize, grainSize);
+    const d = img.data;
+    const amp = conf.grain * 7;
+    let seed = 0x9e3779b9 ^ conf.grain * 1000; // deterministic per paper
+    const rnd = () => { seed = (seed + 0x6d2b79f5) | 0; let t = Math.imul(seed ^ (seed >>> 15), seed | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (rnd() + rnd() - 1) * amp; // triangular noise
+      d[i] = clamp(conf.bg[0] + n, 0, 255);
+      d[i + 1] = clamp(conf.bg[1] + n, 0, 255);
+      d[i + 2] = clamp(conf.bg[2] + n * 0.9, 0, 255);
+      d[i + 3] = 255;
+    }
+    gctx.putImageData(img, 0, 0);
+    ctx.save();
+    // The pattern follows the transform: translating by the pan anchors the grain
+    // to the paper and scaling by the zoom makes it grow with it, so the texture
+    // stays put and scales like the drawing when panning and zooming.
+    ctx.scale(dpr, dpr);
+    ctx.translate(v.x, v.y);
+    ctx.scale(v.zoom, v.zoom);
+    ctx.fillStyle = ctx.createPattern(g, 'repeat')!;
+    ctx.fillRect(-v.x / v.zoom, -v.y / v.zoom, cssW / v.zoom, cssH / v.zoom);
+    ctx.restore();
+    this.sgl!.uploadPaper(c);
+  }
+
+  /** Paper or view changed: checkpoints embed the old paper/view, so replay everything. */
+  private repaintPaper(overlay: Overlay | null = null) {
+    this.renderPaper();
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.rebuild(true, overlay);
+  }
+
+  private resize(force = false) {
+    const canvas = this.canvas!;
+    const desk = canvas.parentElement!;
+    const nextW = desk.clientWidth || window.innerWidth;
+    const nextH = desk.clientHeight || window.innerHeight;
+    const nextDpr = Math.min(2, window.devicePixelRatio || 1);
+    if (!force && nextW === this.cssW && nextH === this.cssH && nextDpr === this.dpr) return; // e.g. iOS keyboard viewport events
+    this.cssW = nextW; this.cssH = nextH; this.dpr = nextDpr;
+    this.glW = Math.max(1, Math.round(nextW * nextDpr));
+    this.glH = Math.max(1, Math.round(nextH * nextDpr));
+    canvas.width = this.glW; canvas.height = this.glH;
+    canvas.style.width = nextW + 'px'; canvas.style.height = nextH + 'px';
+    this.sgl!.setSize(this.glW, this.glH);
+    brush.load(canvas);      // (re)registers the target with its new size
+    brush.noFill(); brush.noHatch(); brush.noField();
+    this.repaintPaper();
+  }
+
+  private onResize() {
+    clearTimeout(this.resizeTimer);
+    this.resizeTimer = window.setTimeout(() => { if (!this.live && !this.gesture) this.resize(); }, 150);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Camera
+  // ---------------------------------------------------------------------------
+  get currentView(): View { return this.view; }
+
+  toWorld(sx: number, sy: number): { x: number; y: number } {
+    const v = this.view;
+    return { x: (sx - v.x) / v.zoom, y: (sy - v.y) / v.zoom };
+  }
+
+  /** Sets the camera during an interaction: cheap transformed preview of the committed image. */
+  private setViewLive(next: View) {
+    this.view = { x: next.x, y: next.y, zoom: clamp(next.zoom, MIN_ZOOM, MAX_ZOOM) };
+    this.emit({ view: { ...this.view } });
+    if (this.viewPreviewQueued) return;
+    this.viewPreviewQueued = true;
+    requestAnimationFrame(() => {
+      this.viewPreviewQueued = false;
+      const sgl = this.sgl;
+      if (!sgl) return;
+      const src = this.displaySource();
+      const v = this.view, c = src.view, dpr = this.dpr;
+      const k = v.zoom / c.zoom;
+      const bg = paperPresets[this.settings.paper].bg;
+      sgl.clearColor(bg[0], bg[1], bg[2]);
+      sgl.blitRect(src.tex, (v.x - c.x * k) * dpr, (v.y - c.y * k) * dpr, this.glW * k, this.glH * k);
+    });
+  }
+
+  /** Interaction ended: re-render the drawing exactly at the new view. */
+  private commitView() {
+    const v = this.view, c = this.committedView;
+    if (v.x === c.x && v.y === c.y && v.zoom === c.zoom) return;
+    const sgl = this.sgl!;
+    // A rebuild still in flight: its overlay is the last complete image, start over from it.
+    const inflight = this.cancelPaint();
+    if (v.zoom === c.zoom && !inflight) {
+      this.shiftCommitted(c, v);
+    } else {
+      // Keep the previous image on screen, transformed, until the exact rebuild lands.
+      const overlay: Overlay = inflight ?? { tex: sgl.committedTex, view: { ...c } };
+      if (!inflight) sgl.committedTex = this.takeTexture();
+      this.committedView = { ...v };
+      this.repaintPaper(overlay);
+    }
+    this.scheduleSave();
+  }
+
+  /**
+   * Pan at the same zoom: nothing already on screen changes, so translate the
+   * committed image by a whole number of device pixels and render only the
+   * strips that came into view, with strokes clipped to them. The snap keeps the
+   * translated pixels and the freshly rendered ones on the same grid.
+   */
+  private shiftCommitted(from: View, to: View) {
+    const sgl = this.sgl!, dpr = this.dpr, { glW, glH } = this;
+    const sx = Math.round((to.x - from.x) * dpr), sy = Math.round((to.y - from.y) * dpr);
+    const snapped: View = { zoom: to.zoom, x: from.x + sx / dpr, y: from.y + sy / dpr };
+    this.view = snapped;
+    this.emit({ view: { ...snapped } });
+    this.committedView = { ...snapped };
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.renderPaper();
+    const old = sgl.committedTex;
+    sgl.committedTex = this.takeTexture();
+    sgl.blit(sgl.paperTex);
+    sgl.blitRect(old, sx, sy, glW, glH);
+    this.releaseTexture(old);
+    // Exposed strips (device px, y from top), made disjoint so nothing is composited twice.
+    const strips: Array<{ x: number; y: number; w: number; h: number }> = [];
+    if (sx > 0) strips.push({ x: 0, y: 0, w: sx, h: glH }); else if (sx < 0) strips.push({ x: glW + sx, y: 0, w: -sx, h: glH });
+    const x0 = sx > 0 ? sx : 0, x1 = sx < 0 ? glW + sx : glW;
+    if (sy > 0) strips.push({ x: x0, y: 0, w: x1 - x0, h: sy }); else if (sy < 0) strips.push({ x: x0, y: glH + sy, w: x1 - x0, h: -sy });
+    const t0 = performance.now();
+    for (const s of strips) {
+      if (s.w <= 0 || s.h <= 0) continue;
+      const clip = { x: s.x, y: glH - s.y - s.h, w: s.w, h: s.h };
+      const world = { minX: (s.x / dpr - snapped.x) / snapped.zoom, minY: (s.y / dpr - snapped.y) / snapped.zoom, maxX: ((s.x + s.w) / dpr - snapped.x) / snapped.zoom, maxY: ((s.y + s.h) / dpr - snapped.y) / snapped.zoom };
+      sgl.setClip(clip);
+      (globalThis as unknown as { __p5brushClip?: unknown }).__p5brushClip = clip;
+      try {
+        for (const rec of this.strokes) {
+          if (rec.tool !== 'clear' && !boundsIntersect(recordBounds(rec), world)) continue;
+          this.renderRecord(rec);
+          this.perf.paintStrokes++;
+        }
+      } finally {
+        sgl.setClip(null);
+        delete (globalThis as unknown as { __p5brushClip?: unknown }).__p5brushClip;
+      }
+    }
+    this.perf.rebuildMs += performance.now() - t0; this.perf.rebuilds++;
+    sgl.snapshot(sgl.committedTex);
+  }
+
+  /** Zooms by `factor` around a screen point (defaults to the viewport centre). */
+  zoomBy(factor: number, cx = this.cssW / 2, cy = this.cssH / 2) {
+    const v = this.view;
+    const zoom = clamp(v.zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    const k = zoom / v.zoom;
+    this.setViewLive({ zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k });
+    this.commitView();
+  }
+
+  setZoom(zoom: number) { this.zoomBy(zoom / this.view.zoom); }
+
+  resetView() {
+    this.setViewLive({ x: 0, y: 0, zoom: 1 });
+    this.commitView();
+  }
+
+  private onWheel(e: WheelEvent) {
+    e.preventDefault();
+    if (this.live) return;
+    const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.cssH : 1;
+    const dx = e.deltaX * scale, dy = e.deltaY * scale;
+    const rect = this.canvas!.getBoundingClientRect();
+    const v = this.view;
+    if (e.ctrlKey || e.metaKey) {
+      // Trackpad pinch arrives as ctrl+wheel; zoom around the cursor.
+      const cx = e.clientX - rect.left, cy = e.clientY - rect.top;
+      const zoom = clamp(v.zoom * Math.exp(-dy * 0.01), MIN_ZOOM, MAX_ZOOM);
+      const k = zoom / v.zoom;
+      this.setViewLive({ zoom, x: cx - (cx - v.x) * k, y: cy - (cy - v.y) * k });
+    } else {
+      this.setViewLive({ ...v, x: v.x - dx, y: v.y - dy });
+    }
+    clearTimeout(this.wheelTimer);
+    this.wheelTimer = window.setTimeout(() => this.commitView(), 160);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Input
+  // ---------------------------------------------------------------------------
+  private pointFromEvent(e: PointerEvent, rect: DOMRect): Point {
+    let p = e.pressure;
+    if (!(p > 0)) p = e.pointerType === 'pen' ? 0.02 : 0.5;
+    if (e.pointerType === 'pen') {
+      if (this.calib) this.calib.samples.push(p);
+      p = calibratePressure(p, this.settings.pencil.calib);
+    }
+    // rect is the on-screen box; if the page is scaled (an embedding frame, iOS
+    // zoom) it differs from the CSS size the camera works in.
+    const kx = rect.width ? this.cssW / rect.width : 1, ky = rect.height ? this.cssH / rect.height : 1;
+    const w = this.toWorld((e.clientX - rect.left) * kx, (e.clientY - rect.top) * ky);
+    // Quantise at capture so autosaved replays are identical to the live stroke.
+    const pt: Point = { x: round(w.x, 100), y: round(w.y, 100), p: round(p, 1000) };
+    if (this.live && e.pointerId === this.live.id) pt.t = Math.max(0, Math.round(e.timeStamp - this.live.t0));
+    const tilt = eventTilt(e);
+    if (tilt) { pt.alt = tilt.alt; pt.az = tilt.az; pt.tw = tilt.tw; }
+    return pt;
+  }
+
+  /** A record captures everything needed to replay the stroke deterministically. */
+  private newRecord(tool: Tool, firstPt: Point, input: InputKind = 'mouse'): BrushRecord | EraserRecord {
+    const s = this.settings;
+    if (tool === 'eraser') return { tool, size: s.eraserSize, points: [firstPt] };
+    const spec = clone(s.spec);
+    // 'stylus' mode disables the simulated envelope so only plot pressure remains.
+    if (s.pressureMode === 'stylus') spec.pressure = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
+    const rec: BrushRecord = {
+      tool,
+      spec,
+      tipSource: s.tipSource,
+      size: s.size,
+      color: s.color,
+      pressureMode: s.pressureMode,
+      sensitivity: s.forceSensitivity,
+      seed: (Math.random() * 2147483647) | 0,
+      points: [firstPt],
+      input,
+    };
+    const fx = input === 'pen' ? activeFx(s.pencil) : undefined;
+    if (fx) rec.fx = fx;
+    const filt = activeFilters(s.filters);
+    if (filt) rec.filt = filt;
+    return rec;
+  }
+
+  private screenPoint(e: PointerEvent) {
+    const rect = this.canvas!.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }
+
+  // -- gestures (fingers, middle mouse, space-drag) --------------------------
+  private beginGesture(e: PointerEvent, mode: 'touch' | 'mouse') {
+    const pt = this.screenPoint(e);
+    this.gesture = {
+      touches: new Map([[e.pointerId, pt]]),
+      start: new Map([[e.pointerId, pt]]),
+      startView: { ...this.view },
+      maxFingers: 1,
+      startedAt: performance.now(),
+      moved: 0,
+      mode,
+    };
+  }
+
+  /** Re-anchors the gesture to the current fingers (called when a finger is added or removed). */
+  private rebaseGesture() {
+    const g = this.gesture!;
+    g.start = new Map(g.touches);
+    g.startView = { ...this.view };
+  }
+
+  private updateGesture() {
+    const g = this.gesture!;
+    const ids = [...g.start.keys()].filter((id) => g.touches.has(id));
+    if (ids.length === 0) return;
+    const s0 = g.start.get(ids[0])!, c0 = g.touches.get(ids[0])!;
+    if (ids.length === 1) {
+      this.setViewLive({ ...g.startView, x: g.startView.x + (c0.x - s0.x), y: g.startView.y + (c0.y - s0.y) });
+      return;
+    }
+    const s1 = g.start.get(ids[1])!, c1 = g.touches.get(ids[1])!;
+    const d0 = Math.hypot(s1.x - s0.x, s1.y - s0.y) || 1;
+    const d1 = Math.hypot(c1.x - c0.x, c1.y - c0.y) || 1;
+    const zoom = clamp(g.startView.zoom * (d1 / d0), MIN_ZOOM, MAX_ZOOM);
+    const k = zoom / g.startView.zoom;
+    const m0 = { x: (s0.x + s1.x) / 2, y: (s0.y + s1.y) / 2 };
+    const m1 = { x: (c0.x + c1.x) / 2, y: (c0.y + c1.y) / 2 };
+    // Keep the world point under the initial midpoint under the current midpoint.
+    this.setViewLive({ zoom, x: m1.x - (m0.x - g.startView.x) * k, y: m1.y - (m0.y - g.startView.y) * k });
+  }
+
+  private endGesture() {
+    const g = this.gesture;
+    if (!g) return;
+    this.gesture = null;
+    const dt = performance.now() - g.startedAt;
+    const isTap = g.mode === 'touch' && dt < 300 && g.moved < 12;
+    if (isTap && g.maxFingers === 2) { this.setViewLive(g.startView); this.commitView(); this.undo(); return; }
+    if (isTap && g.maxFingers >= 3) { this.setViewLive(g.startView); this.commitView(); this.redo(); return; }
+    this.commitView();
+  }
+
+  private onPointerDown(e: PointerEvent) {
+    if (e.target !== this.canvas) return;
+    const isTouch = e.pointerType === 'touch';
+    const pt = this.screenPoint(e);
+    if (isTouch) this.activeTouches.set(e.pointerId, pt);
+
+    // Apple Pencil detected: fingers become navigation unless the user chose otherwise.
+    if (e.pointerType === 'pen' && this.settings.pencilAuto && !this.settings.pencilOnly) {
+      this.set({ pencilOnly: true });
+      this.toast('Apple Pencil detected: fingers now pan and zoom, two-finger tap undoes', { duration: 4000 });
+    }
+
+    // A gesture is under way: further fingers join it, anything else is ignored.
+    if (this.gesture) {
+      if (isTouch && this.gesture.mode === 'touch') {
+        e.preventDefault();
+        this.gesture.touches.set(e.pointerId, pt);
+        this.gesture.maxFingers = Math.max(this.gesture.maxFingers, this.gesture.touches.size);
+        this.rebaseGesture();
+      }
+      return;
+    }
+
+    if (this.live) {
+      // Pencil drawing: a finger is a resting palm. Ignore it.
+      if (this.live.pointerType === 'pen' || !isTouch) { if (isTouch) e.preventDefault(); return; }
+      // Finger drawing + second finger: it was a gesture all along (Procreate behaviour).
+      e.preventDefault();
+      this.cancelStroke(true);
+      this.beginGesture(e, 'touch');
+      const g = this.gesture!;
+      for (const [id, p] of this.activeTouches) g.touches.set(id, p);
+      g.start = new Map(g.touches);
+      g.maxFingers = g.touches.size;
+      return;
+    }
+
+    // Navigation: a finger when pencil-only, the middle button, or space-drag.
+    const navigate = (isTouch && this.settings.pencilOnly) || (e.pointerType === 'mouse' && (e.button === 1 || (e.button === 0 && this.spaceHeld)));
+    if (navigate) {
+      e.preventDefault();
+      this.beginGesture(e, isTouch ? 'touch' : 'mouse');
+      return;
+    }
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    this.flushPaint();
+    e.preventDefault(); // also suppresses the focus change, so commit any focused editor by hand
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    try { this.canvas!.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    const rect = this.canvas!.getBoundingClientRect();
+    const input: InputKind = e.pointerType === 'pen' ? 'pen' : e.pointerType === 'touch' ? 'touch' : 'mouse';
+    const first = this.pointFromEvent(e, rect);
+    first.t = 0;
+    if (this.predictCanvas) this.clearPredicted();
+    this.queueHud({ filtered: null });
+    if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
+    const rec = this.newRecord(this.settings.tool, first, input);
+    if (rec.tool === 'brush') rec.zoom = this.view.zoom;
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], t0: e.timeStamp, cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.frameLog.length = 0; this.lastPreviewAt = 0;
+    this.emit({ drawing: true });
+    this.updateHud(e);
+    this.sample('down', 0, first.p, rec.tool);
+    this.schedulePreview();
+  }
+  private activeTouches = new Map<number, { x: number; y: number }>();
+
+  private onPointerMove(e: PointerEvent) {
+    const g = this.gesture;
+    if (g && g.touches.has(e.pointerId)) {
+      e.preventDefault();
+      const pt = this.screenPoint(e);
+      const prev = g.touches.get(e.pointerId)!;
+      g.moved += Math.hypot(pt.x - prev.x, pt.y - prev.y);
+      g.touches.set(e.pointerId, pt);
+      if (e.pointerType === 'touch') this.activeTouches.set(e.pointerId, pt);
+      this.updateGesture();
+      return;
+    }
+    if (e.pointerType === 'touch' && this.activeTouches.has(e.pointerId)) this.activeTouches.set(e.pointerId, this.screenPoint(e));
+    const live = this.live;
+    if (!live) {
+      // A hovering pencil (Pencil 2 on M2 iPads and later) reports tilt before it touches.
+      if (e.pointerType === 'pen' && e.target === this.canvas) this.updateHud(e, true);
+      return;
+    }
+    if (e.pointerId !== live.id) return;
+    e.preventDefault();
+    this.updateHud(e);
+    const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
+    const list = coalesced.length ? coalesced : [e];
+    live.rect = this.canvas!.getBoundingClientRect();
+    const pts = live.rec.points;
+    // Pen and finger samples arrive at up to 240 Hz; like tldraw, only record a new
+    // point once the pointer has moved a screen pixel, otherwise fold the sample into
+    // the last point (moving it, keeping the higher pressure). Mouse keeps every move.
+    const minDist = live.pointerType === 'mouse' ? 0.15 : 1 / this.view.zoom;
+    for (const ev of list) {
+      const pt = this.pointFromEvent(ev, live.rect);
+      // WebKit hands out overlapping coalesced batches: every group of pen samples
+      // arrives twice in a row, which would make the path double back on itself and
+      // pile stamps into beads. A sample identical to one of the last few is a repeat.
+      const key = `${pt.x},${pt.y},${pt.p}`;
+      if (live.recent.includes(key)) continue;
+      live.recent.push(key);
+      if (live.recent.length > RECENT_SAMPLES) live.recent.shift();
+      const last = pts[pts.length - 1];
+      if (Math.hypot(pt.x - live.lastRecorded.x, pt.y - live.lastRecorded.y) < minDist) {
+        // Fold into the last point: it follows the pointer, but the reference for the
+        // next distance check stays where a point was last recorded.
+        if (pts.length > 1) { last.x = pt.x; last.y = pt.y; }
+        last.p = Math.max(last.p, pt.p);
+        if (pt.t !== undefined) last.t = pt.t;
+        if (pt.alt !== undefined) { last.alt = pt.alt; last.az = pt.az; last.tw = pt.tw; }
+        continue;
+      }
+      pts.push(pt);
+      live.lastRecorded = { ...pt };
+    }
+    // The overlay (raw path, predicted tail) is drawn once per frame, in the preview.
+    if (this.settings.filters.showRaw || (this.settings.pencil.predict && live.pointerType === 'pen')) this.overlayEvent = e;
+    this.sample('move', this.lastSpeed(pts), pts[pts.length - 1].p, live.rec.tool);
+    this.schedulePreview();
+  }
+
+  // -- Pencil lab: predicted tail, calibration --------------------------------
+  private predictCanvas: HTMLCanvasElement | null = null;
+  /** Device-pixel box the overlay last drew into (cleared next time), null when it is empty. */
+  private overlayBox: { x: number; y: number; w: number; h: number } | null = null;
+  /** Latest move of the stroke in progress whose overlay has not been drawn yet. */
+  private overlayEvent: PointerEvent | null = null;
+  private calib: { samples: number[]; until: number } | null = null;
+
+  /** 2D overlay above the ink canvas for the predicted tail; created on first use, sized to the ink canvas. */
+  private predictCtx(): CanvasRenderingContext2D | null {
+    const c = this.canvas;
+    if (!c) return null;
+    if (!this.predictCanvas) {
+      const pc = document.createElement('canvas');
+      pc.id = 'predict-canvas';
+      pc.className = 'pointer-events-none absolute inset-0 block h-full w-full';
+      c.parentElement?.appendChild(pc);
+      this.predictCanvas = pc;
+    }
+    const pc = this.predictCanvas;
+    if (pc.width !== this.glW || pc.height !== this.glH) { pc.width = this.glW; pc.height = this.glH; this.overlayBox = null; }
+    return pc.getContext('2d');
+  }
+
+  /**
+   * Live overlay above the ink: the raw input path (filter tuning aid) and the
+   * browser's predicted pen samples as a translucent tail from the last recorded
+   * point, so the mark appears to keep up with the pencil. Redrawn on every move;
+   * the tail goes on lift, the raw path stays until the next stroke. Never part
+   * of the stroke.
+   */
+  private drawLiveOverlay(e: PointerEvent | null, live: Live) {
+    const ctx = this.predictCtx();
+    if (!ctx) return;
+    this.clearPredicted();
+    const rec = live.rec;
+    if (rec.tool !== 'brush') return;
+    const v = this.view, dpr = this.dpr;
+    const toScreen = (pt: Point) => [(pt.x * v.zoom + v.x) * dpr, (pt.y * v.zoom + v.y) * dpr] as const;
+    // Only the box drawn into is cleared next time, and the layer is hidden while empty.
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, pad = 2;
+    const grow = (x: number, y: number) => { if (x < minX) minX = x; if (x > maxX) maxX = x; if (y < minY) minY = y; if (y > maxY) maxY = y; };
+    if (this.settings.filters.showRaw && rec.points.length > 1) {
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#e0312d'; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1, dpr);
+      ctx.beginPath();
+      rec.points.forEach((pt, i) => { const [x, y] = toScreen(pt); grow(x, y); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+      ctx.stroke();
+    }
+    const ev = e as (PointerEvent & { getPredictedEvents?: () => PointerEvent[] }) | null;
+    if (ev && this.settings.pencil.predict && live.pointerType === 'pen') {
+      const pred = typeof ev.getPredictedEvents === 'function' ? ev.getPredictedEvents() : [];
+      this.queueHud({ predicted: pred.length });
+      if (pred.length) {
+        const last = rec.points[rec.points.length - 1];
+        const width = Math.max(2, rec.spec.weight * rec.size * this.state.tipExtent * rec.spec.pressure.min_max[1] * (rec.pressureMode === 'gaussian' ? 1 : mapStylus(last.p, rec.sensitivity))) * v.zoom * dpr;
+        pad = Math.max(pad, width);
+        ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.strokeStyle = rec.color; ctx.globalAlpha = 0.28; ctx.lineWidth = width;
+        ctx.beginPath();
+        const [lx, ly] = toScreen(last); grow(lx, ly);
+        ctx.moveTo(lx, ly);
+        for (const pe of pred) { const [x, y] = toScreen(this.pointFromEvent(pe, live.rect)); grow(x, y); ctx.lineTo(x, y); }
+        ctx.stroke();
+      }
+    }
+    if (minX <= maxX) {
+      this.overlayBox = { x: Math.floor(minX - pad), y: Math.floor(minY - pad), w: Math.ceil(maxX - minX + 2 * pad) + 1, h: Math.ceil(maxY - minY + 2 * pad) + 1 };
+      this.predictCanvas!.hidden = false;
+    }
+  }
+
+  /** Clears what the overlay last drew and hides the layer, so an empty overlay costs nothing to composite. */
+  private clearPredicted() {
+    const pc = this.predictCanvas, b = this.overlayBox;
+    if (!pc) return;
+    if (b) pc.getContext('2d')?.clearRect(b.x, b.y, b.w, b.h);
+    this.overlayBox = null;
+    pc.hidden = true;
+  }
+
+  /** Pencil lab settings; effects apply to the next stroke, strokes keep the effects they were drawn with. */
+  setPencil = (patch: Partial<PencilSettings>) => { this.set({ pencil: { ...this.settings.pencil, ...patch } }); };
+
+  /** Input filter settings (per channel); strokes keep the parameters they were conditioned with. */
+  setFilters = (patch: FilterPatch) => { this.set({ filters: mergeFilters(this.settings.filters, patch) }); };
+
+  /** Collects pen pressures for a few seconds; the 5th–95th percentiles become the mapped range. */
+  startCalibration = (seconds = 8) => {
+    this.calib = { samples: [], until: performance.now() + seconds * 1000 };
+    this.emit({ calibrating: true, calibration: { until: this.calib.until, seconds } });
+    this.toast(`Calibrating: draw for ${seconds} seconds, light strokes and hard ones`, { duration: 3500 });
+  };
+
+  private maybeFinishCalibration() {
+    const c = this.calib;
+    if (!c || performance.now() < c.until) return;
+    this.calib = null;
+    this.emit({ calibrating: false, calibration: null });
+    const r = calibrationFrom(c.samples);
+    if (!r) { this.toast('Calibration needs more variety: draw light and hard strokes, then try again', { duration: 4000 }); return; }
+    this.setPencil({ calib: r });
+    this.toast(`Pencil calibrated: ${r.min.toFixed(2)}–${r.max.toFixed(2)} now spans the full range`, { duration: 4000 });
+  }
+
+  private onPointerUp(e: PointerEvent) {
+    this.activeTouches.delete(e.pointerId);
+    const g = this.gesture;
+    if (g && g.touches.has(e.pointerId)) {
+      e.preventDefault();
+      g.touches.delete(e.pointerId);
+      if (g.touches.size === 0) this.endGesture();
+      else this.rebaseGesture();
+      return;
+    }
+    const live = this.live;
+    if (!live || e.pointerId !== live.id) return;
+    e.preventDefault();
+    this.live = null;
+    this.previewQueued = false;
+    this.emit({ drawing: false });
+    this.queueHud({ pressure: 0, predicted: 0 });
+    this.overlayEvent = null;
+    if (this.settings.filters.showRaw) this.drawLiveOverlay(null, live); else this.clearPredicted();
+    if (live.pointerType === 'pen') this.maybeFinishCalibration();
+    if (live.rec.tool === 'brush') {
+      // Stamp whatever is left as the last chunk. Nothing is re-rendered on lift:
+      // the chunk boundaries are recorded, so every replay repeats exactly this.
+      this.stampNextChunk(live, live.rec.points.length, true);
+      this.endLiveMask(live);
+    } else if (live.rec.points.length > live.erasedUpTo) {
+      this.sgl!.eraseDabs(this.eraserDabs(live.rec, live.erasedUpTo));
+    }
+    this.sample('up', 0, 0, live.rec.tool);
+    this.pushRecord(live.rec);
+    if (this.state.practice?.status === 'active') this.practiceEvaluate(live.rec);
+  }
+
+  private schedulePreview() {
+    if (this.previewQueued) return;
+    this.previewQueued = true;
+    requestAnimationFrame(() => this.renderPreview());
+  }
+
+  /**
+   * Live view. Eraser dabs are cumulative and applied as they arrive. Brush
+   * strokes are stamped incrementally too: each frame only the segment since the
+   * last frame is rendered, so the cost per frame stays constant however long
+   * the stroke gets (re-stamping the whole stroke made the ink trail further
+   * behind the pencil the longer one drew). Per-stroke effects that would leave
+   * seams between chunks are disabled (marker tips, the per-stroke alpha noise,
+   * the engine's length-relative pressure envelope); a fixed-length start rise
+   * stands in for the envelope until the exact render on lift.
+   */
+  private renderPreview() {
+    const t0 = performance.now();
+    if (this.live && this.lastPreviewAt) {
+      const dt = t0 - this.lastPreviewAt;
+      if (dt < 1000) { this.frameLog.push(dt); if (this.frameLog.length > 900) this.frameLog.shift(); if (dt > 34) this.perf.longFrames++; }
+    }
+    this.lastPreviewAt = t0;
+    try { this.renderPreviewInner(); } finally { this.perf.previewMs += performance.now() - t0; this.perf.previewFrames++; }
+  }
+
+  private renderPreviewInner() {
+    this.previewQueued = false;
+    const live = this.live;
+    if (!live) return;
+    if (this.overlayEvent) { const e = this.overlayEvent; this.overlayEvent = null; const to = performance.now(); this.drawLiveOverlay(e, live); this.perf.overlayMs += performance.now() - to; this.perf.overlays++; }
+    const { rec } = live;
+    if (rec.tool === 'eraser') {
+      if (rec.points.length > live.erasedUpTo) {
+        this.sgl!.eraseDabs(this.eraserDabs(rec, live.erasedUpTo));
+        live.erasedUpTo = rec.points.length;
+      }
+      return;
+    }
+    // Conditioning's early decisions are final once a few raw samples exist, and
+    // the newest raw point may still move (pen samples merge into it), so chunks
+    // stop one point short of it. A tap is stamped on lift.
+    if (rec.points.length < CHUNK_MIN_RAW) return;
+    if (live.chunk > 0 && performance.now() - live.lastChunkAt < MIN_CHUNK_INTERVAL_MS) { this.schedulePreview(); return; }
+    this.stampNextChunk(live, rec.points.length - 1, false);
+  }
+
+  /**
+   * Stamps the chunk covering raw points up to `upto` and records the boundary
+   * on the stroke. Returns false when there is nothing (or too little) to stamp:
+   * the engine places round(length / spacing) stamps per plot, so a chunk much
+   * shorter than a few stamp steps would lose density to rounding.
+   */
+  private stampNextChunk(live: Live, upto: number, final: boolean): boolean {
+    const rec = live.rec as BrushRecord;
+    const tc = performance.now();
+    const g = chunkStep(rec, upto, live.condLen, live.cond, final);
+    this.perf.condMs += performance.now() - tc;
+    if (!g) return false;
+    const lp = g.pts[g.pts.length - 1];
+    this.queueHud({ filtered: { p: lp.p, alt: lp.alt ?? 90, az: lp.az ?? 0, tw: lp.tw ?? 0 } });
+    const len = pathLength(g.pts);
+    if (!final && len < rec.spec.spacing * 3) return false;
+    const t0 = performance.now();
+    // The first chunk starts from the committed image and opens the stroke's shared
+    // mask; every chunk is composited against that image (see setSharedMask).
+    if (live.chunk === 0) {
+      this.sgl!.blit(this.sgl!.committedTex);
+      this.primeEngine(this.glW, this.glH, this.dpr);
+      this.setSharedMask(true, this.sgl!.committedFramebuffer());
+    }
+    this.stampChunk(rec, g.pts, live.chunk, live.stampedLen, true);
+    this.perf.stampMs += performance.now() - t0;
+    live.lastChunkAt = performance.now();
+    this.perf.chunkMs += performance.now() - t0; this.perf.chunks++;
+    (rec.chunks ??= []).push(upto);
+    live.condLen = g.condLen;
+    live.stampedLen += len;
+    live.chunk++;
+    return true;
+  }
+
+  /** One chunk of a hand-drawn stroke: seeded per chunk, per-stroke effects off, envelope folded into the plot. */
+  private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number, flush: boolean): number {
+    const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec), rollFrom: rec.points[0].tw };
+    return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) }, flush);
+  }
+
+  /**
+   * Replays a hand-drawn stroke: the same chunks with the same seeds, at every
+   * zoom. At the drawing zoom that is pixel-identical to what was on screen at
+   * lift; at other zooms the engine scales weight, spacing and scatter with the
+   * view, so the same chunk sequence gives the same stroke rescaled. (Merging the
+   * chunks into one pass at other zooms was tried for speed and reshuffled the
+   * texture visibly.) All chunks go into one mask and are composited by a single
+   * render, which per pixel is what the live chunk-by-chunk composite produced.
+   */
+  private renderChunked(rec: BrushRecord): number {
+    let condLen = 0, s0 = 0, stamps = 0;
+    const chunks = rec.chunks!;
+    this.primeEngine(this.glW, this.glH, this.dpr);
+    this.setSharedMask(true, null);
+    try {
+      chunks.forEach((upto, i) => {
+        const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
+        if (!g) return;
+        stamps += this.stampChunk(rec, g.pts, i, s0, false);
+        condLen = g.condLen;
+        s0 += pathLength(g.pts);
+      });
+    } finally {
+      this.setSharedMask(false, null);
+    }
+    const t1 = performance.now();
+    brush.render();
+    this.perf.compositeMs += performance.now() - t1;
+    return stamps;
+  }
+
+  private lastHudAt = 0;
+  private queueHud(patch: Partial<Hud>) {
+    Object.assign(this.pendingHud, patch);
+    if (this.hudQueued) return;
+    this.hudQueued = true;
+    const fire = () => {
+      const wait = HUD_MIN_INTERVAL_MS - (performance.now() - this.lastHudAt);
+      if (wait > 0) { window.setTimeout(fire, wait); return; }
+      this.hudQueued = false;
+      this.lastHudAt = performance.now();
+      this.perf.hudEmits++;
+      this.emit({ hud: { ...this.state.hud, ...this.pendingHud } });
+      this.pendingHud = {};
+    };
+    requestAnimationFrame(fire);
+  }
+
+  private updateHud(e: PointerEvent, hovering = false) {
+    const tilt = eventTilt(e);
+    this.queueHud({
+      pointerType: e.pointerType || 'pointer',
+      pressure: e.pressure > 0 ? e.pressure : 0,
+      tiltX: e.tiltX || 0,
+      tiltY: e.tiltY || 0,
+      altitude: tilt?.alt ?? 90, azimuth: tilt?.az ?? 0, twist: tilt?.tw ?? 0,
+      hovering,
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Actions
+  // ---------------------------------------------------------------------------
+  /** Draws a lemniscate through the exact same pipeline as a pointer stroke. */
+  drawSampleStroke = () => {
+    if (!this.sgl || this.state.practice) return;
+    if (this.settings.tool !== 'brush') this.setTool('brush');
+    const c = this.toWorld(this.cssW / 2, this.cssH / 2), z = this.view.zoom;
+    const rx = Math.min(this.cssW * 0.32, 260) / z, ry = Math.min(this.cssH * 0.22, 120) / z;
+    const points: Point[] = [];
+    const steps = 160;
+    for (let i = 0; i <= steps; i++) {
+      const t = i / steps, a = t * Math.PI * 2;
+      points.push({ x: round(c.x + Math.sin(a) * rx, 100), y: round(c.y + Math.sin(a * 2) * ry, 100), p: round(0.5 + 0.4 * Math.sin(a * 3) ** 2, 1000) });
+    }
+    this.commitPoints(points);
+  };
+
+  /** Commits a brush stroke from a list of CSS-pixel points (also used by tests). */
+  commitPoints(points: Point[], overrides: Partial<BrushRecord> = {}): BrushRecord {
+    const rec = { ...(this.newRecord('brush', points[0]) as BrushRecord), ...overrides, points };
+    this.commitRecord(rec);
+    this.queueHud({ stamps: strokeSegments(rec).stamps });
+    if (this.state.practice?.status === 'active') this.practiceEvaluate(rec);
+    return rec;
+  }
+
+  /** Exports a PNG: native share sheet on touch devices when available, download otherwise. */
+  exportPNG = async () => {
+    const sgl = this.sgl, canvas = this.canvas;
+    if (!sgl || !canvas) return;
+    this.flushPaint();
+    sgl.blit(sgl.committedTex); // a stale preview could be up
+    const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
+    if (!blob) { this.toast('Export failed'); return; }
+    this.signal('export');
+    const name = `p5brush-studio-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`;
+    const file = new File([blob], name, { type: 'image/png' });
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches;
+    if (coarse && navigator.canShare?.({ files: [file] })) {
+      try { await navigator.share({ files: [file], title: 'p5.brush drawing' }); return; }
+      catch (err) { if ((err as Error).name === 'AbortError') return; }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    this.toast(`Exported ${this.glW}×${this.glH} PNG`);
+  };
+
+  // ---------------------------------------------------------------------------
+  // Settings
+  // ---------------------------------------------------------------------------
+  setSpec(patch: Partial<BrushSpec>) { this.set({ spec: { ...this.settings.spec, ...patch } }); }
+  setPressure(patch: Partial<BrushSpec['pressure']>) {
+    this.setSpec({ pressure: { ...this.settings.spec.pressure, ...patch } });
+  }
+  setSize(size: number) { this.set({ size }); }
+  setColor(color: string) { this.set({ color, tool: 'brush' }); }
+  setEraserSize(eraserSize: number) { this.set({ eraserSize }); }
+  setPressureMode(pressureMode: PressureMode) { this.set({ pressureMode }); }
+  setForceSensitivity(forceSensitivity: number) { this.set({ forceSensitivity }); }
+  setPencilOnly(pencilOnly: boolean) {
+    this.set({ pencilOnly, pencilAuto: false });
+    this.toast(pencilOnly ? 'Pencil only: fingers pan and zoom, the Pencil draws' : 'Fingers draw too (two fingers still pan and zoom)');
+  }
+  setTool(tool: Tool) { if (tool === this.settings.tool) return; this.set({ tool }); this.signal('tool'); }
+  setPaper(paper: PaperName) {
+    this.set({ paper });
+    if (this.sgl) this.repaintPaper();
+  }
+  nudgeWeight(delta: number) {
+    const weight = clamp(this.settings.spec.weight + delta, 1, 80);
+    this.setSpec({ weight });
+    this.toast(`Weight ${weight} px`, { duration: 900 });
+  }
+
+  /** Validates and applies a tip body; returns false (and records the error) if it does not compile. */
+  setTipSource(tipSource: string): boolean {
+    try {
+      checkTip(tipSource);
+      this.set({ tipSource });
+      this.emit({ tipError: null, tipExtent: this.extentFor(tipSource) });
+      return true;
+    } catch (err) {
+      this.emit({ tipError: (err as Error).message });
+      return false;
+    }
+  }
+
+  resetDefaults() {
+    this.set({ spec: clone(DEFAULT_SPEC), tipSource: DEFAULT_TIP_SOURCE, size: 1, ...this.brushInput(BRUSH_TEMPLATES[0]) });
+    this.emit({ tipError: null, tipExtent: this.extentFor(DEFAULT_TIP_SOURCE) });
+    this.toast('myBrush defaults restored');
+  }
+
+  /** Applies a pasted brush.add(...) snippet. Throws with a readable message on failure. */
+  applySpecCode(text: string): string {
+    const parsed = parseSpecCode(text);
+    this.set({ spec: parsed.spec, tipSource: parsed.tipSource, ...this.brushInput(matchTemplate(parsed.spec, parsed.tipSource)) });
+    this.emit({ tipError: null, tipExtent: this.extentFor(parsed.tipSource) });
+    return parsed.name;
+  }
+
+  specCode(name = this.activeTemplate()?.codeName ?? 'myBrush') { return specCode(this.settings.spec, this.settings.tipSource, name); }
+
+  /** World-space bounds of the visible strokes, or null when empty. */
+  drawingBounds(): { x: number; y: number; w: number; h: number } | null {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const rec of visibleRecords(this.strokes)) {
+      if (rec.tool === 'clear') continue;
+      const pad = rec.tool === 'eraser' ? rec.size / 2 : rec.spec.weight * rec.size;
+      for (const p of rec.points) {
+        if (p.x - pad < minX) minX = p.x - pad; if (p.x + pad > maxX) maxX = p.x + pad;
+        if (p.y - pad < minY) minY = p.y - pad; if (p.y + pad > maxY) maxY = p.y + pad;
+      }
+    }
+    return Number.isFinite(minX) ? { x: minX, y: minY, w: maxX - minX, h: maxY - minY } : null;
+  }
+
+  /** Frames the whole drawing in the viewport. */
+  zoomToFit() {
+    const b = this.drawingBounds();
+    if (!b) { this.resetView(); return; }
+    const zoom = clamp(Math.min(this.cssW / (b.w + 80), this.cssH / (b.h + 80), 4), MIN_ZOOM, MAX_ZOOM);
+    this.setViewLive({ zoom, x: this.cssW / 2 - (b.x + b.w / 2) * zoom, y: this.cssH / 2 - (b.y + b.h / 2) * zoom });
+    this.commitView();
+  }
+
+  /** A complete p5.js sketch that replays the visible drawing with p5.brush. */
+  sketchCode(): string {
+    const conf = paperPresets[this.settings.paper];
+    const b = this.drawingBounds() ?? { x: 0, y: 0, w: this.cssW, h: this.cssH };
+    const margin = 40;
+    const ox = Math.round(b.x - margin), oy = Math.round(b.y - margin);
+    const lines = [
+      '// p5.js + p5.brush 2.2.2 — exported from p5.brush Realtime Studio',
+      '// <script src="https://cdn.jsdelivr.net/npm/p5@1.11.3/lib/p5.min.js"></script>',
+      '// <script src="https://cdn.jsdelivr.net/npm/p5.brush@2.2.2/dist/p5.brush.js"></script>',
+      '',
+      'function setup() {',
+      `  createCanvas(${Math.round(b.w + margin * 2)}, ${Math.round(b.h + margin * 2)}, WEBGL);`,
+      `  pixelDensity(${this.dpr});`,
+      '  angleMode(DEGREES);',
+      '  noLoop();',
+      '}',
+      '',
+      'function draw() {',
+      `  background("rgb(${conf.bg.join(', ')})");`,
+      `  translate(-width / 2 - ${ox}, -height / 2 - ${oy});`,
+    ];
+    const names = new Map<string, string>();
+    for (const rec of visibleRecords(this.strokes)) {
+      if (rec.tool !== 'brush') { lines.push('  // (eraser stroke omitted)'); continue; }
+      const key = JSON.stringify(rec.spec) + '|' + rec.tipSource;
+      let name = names.get(key);
+      if (!name) {
+        name = 'studioBrush' + names.size;
+        names.set(key, name);
+        lines.push('  ' + specCode(rec.spec, rec.tipSource, name).replace(/\n/g, '\n  '));
+      }
+      if (rec.chunks) {
+        // Hand-drawn: the same chunks, seeds and envelope as on the canvas.
+        const liveKey = key + '|live';
+        let liveName = names.get(liveKey);
+        if (!liveName) {
+          liveName = name + 'Live';
+          names.set(liveKey, liveName);
+          lines.push('  ' + specCode(chunkSpec(rec.spec), rec.tipSource, liveName).replace(/\n/g, '\n  '));
+        }
+        const env = liveEnvelope(rec.spec.pressure);
+        let condLen = 0, s0 = 0;
+        rec.chunks.forEach((upto, i) => {
+          const g = chunkPoints(rec, upto, condLen, i === rec.chunks!.length - 1);
+          if (!g) return;
+          const { origin, segs, endA, endP } = strokeSegments({ ...rec, points: g.pts, input: undefined });
+          lines.push(`  randomSeed(${rec.seed + 1 + i});`);
+          lines.push(`  brush.set("${liveName}", "${rec.color}", ${fmt(rec.size)});`);
+          lines.push(`  brush.beginStroke("curve", ${fmt(origin.x)}, ${fmt(origin.y)});`);
+          let s = s0;
+          for (const seg of segs) { lines.push(`  brush.move(${fmt(seg.a)}, ${fmt(seg.len)}, ${fmt(seg.p * env(s))});`); s += seg.len; }
+          lines.push(`  brush.endStroke(${fmt(endA)}, ${fmt(endP * env(s))});`);
+          condLen = g.condLen;
+          s0 += pathLength(g.pts);
+        });
+        continue;
+      }
+      const { origin, segs, endA, endP } = strokeSegments(rec);
+      lines.push(`  randomSeed(${rec.seed});`);
+      lines.push(`  brush.set("${name}", "${rec.color}", ${fmt(rec.size)});`);
+      lines.push(`  brush.beginStroke("curve", ${fmt(origin.x)}, ${fmt(origin.y)});`);
+      for (const s of segs) lines.push(`  brush.move(${fmt(s.a)}, ${fmt(s.len)}, ${fmt(s.p)});`);
+      lines.push(`  brush.endStroke(${fmt(endA)}, ${fmt(endP)});`);
+    }
+    lines.push('}');
+    return lines.join('\n');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Diagnostics (remote debugging of device-specific rendering)
+  // ---------------------------------------------------------------------------
+  /** Copies environment, the last hand-drawn stroke and a render self-test to the clipboard; summary in a toast. */
+  copyDiagnostics = async () => {
+    const d = this.diagnostics();
+    if (!d) { this.toast('Diagnostics: finish the current stroke first'); return null; }
+    let copied = false;
+    try { await navigator.clipboard.writeText(JSON.stringify(d)); copied = true; } catch { /* clipboard unavailable */ }
+    console.log('[studio] diagnostics', d);
+    this.toast(`${d.summary}${copied ? ' · copied' : ''}`, { duration: 15000 });
+    return d;
+  };
+
+  diagnostics() {
+    const sgl = this.sgl;
+    if (!sgl || this.live) return null;
+    this.flushPaint();
+    const gl = sgl.gl;
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const env = {
+      ua: navigator.userAgent, dpr: this.dpr, css: [this.cssW, this.cssH], gl: [this.glW, this.glH],
+      renderer: String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)),
+      halfFloat: !!gl.getExtension('EXT_color_buffer_half_float'), floatBuf: !!gl.getExtension('EXT_color_buffer_float'),
+      zoom: this.view.zoom, pressureMode: this.settings.pressureMode, template: this.activeTemplate()?.id ?? 'custom', size: this.settings.size,
+    };
+    const last = [...this.strokes].reverse().find((r): r is BrushRecord => r.tool === 'brush' && !!r.chunks);
+    const ps = last ? last.points.map((p) => p.p) : [];
+    const stroke = last ? {
+      input: last.input, n: last.points.length, chunks: last.chunks!.length, zoom: last.zoom, pressureMode: last.pressureMode, size: last.size, color: last.color, seed: last.seed, spec: last.spec,
+      p: { min: Math.min(...ps), max: Math.max(...ps), mean: +(ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(3) },
+      points: last.points.slice(0, 600), chunkEnds: last.chunks!.slice(0, 600),
+    } : null;
+    const tests = this.renderSelfTest();
+    const perf = this.perfSummary();
+    const summary = `render: paper ${tests.paper} · one-shot ${tests.oneShot} · chunked ${tests.chunked}`
+      + (stroke ? ` | last stroke: ${stroke.input} ${stroke.n} pts, ${stroke.chunks} chunks, p ${stroke.p.min}–${stroke.p.max}, ${stroke.pressureMode}` : ' | no hand-drawn stroke');
+    return { env, stroke, tests, perf, summary };
+  }
+
+  /** Where the time goes on this device: frame intervals of the last stroke, per-chunk costs, overlay and HUD work. */
+  private perfSummary() {
+    const p = this.perf;
+    const f = [...this.frameLog].sort((a, b) => a - b);
+    const q = (t: number) => (f.length ? +f[Math.min(f.length - 1, Math.floor(f.length * t))].toFixed(1) : 0);
+    const per = (ms: number, n: number) => (n ? +(ms / n).toFixed(2) : 0);
+    return {
+      canvas: { glW: this.glW, glH: this.glH, dpr: this.dpr, strokes: this.strokes.length },
+      lastStrokeFrames: { n: f.length, p50: q(0.5), p95: q(0.95), max: f.length ? +f[f.length - 1].toFixed(1) : 0 },
+      longFrames: p.longFrames,
+      perChunkMs: { total: per(p.chunkMs + p.condMs, p.chunks), conditioning: per(p.condMs, p.chunks), plot: per(p.plotMs, p.chunks), composite: per(p.compositeMs, p.chunks), stamp: per(p.stampMs, p.chunks), chunks: p.chunks },
+      previewFrameMs: per(p.previewMs, p.previewFrames),
+      overlayMs: per(p.overlayMs, p.overlays),
+      hudEmits: p.hudEmits,
+      rebuild: { n: p.rebuilds, avgMs: per(p.rebuildMs, p.rebuilds), strokes: p.paintStrokes },
+    };
+  }
+
+  /**
+   * Renders the same short chisel line in the middle of the viewport as one engine
+   * stroke and as replayed chunks, and measures its darkness (mean red, paper ≈ 250).
+   * On a healthy device both agree. The canvas is restored afterwards.
+   */
+  private renderSelfTest() {
+    const sgl = this.sgl!, v = this.committedView, dpr = this.dpr;
+    const c = this.toWorld(this.cssW / 2, this.cssH / 2), half = 120 / v.zoom;
+    const pts: Point[] = [];
+    for (let i = 0; i <= 60; i++) pts.push({ x: round(c.x - half + (2 * half * i) / 60, 100), y: round(c.y, 100), p: 0.5 });
+    const base: BrushRecord = { tool: 'brush', spec: clone(DEFAULT_SPEC), tipSource: DEFAULT_TIP_SOURCE, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 4242, points: pts, input: 'pen', zoom: v.zoom };
+    const measure = () => {
+      const y = (c.y * v.zoom + v.y) * dpr, x0 = ((c.x - half) * v.zoom + v.x + 20) * dpr;
+      return sgl.meanRed(Math.round(x0), Math.round(y - 3 * dpr), Math.round((2 * half * v.zoom - 40) * dpr), Math.round(6 * dpr));
+    };
+    // Measured on bare paper so the drawing underneath cannot skew the numbers.
+    const restore = () => sgl.blit(sgl.paperTex);
+    restore();
+    const paper = measure();
+    this.stampRecord(base, this.glW, this.glH, dpr, v);
+    const oneShot = measure(); restore();
+    const chunks: number[] = [];
+    for (let i = 10; i < pts.length; i += 8) chunks.push(i);
+    chunks.push(pts.length);
+    const rec: BrushRecord = { ...base, chunks };
+    this.renderChunked(rec);
+    const chunked = measure();
+    sgl.blit(sgl.committedTex);
+    return { paper, oneShot, chunked };
+  }
+
+  /** Exposed for the headless test harness. */
+  debug() {
+    const studio = this;
+    return {
+      get state() { return studio.state; },
+      strokes: () => visibleRecords(this.strokes),
+      history: () => this.strokes,
+      commit: (points: Point[], overrides?: Partial<BrushRecord>) => this.commitPoints(points, overrides),
+      undo: this.undo, redo: this.redo, clear: this.clear, sample: this.drawSampleStroke, cancel: this.cancelStroke,
+      sketchCode: () => this.sketchCode(), specCode: () => this.specCode(),
+      setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),
+      setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
+      applyTemplate: (id: string) => this.applyTemplate(id), templates: BRUSH_TEMPLATES.map((t) => t.id),
+      rebuildAll: () => { this.repaintPaper(); this.flushPaint(); },
+      pan: (dx: number, dy: number) => { this.setViewLive({ ...this.view, x: this.view.x + dx, y: this.view.y + dy }); this.commitView(); }, flushPaint: () => this.flushPaint(), isPainting: () => this.pending !== null, saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
+      setCulling: (on: boolean) => { this.cullingEnabled = on; },
+      pencil: () => this.settings.pencil, setPencil: (p: Partial<PencilSettings>) => this.setPencil(p), startCalibration: (sec?: number) => this.startCalibration(sec),
+      filters: () => this.settings.filters, setFilters: (p: FilterPatch) => this.setFilters(p),
+      lastCulled: () => this.lastCulled,
+      perf: () => ({ ...this.perf }),
+      diagnostics: () => this.diagnostics(),
+      resetPerf: () => { for (const k of Object.keys(this.perf) as Array<keyof typeof this.perf>) this.perf[k] = 0; },
+      conditioned: (rec: BrushRecord, final?: boolean) => conditionPoints(rec, final),
+      /** Chunk points via a carried state (live path) and via per-prefix reconditioning (replay path). */
+      chunkBoth: (rec: BrushRecord, uptos: number[]) => {
+        const st = freshCondState();
+        let a = 0, b = 0;
+        return uptos.map((upto, i) => {
+          const final = i === uptos.length - 1;
+          const live = chunkStep(rec, upto, a, st, final), replay = chunkPoints(rec, upto, b, final);
+          if (live) a = live.condLen; if (replay) b = replay.condLen;
+          return { live: live?.pts ?? null, replay: replay?.pts ?? null };
+        });
+      },
+      segments: (rec: BrushRecord) => strokeSegments(rec),
+      practice: {
+        start: (id: string) => this.startPractice(id), exit: (keep?: boolean) => this.exitPractice(keep),
+        mission: (id: string, part: Part, tier?: Tier) => this.startMission(id, part, { tier }), warmup: () => this.startWarmup(),
+        skip: () => this.skipStep(), restart: () => this.restartPractice(), guide: (on: boolean) => this.setPracticeGuide(on),
+        tier: (t: Tier) => this.setPracticeTier(t), loop: () => this.loopStep(),
+        demo: (d: DemoStroke) => this.playDemo(d), stopDemo: () => this.stopDemo(), clearDemo: () => this.clearDemo(), taught: (id: string) => this.markTaught(id),
+        previews: () => this.ensureLessonPreviews(),
+        lessons: LESSONS.map((l) => l.id),
+        missions: MISSIONS.map((x) => x.id),
+        steps: (id: string) => lessonSteps(lessonById(id)!).map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed })),
+        current: () => this.state.practice?.steps.map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed })) ?? null,
+        score: (user: Point[], ref: Point[], tol: number) => scoreTrace(user, ref, tol),
+        scoreFull: (user: Point[], ref: Point[], opts: Parameters<typeof scoreStroke>[2]) => scoreStroke(user, ref, opts),
+        progress: () => this.state.progress,
+      },
+      // low-level primitives for determinism experiments
+      gl: {
+        blitCommitted: () => this.sgl!.blit(this.sgl!.committedTex),
+        blitPaper: () => this.sgl!.blit(this.sgl!.paperTex),
+        snapshotCommitted: () => this.sgl!.snapshot(this.sgl!.committedTex),
+        render: (rec: BrushRecord) => this.renderBrushStroke(rec),
+        prime: () => this.primeEngine(this.glW, this.glH, this.dpr),
+        meanRed: (x: number, y: number, w: number, h: number) => this.sgl!.meanRed(x, y, w, h),
+        size: () => ({ w: this.glW, h: this.glH, dpr: this.dpr }),
+      },
+      view: () => this.view, zoomBy: (f: number, cx?: number, cy?: number) => this.zoomBy(f, cx, cy), resetView: () => this.resetView(), zoomToFit: () => this.zoomToFit(),
+      toWorld: (x: number, y: number) => this.toWorld(x, y),
+    };
+  }
+}

@@ -1,0 +1,52 @@
+/** @type {import('tailwindcss').Config} */
+export default {
+  darkMode: ['class'],
+  // `hover:` only where a pointer can hover: touch would otherwise leave a stuck hover after every tap.
+  future: { hoverOnlyWhenSupported: true },
+  content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
+        mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        display: ['Nunito', 'Inter', 'system-ui', 'sans-serif'],
+      },
+      // The built-in curves are too weak to read; `ease-out` / `ease-in-out` resolve to the tokens in index.css.
+      transitionTimingFunction: {
+        out: 'var(--ease-out)',
+        'in-out': 'var(--ease-in-out)',
+        drawer: 'var(--ease-drawer)',
+        spring: 'var(--ease-spring)',
+      },
+      // Duration scale: press 100–160, tooltips 125, menus 180–200, modals 250. UI stays under 300ms.
+      transitionDuration: { 125: '125ms', 180: '180ms', 250: '250ms', 400: '400ms' },
+      borderRadius: {
+        lg: 'var(--radius)',
+        md: 'calc(var(--radius) - 2px)',
+        sm: 'calc(var(--radius) - 4px)',
+      },
+      colors: {
+        background: 'hsl(var(--background))',
+        foreground: 'hsl(var(--foreground))',
+        card: { DEFAULT: 'hsl(var(--card))', foreground: 'hsl(var(--card-foreground))' },
+        popover: { DEFAULT: 'hsl(var(--popover))', foreground: 'hsl(var(--popover-foreground))' },
+        primary: { DEFAULT: 'hsl(var(--primary))', foreground: 'hsl(var(--primary-foreground))' },
+        secondary: { DEFAULT: 'hsl(var(--secondary))', foreground: 'hsl(var(--secondary-foreground))' },
+        muted: { DEFAULT: 'hsl(var(--muted))', foreground: 'hsl(var(--muted-foreground))' },
+        accent: { DEFAULT: 'hsl(var(--accent-hsl))', foreground: 'hsl(var(--accent-foreground))' },
+        destructive: { DEFAULT: 'hsl(var(--destructive))', foreground: 'hsl(var(--destructive-foreground))' },
+        border: 'hsl(var(--border))',
+        input: 'hsl(var(--input))',
+        ring: 'hsl(var(--ring))',
+        paper: { 100: '#faf9f6', 200: '#ede8de' },
+      },
+    },
+  },
+  plugins: [
+    // Input-driven variants: `coarse:` for touch-first targets, `short:` for a phone held sideways.
+    ({ addVariant }) => {
+      addVariant('coarse', '@media (pointer: coarse)');
+      addVariant('short', '@media (max-height: 500px) and (min-width: 640px)');
+    },
+  ],
+};

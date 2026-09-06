@@ -1,0 +1,284 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ---- Ink & Paper theme ------------------------------------------------
+       Warm paper neutrals, ink-dark text, a sienna accent (the studio's red
+       chalk). Every component reads these tokens; the legacy --tl-* names are
+       aliases kept for the classes below. */
+    --paper: #efece6;
+    --surface: rgba(253, 251, 247, 0.9);
+    --surface-solid: #fdfbf7;
+    --text-1: #1c1a17;
+    --text-2: #4b463f;
+    --text-3: #8a847a;
+    --low: rgba(28, 24, 18, 0.05);
+    --hint: rgba(28, 24, 18, 0.08);
+    --hint-strong: rgba(28, 24, 18, 0.13);
+    --accent: #b5451b;
+    --accent-strong: #983712;
+    --accent-soft: rgba(181, 69, 27, 0.11);
+    --accent-soft-strong: rgba(181, 69, 27, 0.18);
+    --ink: #1c1a17;
+    --ink-strong: #000;
+    --ink-fg: #f6f2ea;
+    --success: #2f8f4e;
+    --warning: #d98b1f;
+    --danger: #c9372c;
+    --shadow: 0 0 0 1px rgba(28, 24, 18, 0.07), 0 2px 6px -2px rgba(28, 24, 18, 0.1), 0 16px 40px -16px rgba(28, 24, 18, 0.28);
+    --shadow-sm: 0 0 0 1px rgba(28, 24, 18, 0.07), 0 1px 3px rgba(28, 24, 18, 0.1);
+
+    /* Motion tokens: strong curves (the built-in ones are too weak to read).
+       Enter/exit → --ease-out, moving on screen → --ease-in-out, sheets → --ease-drawer. */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+    /* Overshoot for the things that are alive: the progress bar, the START bubble. */
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* Level colours: one per unit of the course, each with the shade of its bottom edge. */
+    --lvl-0: #b5451b; --lvl-0-deep: #7f2f11;
+    --lvl-1: #c98a1b; --lvl-1-deep: #8f6110;
+    --lvl-2: #6f8f3a; --lvl-2-deep: #4b6426;
+    --lvl-3: #2f8f8a; --lvl-3-deep: #1f625f;
+    --lvl-4: #4b5fb3; --lvl-4-deep: #34427f;
+    --lvl-5: #8a4b86; --lvl-5-deep: #61325e;
+    --lvl-6: #1c1a17; --lvl-6-deep: #000;
+    --lvl: var(--accent); --lvl-deep: var(--accent-strong);
+
+    /* shadcn tokens, expressed in the same palette */
+    --background: 40 21% 92%;
+    --foreground: 36 10% 10%;
+    --card: 40 43% 98%;
+    --card-foreground: 36 10% 10%;
+    --popover: 40 43% 98%;
+    --popover-foreground: 36 10% 10%;
+    --primary: 17 74% 41%;
+    --primary-foreground: 40 43% 98%;
+    --secondary: 36 10% 93%;
+    --secondary-foreground: 36 10% 10%;
+    --muted: 36 10% 93%;
+    --muted-foreground: 36 6% 51%;
+    --accent-hsl: 17 74% 41%;
+    --accent-foreground: 40 43% 98%;
+    --destructive: 3 64% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 36 20% 5% / 0.08;
+    --input: 36 20% 5% / 0.1;
+    --ring: 17 74% 41%;
+    --radius: 0.625rem;
+
+    /* legacy aliases */
+    --tl-panel: var(--surface);
+    --tl-text-1: var(--text-1);
+    --tl-text-2: var(--text-2);
+    --tl-text-3: var(--text-3);
+    --tl-low: var(--low);
+    --tl-hint: var(--hint);
+    --tl-hint-strong: var(--hint-strong);
+    --tl-selected: var(--accent);
+    --tl-danger: var(--danger);
+    --tl-shadow: var(--shadow);
+    --tl-shadow-sm: var(--shadow-sm);
+    /* Viewport height for floating panels: dynamic units where supported (iOS toolbars), plain vh otherwise */
+    --tl-vh: 100vh;
+  }
+  @supports (height: 100dvh) { :root { --tl-vh: 100dvh; } }
+
+  * {
+    @apply border-border;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html, body, #root {
+    height: 100%;
+    /* Fill the frame even when the host's height chain is off (Chrome on iPad):
+       the dynamic viewport height wins where supported. */
+    height: var(--tl-vh);
+    min-height: 100%;
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+  }
+  body {
+    @apply font-sans text-[12.5px] antialiased;
+    background: var(--paper);
+    color: var(--text-1);
+    font-feature-settings: 'cv11', 'ss01', 'tnum' 0;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  textarea, input {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
+@layer components {
+  /* Floating UI surface: translucent paper, hairline, soft shadow */
+  .ui-surface {
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    -webkit-backdrop-filter: blur(18px) saturate(1.15);
+    backdrop-filter: blur(18px) saturate(1.15);
+  }
+  .tl-panel { @apply ui-surface rounded-[16px]; }
+  .tl-panel-sm { @apply ui-surface rounded-[10px]; box-shadow: var(--shadow-sm); }
+
+  /* The Duolingo button: a solid face on a darker bottom edge that presses flat. */
+  .duo-btn {
+    @apply relative inline-flex select-none items-center justify-center gap-2 rounded-[14px] font-display font-extrabold uppercase tracking-[0.04em] outline-none;
+    transition: transform 100ms var(--ease-out), box-shadow 100ms var(--ease-out), background-color 100ms ease, filter 100ms ease;
+  }
+  .duo-btn:focus-visible { box-shadow: 0 4px 0 var(--duo-edge), 0 0 0 3px var(--surface-solid), 0 0 0 5px var(--lvl); }
+  .duo-btn:disabled { opacity: 0.5; pointer-events: none; }
+  .duo-primary { --duo-edge: var(--lvl-deep); background: var(--lvl); color: #fff; box-shadow: 0 4px 0 var(--duo-edge); }
+  .duo-secondary { --duo-edge: var(--hint-strong); background: var(--surface-solid); color: var(--text-1); box-shadow: inset 0 0 0 2px var(--hint-strong), 0 4px 0 var(--duo-edge); }
+  .duo-btn:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 var(--duo-edge); }
+  .duo-secondary:active:not(:disabled) { box-shadow: inset 0 0 0 2px var(--hint-strong), 0 1px 0 var(--duo-edge); }
+  @media (hover: hover) and (pointer: fine) { .duo-primary:hover { filter: brightness(1.06); } .duo-secondary:hover { background: var(--low); } }
+
+  /* Path nodes: a disc with the same pressed edge. */
+  .node { @apply relative grid place-items-center rounded-full outline-none; transition: transform 100ms var(--ease-out), box-shadow 100ms var(--ease-out); }
+  .node:active:not(:disabled) { transform: translateY(4px); box-shadow: 0 2px 0 var(--node-edge) !important; }
+  .node:focus-visible { outline: 3px solid var(--lvl); outline-offset: 3px; }
+
+  /* Pressable: colours settle quickly, the press itself is a 3% squeeze (scale
+     carries the icon and label with it, which is what reads as a physical press). */
+  .press {
+    transition: color 100ms ease, background-color 100ms ease, box-shadow 100ms ease, transform 160ms var(--ease-out);
+  }
+  .press:active:not(:disabled) { transform: scale(0.97); }
+
+  /* Style-panel option button (quiet selection) */
+  .tl-opt {
+    @apply press relative inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-1 text-[12px] font-medium outline-none;
+    color: var(--text-2);
+  }
+  /* Touch: every option is at least 36px tall (44px is the ideal; the panel is dense). */
+  @media (pointer: coarse) {
+    .tl-opt { min-height: 2.25rem; min-width: 2.25rem; }
+  }
+
+  /* Fixed chrome hugs the safe area (notch, home indicator) instead of the raw edge. */
+  .safe-t { top: max(0.5rem, env(safe-area-inset-top, 0px)); }
+  .safe-b { bottom: max(0.5rem, env(safe-area-inset-bottom, 0px)); }
+  .safe-l { left: max(0.5rem, env(safe-area-inset-left, 0px)); }
+  .safe-r { right: max(0.5rem, env(safe-area-inset-right, 0px)); }
+  /* Sheet content ends above the floating dock and the home indicator. */
+  .sheet-pad { padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px)); }
+  /* The grab handle of a bottom sheet. */
+  .sheet-grip { @apply mx-auto h-1 w-9 rounded-full; background: var(--hint-strong); }
+
+  @media (hover: hover) and (pointer: fine) {
+    .tl-opt:hover { background: var(--low); color: var(--text-1); }
+  }
+  .tl-opt:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .tl-opt[data-pressed], .tl-opt[data-active='true'] { background: var(--accent-soft); color: var(--accent-strong); }
+
+  .tl-label {
+    @apply mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em];
+    color: var(--text-3);
+  }
+  .tl-divider { width: 1px; height: 22px; background: var(--hint-strong); margin: 0 5px; }
+  .tl-hdivider { height: 1px; background: var(--hint); margin: 8px -12px; }
+
+  .tl-scroll::-webkit-scrollbar { width: 6px; }
+  /* Soft edge where a scrolling panel is cut off. The content adds matching bottom
+     padding, so at the end of the scroll the fade only ever covers empty space. */
+  .tl-scroll-fade {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  }
+  .tl-scroll-fade > * { padding-bottom: 1.75rem; }
+  .tl-scroll::-webkit-scrollbar-thumb { background: rgba(28, 24, 18, 0.16); border-radius: 9999px; border: 1px solid transparent; }
+
+  .code-area {
+    @apply w-full whitespace-pre overflow-auto rounded-[10px] p-2 font-mono text-[10.5px] leading-[1.5];
+    background: var(--low);
+    color: var(--text-1);
+    border: 1px solid transparent;
+  }
+  .code-area:focus { outline: none; border-color: var(--accent); background: var(--surface-solid); }
+  .code-area[data-invalid='true'] { border-color: var(--danger); background: #fff5f3; }
+}
+
+/* Practice mode */
+@keyframes guide-flow { to { stroke-dashoffset: -36; } }
+.guide-flow { animation: guide-flow 0.9s linear infinite; }
+/* The guide steps aside the moment the pen lands (fast) and comes back gently (slower). */
+.guide-layer, .guide-start { transition: opacity 220ms var(--ease-out); }
+[data-dim] .guide-layer, [data-dim] .guide-start { transition-duration: 100ms; }
+@keyframes guide-start { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+.guide-start { animation: guide-start 1.2s ease-in-out infinite; }
+@keyframes guide-pulse-bar { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+/* Blind tier: the reference appears over the stroke once the pen lifts, then goes. */
+@keyframes guide-reveal { 0% { opacity: 0; } 15% { opacity: 0.95; } 70% { opacity: 0.95; } 100% { opacity: 0; } }
+.guide-reveal { animation: guide-reveal 1.2s var(--ease-out) both; }
+.guide-pulse-bar { animation: guide-pulse-bar 1.2s ease-in-out infinite; }
+/* Score badge after each traced stroke: a new element per stroke, so the keyframe
+   restarting is the point. Pops in, holds, fades out on its own. */
+@keyframes feedback-pop {
+  0% { opacity: 0; transform: translateY(4px) scale(0.92); }
+  12% { opacity: 1; transform: translateY(0) scale(1.03); }
+  22% { transform: scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.feedback-pop { animation: feedback-pop 2.4s var(--ease-out) forwards; }
+/* Lesson-complete stars: the delight budget lives here (rare, first-time tier). */
+@keyframes star-pop { 0% { transform: scale(0.8); opacity: 0; } 60% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); } }
+.star-pop { animation: star-pop 0.4s var(--ease-out) both; }
+
+/* Learn: the START bubble bobs (an alive element), stat tiles arrive one after another,
+   the progress bar fills with a small overshoot, the feedback bar slides. */
+@keyframes bob { 0%, 100% { transform: translate(-50%, 0); } 50% { transform: translate(-50%, -6px); } }
+.start-bubble { animation: bob 1.6s ease-in-out infinite; }
+@keyframes tile-in { from { opacity: 0; transform: translateY(10px) scale(0.96); } to { opacity: 1; transform: none; } }
+.tile-in { animation: tile-in 320ms var(--ease-spring) both; animation-delay: var(--enter-delay, 0ms); }
+.bar-fill { transition: width 420ms var(--ease-spring); }
+.feedback-bar { transition: transform 220ms var(--ease-out), opacity 220ms var(--ease-out), background-color 150ms ease; }
+.feedback-bar[data-hidden] { transform: translateY(calc(100% + 16px)); opacity: 0; transition-timing-function: var(--ease-out); transition-duration: 180ms; }
+
+/* Cards that appear occasionally (a lesson step card, the result, the welcome
+   card): rise 6px into place. `--enter-delay` staggers a group. */
+@keyframes enter-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Lesson motion: the panel slides in from where it docks, slides step forward or back, labels settle onto the paper, badges land. */
+@keyframes enter-right { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+.enter-right { animation: enter-right 300ms var(--ease-out) both; }
+@keyframes slide-fwd { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+@keyframes slide-back { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+.slide-fwd { animation: slide-fwd 260ms var(--ease-out) both; }
+.slide-back { animation: slide-back 260ms var(--ease-out) both; }
+@keyframes label-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.label-in { animation: label-in 280ms var(--ease-out) both; transform-box: fill-box; transform-origin: center; }
+@keyframes badge-pop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); } }
+.badge-pop { animation: badge-pop 320ms var(--ease-out) both; }
+.pill-fill { transform-origin: left; transition: transform 320ms var(--ease-out); }
+.pen-tip { filter: drop-shadow(0 1px 2px rgba(28, 24, 18, 0.35)); }
+.enter-up { animation: enter-up 260ms var(--ease-out) both; animation-delay: var(--enter-delay, 0ms); }
+.welcome-in { --enter-delay: 320ms; }
+
+/* Anything toggled from the keyboard changes instantly: no motion on actions
+   that repeat hundreds of times a day. */
+[data-instant], [data-instant] * { transition-duration: 0ms !important; animation-duration: 0ms !important; animation-delay: 0ms !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  /* Fewer and gentler, not none: opacity stays (it carries meaning), movement goes. */
+  .guide-flow { animation: none; }
+  .star-pop, .enter-up, .tile-in, .enter-right, .slide-fwd, .slide-back, .label-in, .badge-pop { animation-name: fade-in; }
+  .pill-fill { transition-duration: 0ms; }
+  .start-bubble { animation: none; }
+  .bar-fill { transition-timing-function: var(--ease-out); }
+  [data-guide='speed-ghost'] { display: none; }
+  .feedback-pop { animation-name: fade-hold; }
+  .press:active:not(:disabled) { transform: none; }
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-hold { 0% { opacity: 0; } 10% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+/* Touch devices: keyboard hints only add noise */
+@media (pointer: coarse) { .tl-kbd-hint:not(.tl-kbd-static) { display: none; } }
+

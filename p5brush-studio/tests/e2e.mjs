@@ -1,0 +1,738 @@
+/**
+ * End-to-end regression suite for the studio, run against the production build.
+ *
+ *   npm run build && npm test
+ *
+ * Requires Playwright's Chromium (`npx playwright install chromium`). Rendering
+ * runs on SwiftShader (software WebGL2), so the checks are about behaviour and
+ * determinism, not pixel-exact colours.
+ */
+import { readFileSync } from 'node:fs';
+import { chromium } from 'playwright';
+import http from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const dist = path.join(root, 'dist');
+if (!fs.existsSync(path.join(dist, 'index.html'))) {
+  console.error('dist/ not found. Run `npm run build` first.');
+  process.exit(2);
+}
+
+// --- tiny static server -----------------------------------------------------
+const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' };
+const server = http.createServer((req, res) => {
+  const url = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+  const file = path.join(dist, url === '/' ? 'index.html' : url);
+  if (!file.startsWith(dist) || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
+  res.writeHead(200, { 'content-type': types[path.extname(file)] || 'application/octet-stream' });
+  fs.createReadStream(file).pipe(res);
+});
+await new Promise((r) => server.listen(0, '127.0.0.1', r));
+const base = `http://127.0.0.1:${server.address().port}/index.html`;
+
+// --- harness ----------------------------------------------------------------
+let failures = 0;
+const check = (name, ok, detail = '') => {
+  console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  ' + detail : ''}`);
+  if (!ok) failures++;
+};
+
+const browser = await chromium.launch({
+  headless: true,
+  args: ['--use-angle=swiftshader', '--use-gl=angle', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--no-sandbox'],
+});
+const context = await browser.newContext({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
+const page = await context.newPage();
+const pageErrors = [];
+page.on('pageerror', (e) => pageErrors.push(e.message));
+await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, (r) => r.abort()); // no fonts/CDNs in CI
+
+const studio = (fn, ...args) => page.evaluate(([src, a]) => new Function('s', 'a', `return (${src})(s, ...a)`)(window.__studio, a), [fn.toString(), args]);
+const checksum = () => page.evaluate(() => {
+  const c = document.getElementById('ink-canvas');
+  const gl = c.getContext('webgl2');
+  const px = new Uint8Array(c.width * c.height * 4);
+  gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
+  let h = 0, ink = 0;
+  for (let i = 0; i < px.length; i += 4) { h = (h * 31 + px[i]) >>> 0; ink += 255 - px[i]; }
+  return { h, ink };
+});
+const drag = async (pts) => {
+  await page.mouse.move(pts[0][0], pts[0][1]);
+  await page.mouse.down();
+  for (const [x, y] of pts.slice(1)) await page.mouse.move(x, y, { steps: 3 });
+  await page.mouse.up();
+};
+
+try {
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.strokes().length >= 1, null, { timeout: 20000 });
+  await page.waitForTimeout(200);
+  check('boots and draws the sample stroke', (await studio((s) => s.strokes().length)) === 1);
+
+  // First visit lands on the course; the studio is the Sketch mode.
+  check('a first visit lands on the Learn path', (await page.evaluate(() => location.hash)) === '#/learn' && (await page.locator('[data-testid=path]').count()) === 1, await page.evaluate(() => location.hash));
+  await page.evaluate(() => { location.hash = '#/sketch'; });
+  await page.waitForSelector('[data-testid=welcome]', { timeout: 3000 }).catch(() => {});
+  // First visit to Sketch: the welcome card shows once and stays dismissed.
+  const welcomeShown = (await page.locator('[data-testid=welcome]').count()) === 1;
+  if (welcomeShown) await page.locator('text=Start drawing').click({ timeout: 2000 });
+  await page.waitForTimeout(100);
+  const welcomeGone = (await page.locator('[data-testid=welcome]').count()) === 0;
+  const welcomedFlag = await page.evaluate(() => localStorage.getItem('p5brush-studio:welcomed'));
+  check('welcome card shows on first visit and dismisses for good', welcomeShown && welcomeGone && welcomedFlag === '1');
+
+  // Drawing with the mouse commits a stroke.
+  const blank = await checksum();
+  await drag([[200, 600], [400, 560], [600, 620], [800, 580]]);
+  await page.waitForTimeout(100);
+  const drawn = await checksum();
+  check('mouse stroke commits and adds ink', (await studio((s) => s.strokes().length)) === 2 && drawn.ink > blank.ink);
+
+  // Undo / redo are pixel-deterministic.
+  await studio((s) => s.undo());
+  const undone = await checksum();
+  await studio((s) => s.redo());
+  const redone = await checksum();
+  check('undo changes pixels', undone.h !== drawn.h);
+  check('redo reproduces identical pixels', redone.h === drawn.h);
+  const drawnRec = await studio((s) => { const r = s.history()[s.history().length - 1]; return { chunks: r.chunks, n: r.points.length }; });
+  check('a hand-drawn stroke records its live chunks', Array.isArray(drawnRec.chunks) && drawnRec.chunks.length >= 2 && drawnRec.chunks[drawnRec.chunks.length - 1] === drawnRec.n, JSON.stringify(drawnRec));
+  // The pixels on screen at lift are the committed pixels: a full rebuild changes nothing.
+  await studio((s) => s.rebuildAll());
+  check('rebuilding a hand-drawn stroke reproduces the lifted pixels', (await checksum()).h === drawn.h);
+  const drawnZoom = await studio((s) => s.history()[s.history().length - 1].zoom);
+  check('a hand-drawn stroke remembers the zoom it was drawn at', drawnZoom === 1);
+
+  // Clear resets the drawing and its history; Undo right after brings it back.
+  await studio((s) => s.clear());
+  const cleared = await studio((s) => ({ visible: s.strokes().length, history: s.history().length, canUndo: s.state.canUndo, canRedo: s.state.canRedo }));
+  await studio((s) => s.saveNow());
+  const savedAfterClear = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).strokes.length, await studio((s) => s.saveKey));
+  check('clear empties the drawing, the history and the autosave', cleared.visible === 0 && cleared.history === 0 && !cleared.canRedo && savedAfterClear === 0, JSON.stringify(cleared));
+  await studio((s) => s.undo());
+  check('undo restores strokes after clear', (await studio((s) => s.strokes().length)) === 2 && (await checksum()).h === drawn.h);
+  await studio((s) => s.clear());
+  await studio((s) => s.commit([{ x: 100, y: 100, p: 0.5 }, { x: 200, y: 120, p: 0.5 }], { seed: 5 }));
+  await studio((s) => s.undo());
+  check('a new stroke after clear forfeits the restore', (await studio((s) => s.history().length)) === 0);
+  await studio((s) => s.commit([{ x: 200, y: 600, p: 0.5 }, { x: 400, y: 560, p: 0.6 }, { x: 600, y: 620, p: 0.5 }, { x: 800, y: 580, p: 0.5 }], { seed: 6 }));
+  await studio((s) => s.commit([{ x: 100, y: 200, p: 0.5 }, { x: 300, y: 220, p: 0.5 }], { seed: 7 }));
+
+  // Escape cancels a live stroke.
+  const before = await studio((s) => s.history().length);
+  await page.mouse.move(300, 300); await page.mouse.down(); await page.mouse.move(500, 320, { steps: 4 });
+  await page.keyboard.press('Escape');
+  await page.mouse.move(600, 330); await page.mouse.up();
+  check('escape cancels the stroke in progress', (await studio((s) => s.history().length)) === before);
+
+  // Templates render previews and produce different ink.
+  await page.waitForFunction(() => window.__studio.state.templatePreviews, null, { timeout: 20000 });
+  const previewCount = await studio((s) => Object.keys(s.state.templatePreviews).length);
+  check('template previews rendered', previewCount === (await studio((s) => s.templates.length)), `${previewCount}`);
+  const inks = {};
+  for (const id of await studio((s) => s.templates)) {
+    await studio((s, id) => s.applyTemplate(id), id);
+    const pts = []; for (let i = 0; i <= 60; i++) pts.push({ x: 150 + i * 8, y: 420 + Math.sin(i / 8) * 50, p: 0.5 });
+    const b0 = (await checksum()).ink;
+    await studio((s, pts) => s.commit(pts, { seed: 7 }), pts);
+    inks[id] = (await checksum()).ink - b0;
+    await studio((s) => s.undo());
+  }
+  check('every template lays down ink', Object.values(inks).every((v) => v > 0), JSON.stringify(inks));
+  check('templates differ from each other', new Set(Object.values(inks)).size === Object.keys(inks).length);
+  await studio((s) => s.applyTemplate('chisel'));
+
+  // Zoom: strokes are world-space, drawing at zoom 2 maps back through the camera,
+  // and returning to the original view reproduces the exact pixels.
+  const atOne = await checksum();
+  await studio((s) => s.zoomBy(2, 600, 400));
+  await page.waitForTimeout(100);
+  check('zoom updates the camera', Math.abs((await studio((s) => s.view().zoom)) - 2) < 1e-9);
+  await drag([[500, 300], [700, 330]]);
+  const rec = await studio((s) => s.history()[s.history().length - 1]);
+  const w = await studio((s) => s.toWorld(500, 300));
+  check('stroke drawn at zoom 2 is stored in world units', Math.abs(rec.points[0].x - w.x) < 0.02 && Math.abs(rec.points[0].y - w.y) < 0.02);
+  await studio((s) => s.undo());
+  await studio((s) => s.zoomBy(0.5, 600, 400));
+  await page.waitForTimeout(100);
+  const backToOne = await checksum();
+  // Strokes that start off-screen (left/above) must still render when zoomed in.
+  await studio((s) => s.commit(Array.from({ length: 60 }, (_, i) => ({ x: 100 + i * 13, y: 200, p: 0.6 })), { seed: 3 }));
+  await studio((s) => { s.resetView(); s.zoomBy(4, 400, 200); });
+  const zoomedInk = await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2');
+    const px = new Uint8Array(160 * 160 * 4); gl.readPixels(320, c.height - 280, 160, 160, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let ink = 0; for (let i = 0; i < px.length; i += 4) ink += 255 - px[i]; return ink;
+  });
+  await studio((s) => s.resetView());
+  const baseInk = await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2');
+    const px = new Uint8Array(40 * 40 * 4); gl.readPixels(380, c.height - 220, 40, 40, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let ink = 0; for (let i = 0; i < px.length; i += 4) ink += 255 - px[i]; return ink;
+  });
+  check('a stroke that starts off-screen still renders when zoomed in', zoomedInk > baseInk * 8, `zoomed ${zoomedInk} vs base ${baseInk} (x16 area)`);
+  await studio((s) => s.undo()); // leave the earlier strokes in place for the checks below
+
+  check('zoom in then out re-renders identically', backToOne.h === atOne.h);
+
+  // Large rebuilds are spread over frames and end up identical to a synchronous one.
+  for (let i = 0; i < 16; i++) await studio((s, i) => s.commit([{ x: 120 + i * 40, y: 620, p: 0.5 }, { x: 140 + i * 40, y: 650, p: 0.6 }], { seed: 300 + i }), i);
+  const spread = await studio((s) => { s.zoomBy(1.1); return s.isPainting(); });
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 30000 });
+  const progressive = await checksum();
+  await studio((s) => s.rebuildAll());
+  check('large rebuilds are spread over frames and match a synchronous rebuild', spread === true && (await checksum()).h === progressive.h);
+  // While a zoom rebuild is in flight the previous image stays on screen (transformed), not blank paper.
+  const midZoom = await studio((s) => { s.zoomBy(1.15); const painting = s.isPainting(); return painting; });
+  const midInk = await checksum();
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 30000 });
+  check('a zoom rebuild keeps the previous drawing visible while it runs', midZoom === true && midInk.ink > blank.ink * 0.5, `ink ${midInk.ink} vs blank ${blank.ink}`);
+  await studio((s) => { s.zoomBy(1 / 1.15); s.flushPaint(); });
+  await studio((s) => { s.zoomBy(1 / 1.1); s.flushPaint(); });
+
+  // Panning at the same zoom shifts the image and renders only the exposed strips.
+  const beforePan = await checksum();
+  const grabRed0 = () => page.evaluate(() => { const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2'); const px = new Uint8Array(c.width * c.height * 4); gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px); const out = new Array(px.length / 4); for (let i = 0; i < out.length; i++) out[i] = px[i * 4]; return out; });
+  const beforePanPx0 = await grabRed0();
+  await studio((s) => s.resetPerf());
+  await studio((s) => s.pan(37, 22));
+  const panPainted = await studio((s) => s.perf().paintStrokes);
+  const total = await studio((s) => s.strokes().length);
+  const grabRed = () => page.evaluate(() => { const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2'); const px = new Uint8Array(c.width * c.height * 4); gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px); const out = new Array(px.length / 4); for (let i = 0; i < out.length; i++) out[i] = px[i * 4]; return out; });
+  const nearlySame = (a, b) => { let n = 0, maxd = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d) { n++; if (d > maxd) maxd = d; } } return { ok: n < 64 && maxd <= 2, n, maxd }; };
+  const beforePanPx = beforePanPx0;
+  const pannedPx = await grabRed();
+  await studio((s) => s.rebuildAll());
+  const rebuiltPx = await grabRed();
+  const same1 = nearlySame(pannedPx, rebuiltPx);
+  check('a pan renders only strokes touching the exposed strips', panPainted < total, `${panPainted} of ${total}`);
+  check('a pan equals a full rebuild at the new view (to rounding)', same1.ok, JSON.stringify(same1));
+  await studio((s) => s.pan(-37, -22));
+  const same2 = nearlySame(await grabRed(), beforePanPx);
+  check('panning there and back restores the pixels (to rounding)', same2.ok, JSON.stringify(same2));
+  void beforePan;
+  for (let i = 0; i < 16; i++) await studio((s) => s.undo());
+  await studio((s) => s.zoomToFit());
+  check('zoom to fit changes the view', (await studio((s) => s.view().zoom)) !== 1 || (await studio((s) => s.view().x)) !== 0);
+  await studio((s) => s.resetView());
+
+  // Autosave survives a reload with the paper and view.
+  await studio((s) => s.setPaper('washi'));
+  await studio((s) => s.zoomBy(1.5, 100, 100));
+  await studio((s) => s.saveNow());
+  const saved = await studio((s) => ({ n: s.strokes().length, paper: s.state.settings.paper, zoom: s.view().zoom }));
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio);
+  await page.waitForTimeout(500);
+  const restored = await studio((s) => ({ n: s.strokes().length, paper: s.state.settings.paper, zoom: s.view().zoom }));
+  check('reload restores strokes, paper and zoom', restored.n === saved.n && restored.paper === 'washi' && Math.abs(restored.zoom - saved.zoom) < 1e-9, JSON.stringify({ saved, restored }));
+
+  // Viewport culling: off-screen strokes are skipped, visible pixels are unchanged.
+  await studio((s) => s.clear());
+  await studio((s) => s.commit([{ x: 100, y: 100, p: 0.5 }, { x: 400, y: 120, p: 0.5 }], { seed: 11 }));
+  await studio((s) => s.commit([{ x: 3000, y: 3000, p: 0.5 }, { x: 3300, y: 3050, p: 0.5 }], { seed: 12 }));
+  await studio((s) => s.commit([{ x: -2000, y: 400, p: 0.5 }, { x: -1700, y: 380, p: 0.5 }], { seed: 13 }));
+  await studio((s) => { s.setCulling(true); s.rebuildAll(); });
+  const culledPixels = await checksum();
+  const culledCount = await studio((s) => s.lastCulled());
+  await studio((s) => { s.setCulling(false); s.rebuildAll(); });
+  const uncalledPixels = await checksum();
+  await studio((s) => s.setCulling(true));
+  check('culling skips off-screen strokes', culledCount === 2, `culled ${culledCount}`);
+  check('culling leaves visible pixels identical', culledPixels.h === uncalledPixels.h);
+
+  // Pen point merging: sub-pixel 240 Hz samples fold into the previous point.
+  await studio((s) => s.clear());
+  const penEvents = await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    const ev = (type, x, y, pressure) => new PointerEvent(type, { pointerId: 7, pointerType: 'pen', clientX: x, clientY: y, button: 0, buttons: 1, pressure, bubbles: true, cancelable: true });
+    c.dispatchEvent(ev('pointerdown', 300, 300, 0.4));
+    let n = 1;
+    for (let i = 1; i <= 200; i++) { window.dispatchEvent(ev('pointermove', 300 + i * 0.3, 300 + Math.sin(i / 10) * 0.2, 0.4 + (i % 5) * 0.1)); n++; }
+    window.dispatchEvent(new PointerEvent('pointerup', { pointerId: 7, pointerType: 'pen', clientX: 360, clientY: 300, button: 0, buttons: 0, bubbles: true, cancelable: true }));
+    return n;
+  });
+  await page.waitForTimeout(50);
+  const penRec = await studio((s) => s.history()[s.history().length - 1]);
+  check('pen samples closer than a pixel are merged', penRec.input === 'pen' && penRec.points.length < penEvents / 2 && penRec.points.length > 10, `${penRec.points.length} points from ${penEvents} events`);
+  check('merged points keep the higher pressure', penRec.points.some((p) => p.p >= 0.8));
+
+  // Simulated pressure for mouse/finger input: slow = heavy, fast = light.
+  const simPts = [];
+  for (let i = 0; i <= 40; i++) simPts.push({ x: 100 + i * 2, y: 500, p: 0.5 });      // slow (2 px steps)
+  for (let i = 1; i <= 20; i++) simPts.push({ x: 180 + i * 20, y: 500, p: 0.5 });     // fast (20 px steps)
+  const sim = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'stylus', sensitivity: 1.25, seed: 1, points: pts, input: 'mouse' }), simPts);
+  const slowP = sim.slice(5, 35).reduce((a, p) => a + p.p, 0) / 30;
+  const fastP = sim.slice(-10).reduce((a, p) => a + p.p, 0) / 10;
+  check('simulated pressure: slow strokes are heavier than fast ones', slowP > fastP + 0.1 && sim.every((p) => p.p >= 0.25 && p.p <= 0.75), `slow ${slowP.toFixed(2)} fast ${fastP.toFixed(2)}`);
+
+  // Start smoothing: a tight cluster of early samples is dropped and pen pressure is eased in.
+  const hook = [{ x: 200, y: 200, p: 1 }, { x: 201, y: 201, p: 1 }, { x: 202, y: 200, p: 1 }, { x: 201, y: 199, p: 1 }];
+  for (let i = 1; i <= 30; i++) hook.push({ x: 200 + i * 5, y: 200, p: 0.3 });
+  const cond = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts, input: 'pen' }), hook);
+  check('start jitter within one stroke width is dropped', cond.length === hook.length - 3, `${cond.length} of ${hook.length}`);
+  check('pen pressure tracks the device within a few samples', cond[0].p < 0.9 && cond[6].p < 0.35 && Math.abs(cond[cond.length - 1].p - 0.3) < 0.02, `start ${cond[0].p.toFixed(2)} at6 ${cond[6].p.toFixed(2)} end ${cond[cond.length - 1].p.toFixed(2)}`);
+  const lightDown = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts, input: 'pen' }), [{ x: 0, y: 0, p: 0.02 }, { x: 30, y: 0, p: 0.6 }, { x: 60, y: 0, p: 0.6 }, { x: 90, y: 0, p: 0.6 }]);
+  check('a pen-down sample without pressure borrows from the next', lightDown[0].p >= 0.25 && lightDown[3].p > 0.5, `first ${lightDown[0].p} fourth ${lightDown[3].p}`);
+  const legacy = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts }), hook);
+  check('records without an input kind are left untouched', legacy.length === hook.length && legacy[0].p === 1);
+
+  // Sketch export covers the visible strokes.
+  await studio((s) => s.clear());
+  await studio((s) => s.commit([{ x: 100, y: 100, p: 0.5 }, { x: 400, y: 120, p: 0.5 }], { seed: 21 }));
+  await studio((s) => s.commit([{ x: 100, y: 300, p: 0.5 }, { x: 400, y: 320, p: 0.5 }], { seed: 22 }));
+  const sketch = await studio((s) => s.sketchCode());
+  check('sketch export contains brush.add and strokes', /brush\.add\(/.test(sketch) && (sketch.match(/beginStroke/g) || []).length === 2);
+
+  // --- Practice: missions (trainer → guided → perform) ------------------------
+  // Timestamped trace of the current step's reference at its target speed, with a little wobble.
+  const traceStep = async (i, { jitter = 1.2, speedMul = 1, input = 'pen', fraction = 1 } = {}) => {
+    const st = (await studio((s) => s.practice.current()))[i];
+    const v = (st.speed || 0.45) * speedMul;
+    let t = 0; const pts = [];
+    const n = Math.max(2, Math.floor(st.points.length * fraction));
+    for (let k = 0; k < n; k++) {
+      const p = st.points[k];
+      if (k > 0) { const q = st.points[k - 1]; t += Math.hypot(p.x - q.x, p.y - q.y) / v; }
+      pts.push({ x: p.x + Math.sin(k * 1.7 + i) * jitter, y: p.y + Math.cos(k * 1.3 + i) * jitter, p: p.p, t: Math.round(t) });
+    }
+    await studio((s, a) => s.commit(a.pts, { input: a.input }), { pts, input });
+    return studio((s) => s.state.practice);
+  };
+
+  // Scoring v2: six dimensions, bandwidth tips.
+  const refLine = Array.from({ length: 20 }, (_, k) => ({ x: 100 + k * 20, y: 300, p: 0.6 }));
+  const perfect = refLine.map((q, k) => ({ ...q, t: k * 45 }));
+  const slow = refLine.map((q, k) => ({ ...q, t: k * 300 }));
+  const lightMiddle = refLine.map((q, k) => ({ ...q, p: k > 6 && k < 13 ? 0.2 : 0.6, t: k * 45 }));
+  const bellRef = refLine.map((q, k) => ({ ...q, p: 0.3 + 0.5 * Math.sin((k / 19) * Math.PI) }));
+  const sPerfect = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45 }), { u: perfect, r: refLine });
+  const sSlow = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45 }), { u: slow, r: refLine });
+  const sLight = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45, hasPressure: true }), { u: lightMiddle, r: bellRef });
+  const sFinger = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'perform', targetSpeed: 0.45, hasPressure: false }), { u: lightMiddle, r: bellRef });
+  const sNoTime = await studio((s, a) => s.practice.scoreFull(a.u, a.r, { tolerance: 12, mode: 'guided' }), { u: refLine, r: refLine });
+  check('a perfect timed stroke is in band on every dimension', sPerfect.score >= 95 && sPerfect.tip === null && Object.values(sPerfect.band).every((b) => b === 'ok'), JSON.stringify(sPerfect.band));
+  check('a slow stroke is told to go faster', sSlow.tip?.dim === 'speed' && sSlow.band.speed === 'low' && sSlow.score < sPerfect.score, JSON.stringify(sSlow.tip));
+  check('a light middle is told to press harder in the middle', sLight.tip?.dim === 'pressure' && /harder at the middle/.test(sLight.tip.text), JSON.stringify(sLight.tip));
+  check('pressure is not scored for a finger', sFinger.band.pressure === 'na' && sFinger.tip === null, JSON.stringify(sFinger.band));
+  check('without timestamps speed drops out and shape still scores', sNoTime.band.speed === 'na' && sNoTime.dims.shape === 1 && sNoTime.score >= 90, JSON.stringify(sNoTime));
+
+  // Timestamps are captured from real pointer input and survive a save.
+  await studio((s) => s.clear());
+  await page.mouse.move(200, 300); await page.mouse.down();
+  for (let i = 1; i <= 12; i++) { await page.mouse.move(200 + i * 20, 300 + Math.sin(i) * 3); await page.waitForTimeout(12); }
+  await page.mouse.up();
+  await page.waitForTimeout(150);
+  const timed = await studio((s) => { const r = s.history().at(-1); return { first: r.points[0].t, last: r.points.at(-1).t, all: r.points.every((p) => typeof p.t === 'number') }; });
+  await studio((s) => s.saveNow());
+  const savedTm = await page.evaluate((key) => { const d = JSON.parse(localStorage.getItem(key)); const r = d.strokes.at(-1); return Array.isArray(r.tm) && r.tm.length === r.pts.length / 3 && r.tm[0] === 0; }, await studio((s) => s.saveKey));
+  check('points carry milliseconds since the pen landed and the save keeps them', timed.first === 0 && timed.last > 50 && timed.all && savedTm, JSON.stringify(timed));
+
+  const freeBefore = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource }));
+
+  // The curriculum: all missions declared, Level 0–2 playable, the rest visible.
+  const missions = await studio((s) => s.practice.missions);
+  check('the path declares 27 missions across 7 levels', missions.length === 27 && missions[0] === '0.1' && missions.at(-1) === '6.4', missions.join(','));
+
+  // The lesson: slides beside the paper, demos drawn by the engine, nothing scored.
+  await page.goto(page.url().split('#')[0] + '#/learn/1.1');
+  await page.waitForSelector('[data-testid="mission-sheet"]');
+  check('the mission bubble lists the lesson first', (await page.locator('[data-testid=part-teach]').count()) === 1 && (await page.locator('[data-testid=mission-start]').textContent()).includes('Lesson'));
+  await page.click('[data-testid=part-teach]');
+  await page.waitForSelector('[data-testid=teach-panel]');
+  let pr = await studio((s) => s.state.practice);
+  check('the lesson route opens the teach part with an empty paper', pr.part === 'teach' && pr.steps.length === 0 && (await page.evaluate(() => location.hash)) === '#/learn/1.1/teach' && (await studio((s) => s.history().length)) <= 1);
+  await page.waitForFunction(() => window.__studio.state.demo === true, null, { timeout: 5000 });
+  check('a demo stroke is drawn live by the engine', (await studio((s) => ({ demo: s.state.demo, drawing: s.state.drawing }))).demo === true && (await page.locator('[data-teach-label]').count()) >= 1);
+  await page.waitForFunction(() => !window.__studio.state.demo && window.__studio.history().length >= 2, null, { timeout: 20000 });
+  const demoRecs = await studio((s) => s.history().map((r) => ({ chunks: r.chunks?.length ?? 0, n: r.points.length, timed: r.points.every((p) => typeof p.t === 'number'), input: r.input })));
+  check('demo strokes go through the live pipeline: chunked, timestamped, no input kind', demoRecs.length === 2 && demoRecs.every((r) => r.chunks >= 2 && r.timed && r.input === undefined), JSON.stringify(demoRecs));
+  check('a compare slide labels the right way and the wrong way on the paper', (await page.locator('[data-teach-label]').count()) === 2 && (await page.locator('[data-teach-label]').first().textContent()).startsWith('✓'));
+  await studio((s) => s.commit([{ x: 100, y: 550, p: 0.5 }, { x: 300, y: 560, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('drawing beside the lesson is kept and not scored', pr.step === 0 && pr.feedback === null && (await studio((s) => s.history().length)) === 3);
+  await page.click('[data-testid=teach-next]');
+  await page.waitForTimeout(300);
+  check('the next slide clears the paper and plays its own demo', (await page.evaluate(() => document.querySelector('[data-testid=teach-panel]').dataset.slide)) === '1' && (await studio((s) => s.history().length)) <= 1);
+  await studio((s) => s.practice.stopDemo());
+  check('a stopped demo leaves no stroke in progress', (await studio((s) => ({ demo: s.state.demo, drawing: s.state.drawing }))).demo === false && !(await studio((s) => s.state.drawing)));
+  const slideCount = await page.locator('[data-testid=teach-panel] [role=progressbar] > span').count();
+  for (let k = 1; k < slideCount; k++) { await page.click('[data-testid=teach-next]'); await page.waitForTimeout(120); }
+  await page.waitForTimeout(400);
+  pr = await studio((s) => s.state.practice);
+  const taught = await studio((s) => s.practice.progress().missions['1.1']?.taught);
+  const teachSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name));
+  check('a lesson demo makes the brush sound while it draws', teachSounds.includes('brush') && (await page.evaluate(() => window.__sfx.log.filter((e) => e.name === 'brush').every((e) => e.kind))), teachSounds.join(','));
+  check('the lesson cues the pen landing and the verdict of a compare stroke', teachSounds.includes('penDown') && teachSounds.includes('good') && teachSounds.includes('bad'), teachSounds.join(','));
+  check('a session start plays its cue', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'start', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
+  check('finishing the slides marks the mission taught and opens the trainer', taught === true && pr?.part === 'trainer' && (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer' && (await page.locator('[data-testid=practice-cue]').count()) === 1, JSON.stringify({ taught, part: pr?.part }));
+
+  // Trainer: generated reps, every stroke accepted, feedback words.
+  await studio((s) => s.practice.mission('1.1', 'trainer'));
+  pr = await studio((s) => s.state.practice);
+  check('a trainer opens with generated reps at the dots tier', pr.part === 'trainer' && pr.steps.length === 12 && pr.tier === 'dots' && pr.step === 0, JSON.stringify({ part: pr.part, n: pr.steps.length, tier: pr.tier }));
+  check('superimposed reps repeat the same line four times with their own hint', pr.steps[0].points === pr.steps[3].points || JSON.stringify(pr.steps[0].points) === JSON.stringify(pr.steps[3].points), pr.steps[1].hint);
+  check('the fourth line of the drill is a new line', JSON.stringify(pr.steps[4].points) !== JSON.stringify(pr.steps[0].points));
+  await page.waitForTimeout(100);
+  check('the mission shows in the URL', (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer', await page.evaluate(() => location.hash));
+  pr = await traceStep(0, { jitter: 14 });
+  check('a drill accepts a rough stroke and says what to fix', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip !== null, JSON.stringify(pr.feedback.tip));
+  check('a stroke with an instruction plays the tip cue', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'tip', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
+  for (let i = 1; i < 12; i++) pr = await traceStep(i);
+  check('finishing the drill summarises clean reps and records it', pr.status === 'complete' && pr.summary.clean >= 10 && (await studio((s) => s.practice.progress())).missions['1.1'].trainer.plays === 1, JSON.stringify(pr.summary));
+  check('the results play the completion chime', (await page.evaluate(() => window.__sfx.log.some((e) => e.name === 'complete'))) === true, await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-4))));
+  await page.evaluate(() => window.__sfx.setEnabled(false));
+  await studio((s) => s.practice.mission('1.1', 'trainer'));
+  pr = await traceStep(0);
+  const muted = await page.evaluate(() => ({ last: window.__sfx.log.at(-1), stored: localStorage.getItem('p5brush-studio:sound'), enabled: window.__sfx.enabled }));
+  check('sound off is remembered and silences the cues without losing them', muted.enabled === false && muted.stored === '0' && muted.last?.played === false && ['clean', 'great', 'tip'].includes(muted.last?.name), JSON.stringify(muted));
+  await page.evaluate(() => window.__sfx.setEnabled(true));
+  await studio((s) => s.practice.mission('1.1', 'trainer'));
+  pr = await traceStep(0, { jitter: 14 });
+  for (let i = 1; i < 12; i++) pr = await traceStep(i);
+  check('the drill reports how much of its focus dimension was in band', pr.summary.focus?.dim === 'confidence' && pr.summary.focus.mean > 0 && (await page.locator('[data-testid=focus-mean]').count()) === 1 && (await page.locator('[data-testid=results-lesson]').count()) === 1, JSON.stringify(pr.summary.focus));
+
+  // Guided: full guide, bandwidth pill, pressure note for a mouse, auto-adjust.
+  await studio((s) => s.practice.mission('1.1', 'guided'));
+  pr = await studio((s) => s.state.practice);
+  const nSteps = pr.steps.length;
+  check('a guided run opens the piece with the full guide', pr.part === 'guided' && pr.lessonId === 'fence' && pr.tier === 'full' && (await page.locator('[data-guide=current]').count()) === 1 && (await page.locator('[data-guide=ghost]').count()) === nSteps - 1);
+  const road = await page.evaluate(() => document.querySelector('[data-guide=road]')?.getAttribute('d') || '');
+  check('the full guide draws a closed road shaped by the reference pressure', road.startsWith('M') && road.endsWith('Z') && road.split('L').length > 20, `${road.length} chars`);
+  pr = await traceStep(0, { fraction: 0.5 });
+  check('a half-length stroke is accepted with a "too short" instruction', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip?.dim === 'length', JSON.stringify(pr.feedback.tip));
+  pr = await traceStep(1, { input: 'mouse' });
+  check('a mouse stroke turns pressure scoring off with a note', pr.pressureScored === false && /Pressure/.test(pr.note || ''), pr.note);
+  pr = await traceStep(2);
+  check('two clean strokes in a row step the guide down', pr.tier === 'light' && /stepped down/.test(pr.note || ''), JSON.stringify({ tier: pr.tier, note: pr.note }));
+  const nBefore = await studio((s) => s.history().length);
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('two misses step the guide back up, remove the strokes and offer a loop', pr.step === 3 && pr.misses === 2 && pr.loopOffer && pr.tier === 'full' && (await studio((s) => s.history().length)) === nBefore, JSON.stringify({ misses: pr.misses, tier: pr.tier, loopOffer: pr.loopOffer }));
+  await studio((s) => s.practice.loop());
+  pr = await traceStep(3);
+  check('a loop rehearsal is scored and erased', pr.step === 3 && pr.loop === 2 && pr.feedback.looped && (await studio((s) => s.history().length)) === nBefore, JSON.stringify({ loop: pr.loop, step: pr.step }));
+  pr = await traceStep(3); pr = await traceStep(3);
+  pr = await traceStep(3);
+  check('after the loop the real attempt counts', pr.step === 4 && pr.loop === 0, JSON.stringify({ loop: pr.loop, step: pr.step }));
+  await studio((s) => s.practice.skip());
+  const afterSkip = await studio((s) => s.state.practice);
+  await studio((s) => s.undo());
+  pr = await studio((s) => s.state.practice);
+  check('skip counts as zero and undo reopens the step', afterSkip.step === 5 && afterSkip.results[4] === null && pr.step === 4 && pr.results.length === 4);
+  for (let i = 4; i < nSteps; i++) pr = await traceStep(i);
+  check('finishing a guided run records a best but no stars', pr.status === 'complete' && pr.summary.stars === 0 && (await studio((s) => s.practice.progress())).missions['1.1'].guided.best === pr.summary.score, JSON.stringify(pr.summary));
+  await studio((s) => s.saveNow()); // the autosave is debounced; flush it before reading
+  const savedDoc = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).strokes.length, await studio((s) => s.saveKey));
+  check('autosave keeps the free drawing while a session is open', savedDoc === freeBefore.n, `${savedDoc} vs ${freeBefore.n}`);
+
+  // Perform: fixed tier, three tries, stars, critique, then vs now.
+  await studio((s) => s.practice.mission('1.1', 'perform', 'dots'));
+  pr = await studio((s) => s.state.practice);
+  check('a perform opens at the chosen tier and locks it', pr.part === 'perform' && pr.tier === 'dots' && pr.tierLocked && (await page.locator('[data-guide=ghost]').count()) === 0);
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('perform rejects a bad stroke twice without loops or tier changes', pr.step === 0 && pr.misses === 2 && !pr.loopOffer && pr.tier === 'dots');
+  check('the second miss in a perform warns that the next try counts', (await page.evaluate(() => window.__sfx.log.slice(-2).map((e) => e.name).join(','))) === 'miss,lastTry', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
+  await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('the third try counts even when it is poor', pr.step === 1 && pr.results[0] !== null && pr.results[0] < 50);
+  for (let i = 1; i < nSteps; i++) pr = await traceStep(i, { jitter: 5, speedMul: 0.6 });
+  const first = pr.summary;
+  const firstPerformSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name).slice(-6));
+  check('finishing a mission for the first time chimes and unlocks', firstPerformSounds.includes('complete') && firstPerformSounds.includes('unlock'), firstPerformSounds.join(','));
+  check('a rough perform ends with a critique: costly strokes and the worst dimension', pr.status === 'complete' && first.costly.length === 3 && first.costly[0].step === 0 && first.newBest && (await page.locator('[data-guide=costly]').count()) === 3, JSON.stringify(first));
+  await studio((s) => s.practice.restart());
+  for (let i = 0; i < nSteps; i++) pr = await traceStep(i);
+  await page.waitForTimeout(600);
+  pr = await studio((s) => s.state.practice);
+  const prog = await studio((s) => s.practice.progress());
+  const cleanSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name).slice(-8));
+  check('three stars play three notes and a new best sparkles', cleanSounds.filter((n) => n === 'star').length === 3 && cleanSounds.includes('best') && !cleanSounds.includes('unlock'), cleanSounds.join(','));
+  check('a clean perform earns three stars and shows then vs now',
+    pr.summary.stars === 3 && pr.summary.newBest && pr.summary.firstScore === first.score && !!pr.summary.firstThumb && !!pr.summary.todayThumb && prog.missions['1.1'].perform.stars === 3 && prog.missions['1.1'].perform.byTier.dots === pr.summary.score && prog.missions['1.1'].first.score === first.score,
+    JSON.stringify({ s: pr.summary.score, stars: pr.summary.stars, first: pr.summary.firstScore, thumbs: !!pr.summary.firstThumb }));
+  check('the result card lists the then-vs-now thumbnails', (await page.locator('[data-testid=then-vs-now] img').count()) === 2);
+
+  // Leaving restores the drawing, brush and view.
+  await studio((s) => s.practice.exit(false));
+  const freeAfter = await studio((s) => ({ n: s.history().length, zoom: s.view().zoom, size: s.state.settings.size, tip: s.state.settings.tipSource, practice: s.state.practice }));
+  check('leaving a session restores the drawing, brush and view',
+    freeAfter.practice === null && freeAfter.n === freeBefore.n && freeAfter.size === freeBefore.size && freeAfter.tip === freeBefore.tip && Math.abs(freeAfter.zoom - freeBefore.zoom) < 1e-9,
+    JSON.stringify({ freeBefore, freeAfter: { ...freeAfter, practice: undefined } }));
+  // The brush sound: a mouse stroke in the studio is a pen scratching while it moves, silent when it lifts.
+  await page.goto(page.url().split('#')[0] + '#/sketch');
+  await page.waitForFunction(() => !window.__studio.state.practice);
+  await studio((s) => s.applyTemplate('liner'));
+  await page.mouse.move(500, 400); await page.mouse.down();
+  await page.mouse.move(560, 410, { steps: 6 });
+  const midStroke = await page.evaluate(() => window.__sfx.brushState());
+  await page.mouse.move(640, 430, { steps: 6 }); await page.mouse.up();
+  await page.waitForTimeout(50);
+  const afterStroke = await page.evaluate(() => window.__sfx.brushState());
+  check('the brush scratches while the pen moves and stops when it lifts', midStroke?.kind === 'pen' && midStroke.level > 0 && afterStroke === null, JSON.stringify({ midStroke, afterStroke }));
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(50);
+  check('undo in the studio ticks', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'undo');
+  await page.keyboard.press('e'); await page.waitForTimeout(30);
+  check('switching tools ticks', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'tool');
+  await page.keyboard.press('b');
+
+  // Legacy entry and v1 migration.
+  await page.evaluate(() => { localStorage.setItem('p5brush-studio:practice:v1', JSON.stringify({ leaf: { best: 77, stars: 2, plays: 3 } })); localStorage.removeItem('p5brush-studio:practice:v2'); });
+  await page.reload({ waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews);
+  const migrated = await studio((s) => s.practice.progress());
+  check('version 1 bests migrate onto the mission that owns the piece', migrated.v === 2 && migrated.missions['3.5']?.perform?.best === 77 && migrated.missions['3.5'].perform.stars === 2 && migrated.missions['3.5'].perform.tier === 'full', JSON.stringify(migrated.missions));
+  await studio((s) => s.practice.start('leaf'));
+  pr = await studio((s) => s.state.practice);
+  check('the legacy start opens the guided run of the piece', pr && pr.missionId === '3.5' && pr.part === 'guided');
+  await traceStep(0);
+  await studio((s) => s.practice.exit(true));
+  const kept = await studio((s) => ({ n: s.history().length, practice: s.state.practice }));
+  check('keeping the traced drawing replaces the document', kept.practice === null && kept.n === 1);
+
+  // Routes: the Path and a mission sheet open from the URL; Escape and back close them.
+  await page.goto(page.url().split('#')[0] + '#/learn/1.2');
+  await page.waitForSelector('[data-testid="mission-sheet"]');
+  check('a mission URL opens the path and the mission bubble', (await page.locator('[data-testid="path"]').count()) === 1 && (await page.locator('[data-testid="mission-sheet"]').count()) === 1);
+  await page.keyboard.press('Escape');
+  await page.waitForSelector('[data-testid="mission-sheet"]', { state: 'detached', timeout: 3000 }).catch(() => {});
+  check('Escape closes the bubble and updates the URL', (await page.evaluate(() => location.hash)) === '#/learn' && (await page.locator('[data-testid="mission-sheet"]').count()) === 0);
+  await page.click('[data-testid="today-warmup"]');
+  await page.waitForTimeout(400);
+  pr = await studio((s) => s.state.practice);
+  check('the warm-up starts from Today', (await page.evaluate(() => location.hash)) === '#/warmup' && pr?.part === 'warmup' && pr.steps.length === 24, JSON.stringify({ part: pr?.part, n: pr?.steps.length }));
+  await page.goBack();
+  await page.waitForTimeout(400);
+  check('the back button leaves the session', (await studio((s) => s.state.practice)) === null && (await page.evaluate(() => location.hash)) === '#/learn');
+  await page.goto(page.url().split('#')[0] + '#/sketch');
+  await page.waitForTimeout(300);
+  await studio((s) => s.clear());
+
+  // Render self-test: all four ways of drawing the same line agree on this renderer.
+  // (The self-test measures the middle of the viewport, so this stroke stays clear of it.)
+  await drag([[200, 440], [400, 470], [600, 440]]);
+  const diag = await studio((s) => s.diagnostics());
+  const t = diag.tests;
+  check('render self-test: one-shot and chunked agree', Math.abs(t.oneShot - t.chunked) < 20 && t.oneShot < t.paper - 20, JSON.stringify(t));
+
+  // Chunks of a hand-drawn stroke share one engine mask, so the darkness along a
+  // straight line replayed in many chunks is flat: no lighter plate at any boundary.
+  // (The first columns are the start rise of the live pressure envelope.)
+  const seam = await studio((s) => {
+    const y = 400, x0 = 300, x1 = 900, pts = [];
+    for (let i = 0; i <= 120; i++) pts.push({ ...s.toWorld(x0 + (x1 - x0) * i / 120, y), p: 0.6 });
+    s.clear(); s.applyTemplate('chisel'); s.commit(pts);
+    const rec = s.history()[0]; s.undo();
+    const chunks = []; for (let i = 10; i < pts.length; i += 7) chunks.push(i); chunks.push(pts.length);
+    s.gl.blitPaper(); s.gl.render({ ...rec, chunks });
+    const cols = []; for (let x = x0 + 120; x < x1 - 30; x += 6) cols.push(s.gl.meanRed(x, y - 4, 6, 8));
+    s.gl.blitCommitted();
+    let jump = 0; for (let i = 1; i < cols.length; i++) jump = Math.max(jump, Math.abs(cols[i] - cols[i - 1]));
+    return { chunks: chunks.length, min: Math.min(...cols), max: Math.max(...cols), jump };
+  });
+  check('chunk boundaries leave no bands along a stroke', seam.chunks > 10 && seam.jump <= 8 && seam.max - seam.min <= 12 && seam.max < 240, JSON.stringify(seam));
+
+  // Pencil lab: every feature is off by default and strokes carry no effects.
+  // Mark width (rows with ink through the stroke's band, averaged over a few columns) and peak darkness (lowest red).
+  const coverage = () => page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    const gl = c.getContext('webgl2');
+    const px = new Uint8Array(c.width * c.height * 4);
+    gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let width = 0, minRed = 255;
+    for (const x of [420, 500, 580, 660]) {
+      let rows = 0;
+      for (let y = c.height - 400; y < c.height - 200; y++) { const r = px[(y * c.width + x) * 4]; if (r < 240) rows++; if (r < minRed) minRed = r; }
+      width += rows / 4;
+    }
+    return { width, minRed };
+  });
+  // Pen-like points along a screen-space wave (the view may be panned by earlier checks), with tilt fields.
+  await page.evaluate(() => { window.__penPts = (alt, az, tw = 0, y = 300) => { const pts = []; for (let i = 0; i <= 60; i++) pts.push({ ...window.__studio.toWorld(300 + i * 8, y + Math.sin(i / 6) * 12), p: 0.5, alt, az, tw }); return pts; }; });
+  const penPts = (alt, az, tw = 0) => [alt, az, tw];
+  const labDefaults = await studio((s) => { s.clear(); s.applyTemplate('chisel'); const p = s.pencil(); const f = s.filters(); const r = s.commit([{ x: 300, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }, { x: 600, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }], { input: 'pen' }); return { defaults: !p.tiltShade && p.nib === 'stroke' && !p.roll && p.hover && p.predict && p.calib === null && f.position.mode === 'kalman' && f.pressure.mode === 'kalman', fx: r.fx === undefined, filt: r.filt?.position?.mode }; });
+  check('defaults: hover, predicted tail and Kalman smoothing on; tilt shading, nib and roll off', labDefaults.defaults && labDefaults.fx && labDefaults.filt === 'kalman', JSON.stringify(labDefaults));
+
+  // Brushes carry their own pencil behaviour and input tuning.
+  const nibBrush = await studio((s) => { s.applyTemplate('nib'); return { nib: s.pencil().nib, roll: s.pencil().roll, r: s.filters().position.r }; });
+  const linerBrush = await studio((s) => { s.applyTemplate('liner'); return { nib: s.pencil().nib, roll: s.pencil().roll, r: s.filters().position.r }; });
+  check('the calligraphy nib turns with the pencil and rolls; a round brush does not', nibBrush.nib === 'azimuth' && nibBrush.roll && nibBrush.r === 12 && linerBrush.nib === 'stroke' && !linerBrush.roll && linerBrush.r === 4, JSON.stringify({ nibBrush, linerBrush }));
+  const newBrushes = await studio((s) => ['brushpen', 'flat', 'ballpoint', 'charcoal'].map((id) => s.templates.includes(id) && !!s.state.templatePreviews?.[id]));
+  check('the four new brushes exist and rendered previews', newBrushes.every(Boolean), JSON.stringify(newBrushes));
+
+  // Tilt shading: the same path drawn with a flat pencil is wider at the same darkness (fade 1), and lighter with a fade.
+  // The width ratio depends on the zoom the strokes are stamped at; pin it.
+  const tiltStroke = async (alt, tiltFade) => { await studio((s) => { s.clear(); s.resetView(); s.zoomBy(0.88); s.applyTemplate('chisel'); }); await studio((s, a, fx) => s.commit(window.__penPts(...a), { input: 'pen', fx, seed: 11, pressureMode: 'stylus' }), penPts(alt, 0), { tiltWidth: 2.5, tiltFade, nib: 'stroke', roll: false }); return coverage(); };
+  const upright = await tiltStroke(90, 1), flat = await tiltStroke(25, 1), faded = await tiltStroke(25, 0.5);
+  check('tilt shading: a flat pencil makes a wider mark at the same darkness, lighter with a fade',
+    // Peak darkness moves a little with stamp density (it depends on the zoom the test runs at), hence the 14/255 tolerance.
+    flat.width > upright.width * 1.4 && Math.abs(flat.minRed - upright.minRed) <= 14 && faded.minRed > upright.minRed + 8, JSON.stringify({ upright, flat, faded }));
+
+  // Effects are part of the record: a rebuild reproduces the pixels, and the autosave keeps tilt + fx.
+  const flatDrawn = await checksum();
+  await studio((s) => s.rebuildAll());
+  check('a tilt-shaded stroke rebuilds to identical pixels', (await checksum()).h === flatDrawn.h);
+  await studio((s) => s.saveNow());
+  const savedFx = await page.evaluate((key) => { const d = JSON.parse(localStorage.getItem(key)); const r = d.strokes[d.strokes.length - 1]; return { tl: Array.isArray(r.tl) && r.tl.length === r.pts.length, fx: r.fx?.tiltWidth }; }, await studio((s) => s.saveKey));
+  check('autosave keeps tilt samples and the stroke effects', savedFx.tl && savedFx.fx === 2.5, JSON.stringify(savedFx));
+
+  // Azimuth nib: with the chisel, the pencil's azimuth decides the tip angle; without it, azimuth is ignored.
+  const nibOn = { tiltWidth: 1, tiltFade: 1, nib: 'azimuth', roll: false }, nibOff = { ...nibOn, nib: 'stroke' };
+  const drawAz = async (az, fx) => { await studio((s) => { s.clear(); s.applyTemplate('chisel'); }); await studio((s, a, fx) => s.commit(window.__penPts(...a), { input: 'pen', fx, seed: 5 }), penPts(60, az), fx); return (await checksum()).h; };
+  const az0 = await drawAz(0, nibOn), az90 = await drawAz(90, nibOn), off0 = await drawAz(0, nibOff), off90 = await drawAz(90, nibOff);
+  check('azimuth nib turns the chisel with the pencil, stroke nib ignores azimuth', az0 !== az90 && off0 === off90, JSON.stringify({ az0, az90, off0, off90 }));
+
+  // Barrel roll: twist changes the mark only when roll is on.
+  const rollOn = { ...nibOff, roll: true };
+  const tw0 = await drawAz(0, rollOn);
+  await studio((s) => { s.clear(); s.applyTemplate('chisel'); });
+  await studio((s, fx) => s.commit(window.__penPts(60, 0).map((p, i) => ({ ...p, tw: (i * 6) % 360 })), { input: 'pen', fx, seed: 5 }), rollOn);
+  const twSpin = (await checksum()).h;
+  check('barrel roll turns the tip with the twist', tw0 !== twSpin);
+
+  // Calibration: pressures seen while calibrating define the range mapped onto the curve.
+  await studio((s) => { s.clear(); s.applyTemplate('chisel'); s.startCalibration(0.05); });
+  await page.waitForTimeout(80);
+  await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    const ev = (type, x, y, p) => new PointerEvent(type, { pointerType: 'pen', pointerId: 9, isPrimary: true, bubbles: true, cancelable: true, clientX: x, clientY: y, pressure: p, buttons: 1 });
+    c.dispatchEvent(ev('pointerdown', 200, 650, 0.2));
+    for (let i = 1; i <= 80; i++) window.dispatchEvent(ev('pointermove', 200 + i * 5, 650 + Math.sin(i / 4) * 6, 0.2 + 0.4 * (i / 80)));
+    window.dispatchEvent(ev('pointerup', 600, 650, 0.6));
+  });
+  await page.waitForTimeout(100);
+  const calib = await studio((s) => s.pencil().calib);
+  check('pressure calibration maps the observed force range', !!calib && calib.min > 0.15 && calib.min < 0.3 && calib.max > 0.5 && calib.max < 0.65, JSON.stringify(calib));
+  await studio((s) => s.setPencil({ calib: null }));
+
+  // Conditioning: bit-exact against fixtures recorded before the pipeline became incremental,
+  // and the live path (state carried across chunks) equals the replay path (per-prefix reconditioning).
+  const fixtures = JSON.parse(readFileSync(new URL('./fixtures/conditioning.json', import.meta.url), 'utf8'));
+  const condCheck = await studio((s, cases) => {
+    const spec = { type: 'custom', weight: 29, scatter: 0.45, opacity: 6, spacing: 0.4, noise: 1, pressure: { mode: 'gaussian', curve: [0.36, 0.25], min_max: [0.48, 1.06] }, rotate: 'none', markerTip: true };
+    let mismatches = [], liveMismatch = [], compared = 0;
+    for (const c of cases) {
+      const rec = { tool: 'brush', spec, tipSource: '', size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, input: c.input, points: c.points, filt: c.filt ?? undefined };
+      for (const [L, expected] of Object.entries(c.prefixes)) {
+        const got = s.conditioned({ ...rec, points: c.points.slice(0, +L) });
+        compared++;
+        if (JSON.stringify(got) !== JSON.stringify(expected)) mismatches.push(`${c.name}@${L}`);
+      }
+      for (const uptos of [[6, 9, 14, 22, 30, 41, 60], [7, 12, 60], [6, 60], [60]]) {
+        const both = s.chunkBoth(rec, uptos);
+        both.forEach((b, i) => { if (JSON.stringify(b.live) !== JSON.stringify(b.replay)) liveMismatch.push(`${c.name}@${uptos[i]}`); });
+      }
+    }
+    return { compared, mismatches: mismatches.slice(0, 5), liveMismatch: liveMismatch.slice(0, 5) };
+  }, fixtures);
+  check('conditioning matches the recorded fixtures bit for bit', condCheck.mismatches.length === 0 && condCheck.compared === fixtures.length * 10, JSON.stringify(condCheck));
+  check('live chunk conditioning equals per-prefix reconditioning', condCheck.liveMismatch.length === 0, JSON.stringify(condCheck.liveMismatch));
+
+  // Input filters: the defaults reproduce the legacy conditioning exactly.
+  const noisy = { tool: 'brush', spec: null, tipSource: '', size: 1, color: '#000', pressureMode: 'both', sensitivity: 1, seed: 1, input: 'pen', points: [] };
+  for (let i = 0; i < 40; i++) noisy.points.push({ x: 100 + i * 4, y: 200 + (i % 2 ? 3 : -3), p: i % 2 ? 0.7 : 0.3, alt: 40 + (i % 2 ? 6 : -6), az: 90 + (i % 2 ? 10 : -10), tw: 0 });
+  const filt = await studio((s, rec) => {
+    const spec = s.history()[0]?.spec ?? { weight: 29, scatter: 0.45, opacity: 6, spacing: 0.4, noise: 1, pressure: { mode: 'gaussian', curve: [0.36, 0.25], min_max: [0.48, 1.06] }, rotate: 'none', markerTip: true, type: 'custom' };
+    rec = { ...rec, spec };
+    // what a record without stored parameters means
+    const defaults = { position: { mode: 'streamline', q: 0.02, r: 4, streamline: 0.575 }, pressure: { mode: 'average', q: 0.0005, r: 0.01 }, tilt: { mode: 'off', q: 2, r: 20 }, twist: { mode: 'off', q: 2, r: 20 } };
+    const legacy = s.conditioned(rec), withDefaults = s.conditioned({ ...rec, filt: defaults });
+    const dev = (pts) => { const ys = pts.map((p) => p.y); const m = ys.reduce((a, b) => a + b, 0) / ys.length; return Math.sqrt(ys.reduce((a, y) => a + (y - m) ** 2, 0) / ys.length); };
+    const range = (pts, k) => Math.max(...pts.slice(5).map((p) => p[k])) - Math.min(...pts.slice(5).map((p) => p[k]));
+    const kal = s.conditioned({ ...rec, filt: { ...defaults, position: { mode: 'kalman', q: 0.02, r: 4, streamline: 0.575 }, pressure: { mode: 'kalman', q: 0.0005, r: 0.01 }, tilt: { mode: 'kalman', q: 0.5, r: 25 }, twist: { mode: 'kalman', q: 0.5, r: 25 } } });
+    const off = s.conditioned({ ...rec, filt: { ...defaults, position: { ...defaults.position, mode: 'off' }, pressure: { ...defaults.pressure, mode: 'off' } } });
+    return {
+      same: JSON.stringify(legacy) === JSON.stringify(withDefaults) && legacy.length > 10,
+      rawDev: dev(rec.points), kalDev: dev(kal), streamDev: dev(legacy),
+      rawP: range(rec.points, 'p'), kalP: range(kal, 'p'), rawAlt: range(rec.points, 'alt'), kalAlt: range(kal, 'alt'), rawAz: range(rec.points, 'az'), kalAz: range(kal, 'az'),
+      // (the first samples are dropped as pen-down jitter, so compare the tail)
+      offRaw: off.slice(-20).every((p, i) => { const r = rec.points[rec.points.length - 20 + i]; return p.x === r.x && p.y === r.y && p.p === r.p; }),
+    };
+  }, noisy);
+  check('legacy filter parameters reproduce the pre-filter conditioning exactly', filt.same, JSON.stringify(filt));
+  check('kalman filters smooth position, pressure and tilt; "off" passes the raw samples', filt.kalDev < filt.rawDev * 0.5 && filt.kalP < filt.rawP * 0.5 && filt.kalAlt < filt.rawAlt * 0.5 && filt.kalAz < filt.rawAz * 0.5 && filt.offRaw, JSON.stringify(filt));
+
+  // Changed filter settings are stored on the stroke and replay identically.
+  await studio((s) => { s.clear(); s.setFilters({ position: { mode: 'kalman' }, pressure: { mode: 'kalman' } }); });
+  await drag([[200, 500], [400, 540], [600, 500]]);
+  await page.waitForTimeout(100);
+  const filtRec = await studio((s) => { const r = s.history()[s.history().length - 1]; return { mode: r.filt?.position?.mode, pm: r.filt?.pressure?.mode }; });
+  const filtDrawn = await checksum();
+  await studio((s) => s.rebuildAll());
+  check('a stroke keeps the filter parameters it was drawn with and rebuilds identically', filtRec.mode === 'kalman' && filtRec.pm === 'kalman' && (await checksum()).h === filtDrawn.h, JSON.stringify(filtRec));
+  await studio((s) => s.setFilters({ position: { mode: 'streamline' }, pressure: { mode: 'average' } }));
+
+  // The Pencil tab of the style panel: presets switch the filters.
+  await page.locator('button[role=tab]:has-text("pencil")').click();
+  await page.locator('[data-testid=pencil-tab] button:has-text("Smooth")').first().click();
+  const smoothPos = await studio((s) => s.filters().position);
+  check('the Pencil tab presets set the position filter', smoothPos.mode === 'kalman' && smoothPos.q === 0.005 && smoothPos.r === 12, JSON.stringify(smoothPos));
+  await page.locator('button[role=tab]:has-text("style")').click();
+
+  // The lab panel opens with a lab flag in the URL; the hover footprint follows a hovering pen.
+  await page.goto(base + '?lab=1', { waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
+  const labShown = (await page.locator('[data-testid=pencil-lab]').count()) === 1;
+  const labHeader = page.locator('[data-testid=pencil-lab] button[aria-expanded]');
+  if ((await labHeader.getAttribute('aria-expanded')) === 'false') await labHeader.click();
+  const hoverBefore = await studio((s) => s.pencil().hover);
+  await page.locator('[data-testid=pencil-lab] [aria-label="Hover footprint"]').click();
+  const hoverToggled = (await studio((s) => s.pencil().hover)) === !hoverBefore;
+  // the footprint shows for any brush while hover is on
+  await studio((s) => s.setPencil({ hover: true, nib: 'stroke' }));
+  await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    c.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'pen', pointerId: 3, bubbles: true, clientX: 500, clientY: 400, pressure: 0, tiltX: 50, tiltY: 10 }));
+  });
+  await page.waitForTimeout(80);
+  const foot = await page.evaluate(() => { const f = document.querySelector('[data-testid=hover-footprint]'); return f ? { opacity: f.style.opacity, w: parseFloat(f.style.width), h: parseFloat(f.style.height), t: f.style.transform } : null; });
+  check('?lab shows the pencil lab and the hover footprint follows a tilted pen', labShown && hoverToggled && !!foot && foot.opacity === '1' && foot.w > 0 && /rotate\(/.test(foot.t), JSON.stringify({ labShown, hoverToggled, foot }));
+  await studio((s) => s.setPencil({ hover: true, nib: 'stroke' }));
+  await page.locator('[data-testid=input-filters] [aria-label="Position filter"]').getByText('Kalman', { exact: true }).click();
+  const posMode = await studio((s) => s.filters().position.mode);
+  check('the input filters card switches the position filter', posMode === 'kalman', posMode);
+  await studio((s) => s.setFilters({ position: { mode: 'streamline' } }));
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
+
+  // WebKit delivers each coalesced pen batch twice; repeats must not enter the path.
+  await page.evaluate(() => { PointerEvent.prototype.getCoalescedEvents = function () { return this.__coalesced || []; }; });
+  const dupRec = await page.evaluate(async () => {
+    const c = document.getElementById('ink-canvas');
+    const mk = (type, x, y, p) => new PointerEvent(type, { pointerType: 'pen', pointerId: 9, isPrimary: true, bubbles: true, cancelable: true, clientX: x, clientY: y, pressure: p, buttons: 1 });
+    c.dispatchEvent(mk('pointerdown', 300, 500, 0.3));
+    let x = 300;
+    for (let batch = 0; batch < 20; batch++) {
+      const group = []; for (let i = 0; i < 4; i++) { x += 3; group.push(mk('pointermove', x, 500 + Math.sin(x / 20) * 10, 0.3 + batch * 0.01)); }
+      for (let rep = 0; rep < 2; rep++) { const ev = mk('pointermove', x, 500 + Math.sin(x / 20) * 10, 0.3 + batch * 0.01); ev.__coalesced = group; window.dispatchEvent(ev); }
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    window.dispatchEvent(mk('pointerup', x, 500, 0.3));
+    await new Promise((r) => setTimeout(r, 100));
+    const r = window.__studio.history()[window.__studio.history().length - 1];
+    let back = 0; for (let i = 1; i < r.points.length; i++) if (r.points[i].x < r.points[i - 1].x) back++;
+    return { n: r.points.length, back };
+  });
+  check('duplicate coalesced pen batches are dropped, the path never doubles back', dupRec.back === 0 && dupRec.n > 60 && dupRec.n <= 81, JSON.stringify(dupRec));
+  await studio((s) => s.undo());
+  check('diagnostics describe the last hand-drawn stroke', diag.stroke && diag.stroke.input === 'mouse' && diag.stroke.chunks >= 1, diag.summary);
+
+  check('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
+} catch (err) {
+  console.error(err);
+  failures++;
+} finally {
+  await browser.close();
+  server.close();
+}
+
+console.log(failures ? `\n${failures} check(s) failed` : '\nAll checks passed');
+process.exit(failures ? 1 : 0);
