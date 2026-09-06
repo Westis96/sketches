@@ -193,8 +193,9 @@ export const strokeWidthFor = (rec: BrushRecord) => clamp(rec.spec.weight * rec.
  *    stroke width, which removes the hook a fast pen-down leaves;
  *  - without a pressure-sensitive device, simulates pressure from velocity
  *    (slow = heavy, fast = light) so finger and mouse strokes get dynamics;
- *  - with a pen, smooths pressure with a distance-scaled follower and seeds it
- *    from the first stretch, so strokes do not start with a blob.
+ *  - with a pen, keeps the device pressure and only takes the edge off single
+ *    samples (a short moving average), so the mark tracks the pencil at once;
+ *    p5.brush's own pressure envelope already shapes the start of a stroke.
  * Records without an `input` field predate this and are returned untouched.
  */
 export function conditionPoints(rec: BrushRecord): Point[] {
@@ -215,32 +216,43 @@ export function conditionPoints(rec: BrushRecord): Point[] {
   }
   if (pts.length < 2) return pts;
 
+  const out: Point[] = new Array(pts.length);
+  if (!simulate) {
+    // Pen: the device pressure is the truth. A pen-down sample often carries no
+    // pressure yet, so the first point borrows from the next; after that a
+    // half-weight running average removes single-sample spikes without lag.
+    let prev = pts[0].p < 0.1 ? pts[1].p * 0.6 : (pts[0].p + pts[1].p) / 2;
+    for (let i = 0; i < pts.length; i++) {
+      const p = i === 0 ? prev : prev + (pts[i].p - prev) * 0.5;
+      prev = p;
+      out[i] = { x: pts[i].x, y: pts[i].y, p: Math.round(p * 1000) / 1000 };
+    }
+    return out;
+  }
+
   const dists = pts.map((p, i) => (i === 0 ? 0 : Math.hypot(p.x - pts[i - 1].x, p.y - pts[i - 1].y)));
 
-  // Pass 2: seed the follower from the first stroke widths so the start is not a blob.
-  let prev = simulate ? 0.5 : pts[0].p;
+  // Pass 2: seed the simulated follower from the first stroke widths so the start is not a blob.
+  let prev = 0.5;
   let running = 0;
   for (let i = 0; i < pts.length; i++) {
     if (running > size * 5) break;
     const sp = Math.min(1, dists[i] / size);
-    const target = simulate ? Math.min(1, 1 - sp) : pts[i].p;
-    const p = simulate
-      ? Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE))
-      : Math.min(1, prev + (target - prev) * 0.5);
+    const target = Math.min(1, 1 - sp);
+    const p = Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE));
     prev = prev + (p - prev) * 0.5;
     running += dists[i];
   }
 
-  // Pass 3: pressure per point.
-  const out: Point[] = new Array(pts.length);
+  // Pass 3: simulated pressure per point, slow = heavy, fast = light.
   for (let i = 0; i < pts.length; i++) {
     const sp = Math.min(1, dists[i] / size);
-    const target = simulate ? Math.min(1, 1 - sp) : pts[i].p;
+    const target = Math.min(1, 1 - sp);
     const p = i === 0 ? prev : Math.min(1, prev + (target - prev) * (sp * RATE_OF_PRESSURE_CHANGE));
     prev = p;
-    // Simulated pressure is tempered to tldraw's effective range so it maps to a
-    // moderate size swing through mapStylus (0.5 → ×1).
-    out[i] = { x: pts[i].x, y: pts[i].y, p: simulate ? 0.25 + 0.5 * p : p };
+    // Tempered to tldraw's effective range so it maps to a moderate size swing
+    // through mapStylus (0.5 → ×1).
+    out[i] = { x: pts[i].x, y: pts[i].y, p: 0.25 + 0.5 * p };
   }
   return out;
 }

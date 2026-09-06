@@ -218,6 +218,13 @@ export class Studio {
   private set(patch: Partial<Settings>) {
     this.emit({ settings: { ...this.state.settings, ...patch } });
     this.scheduleSave();
+    if (patch.tipSource !== undefined || patch.spec !== undefined) this.warmBrush();
+  }
+
+  /** Registers (rasterises) the current tip ahead of the first stroke that needs it. */
+  private warmBrush() {
+    if (!this.sgl || this.live) return;
+    try { this.ensureRegistered({ spec: this.settings.spec, tipSource: this.settings.tipSource } as BrushRecord, this.view.zoom); } catch { /* invalid tip: reported by setTipSource */ }
   }
   get settings() { return this.state.settings; }
   isDrawing() { return this.live !== null; }
@@ -1019,7 +1026,10 @@ export class Studio {
   private pointFromEvent(e: PointerEvent, rect: DOMRect): Point {
     let p = e.pressure;
     if (!(p > 0)) p = e.pointerType === 'pen' ? 0.02 : 0.5;
-    const w = this.toWorld(e.clientX - rect.left, e.clientY - rect.top);
+    // rect is the on-screen box; if the page is scaled (an embedding frame, iOS
+    // zoom) it differs from the CSS size the camera works in.
+    const kx = rect.width ? this.cssW / rect.width : 1, ky = rect.height ? this.cssH / rect.height : 1;
+    const w = this.toWorld((e.clientX - rect.left) * kx, (e.clientY - rect.top) * ky);
     // Quantise at capture so autosaved replays are identical to the live stroke.
     return { x: round(w.x, 100), y: round(w.y, 100), p: round(p, 1000) };
   }
@@ -1181,6 +1191,7 @@ export class Studio {
     this.updateHud(e);
     const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
     const list = coalesced.length ? coalesced : [e];
+    live.rect = this.canvas!.getBoundingClientRect();
     const pts = live.rec.points;
     // Pen and finger samples arrive at up to 240 Hz; like tldraw, only record a new
     // point once the pointer has moved a screen pixel, otherwise fold the sample into

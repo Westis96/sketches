@@ -199,7 +199,9 @@ try {
   for (let i = 1; i <= 30; i++) hook.push({ x: 200 + i * 5, y: 200, p: 0.3 });
   const cond = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts, input: 'pen' }), hook);
   check('start jitter within one stroke width is dropped', cond.length === hook.length - 3, `${cond.length} of ${hook.length}`);
-  check('pen pressure at the start is eased, not the raw spike', cond[0].p < 0.9 && cond[cond.length - 1].p < 0.45, `start ${cond[0].p.toFixed(2)} end ${cond[cond.length - 1].p.toFixed(2)}`);
+  check('pen pressure tracks the device within a few samples', cond[0].p < 0.9 && cond[6].p < 0.35 && Math.abs(cond[cond.length - 1].p - 0.3) < 0.02, `start ${cond[0].p.toFixed(2)} at6 ${cond[6].p.toFixed(2)} end ${cond[cond.length - 1].p.toFixed(2)}`);
+  const lightDown = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts, input: 'pen' }), [{ x: 0, y: 0, p: 0.02 }, { x: 30, y: 0, p: 0.6 }, { x: 60, y: 0, p: 0.6 }, { x: 90, y: 0, p: 0.6 }]);
+  check('a pen-down sample without pressure borrows from the next', lightDown[0].p >= 0.25 && lightDown[3].p > 0.5, `first ${lightDown[0].p} fourth ${lightDown[3].p}`);
   const legacy = await studio((s, pts) => s.conditioned({ tool: 'brush', spec: s.state.settings.spec, tipSource: s.state.settings.tipSource, size: 1, color: '#000', pressureMode: 'both', sensitivity: 1.25, seed: 1, points: pts }), hook);
   check('records without an input kind are left untouched', legacy.length === hook.length && legacy[0].p === 1);
 
