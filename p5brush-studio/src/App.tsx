@@ -116,8 +116,9 @@ function Shell() {
   }, [studio]);
 
   return (
-    <div className="relative h-full w-full overflow-hidden">
-      {/* Single WebGL2 canvas: paper texture + p5.brush strokes */}
+    <div className="fixed inset-0 overflow-hidden">
+      {/* Single WebGL2 canvas: paper texture + p5.brush strokes. The shell is fixed to the
+          viewport rather than sized through the document, so it always fills the frame. */}
       <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[#f4f4f2]">
         <canvas ref={canvasRef} id="ink-canvas" className="absolute inset-0 block h-full w-full cursor-none touch-none" />
         <PracticeGuide />

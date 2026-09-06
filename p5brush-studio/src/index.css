@@ -49,6 +49,10 @@
   }
   html, body, #root {
     height: 100%;
+    /* Fill the frame even when the host's height chain is off (Chrome on iPad):
+       the dynamic viewport height wins where supported. */
+    height: var(--tl-vh);
+    min-height: 100%;
     margin: 0;
     overflow: hidden;
     overscroll-behavior: none;
