@@ -98,6 +98,8 @@ Path. Levels 0–2 are built; Levels 3–6 show as "soon". Short synthesized sou
 back button works and links can be shared. Progress is local; older bests migrate. The
 plan is in `p5brush-studio/docs/curriculum-plan.md`, the UX spec in `docs/practice-ux.md`.
 
+`p5brush-studio/docs/gallery/` holds nine studies drawn by the engine itself with the lesson methods (superimposed lines, one-motion waves, corners as full stops, tapers and swells, wash before line, far to near), one per brush family; `tools/draw-gallery.mjs` regenerates them against a built studio.
+
 WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are
 rendered by the engine itself), edit the `brush.add(...)` parameters live, paste a spec from
