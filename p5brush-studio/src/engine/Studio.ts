@@ -14,12 +14,13 @@
 import * as brush from 'p5.brush/standalone';
 import type { BrushParams } from 'p5.brush/standalone';
 import { StudioGL, type Dab } from './StudioGL';
+import { DEFAULT_PENCIL, activeFx, calibratePressure, calibrationFrom, eventTilt, type PencilSettings } from './pencil';
 import { compileTip, checkTip, tipExtent } from './tipShim';
 import {
   CHUNK_MIN_RAW, DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, chunkPoints, chunkSpec, clamp, clone, conditionPoints,
   deserializeRecords, fmt, liveEnvelope, parseSpecCode, recordBounds, serializeRecords, specCode, strokeSegments, visibleRecords,
   type BrushRecord, type BrushSpec, type EraserRecord, type InputKind, type PaperName, type Point, type PressureMode,
-  type StrokeRecord, type Tool,
+  type Segment, type StrokeRecord, type Tool, mapStylus,
 } from './records';
 import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
 import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type Lesson, type LessonStep } from '@/practice/lessons';
@@ -46,6 +47,8 @@ export interface Settings {
   pencilOnly: boolean;
   /** Auto-enable pencilOnly the first time an Apple Pencil is seen (off once set by hand). */
   pencilAuto: boolean;
+  /** Pencil lab features (all off by default). */
+  pencil: PencilSettings;
 }
 
 export interface Hud {
@@ -53,6 +56,14 @@ export interface Hud {
   pressure: number;
   tiltX: number;
   tiltY: number;
+  /** Pencil telemetry (degrees): altitude 90 = upright, azimuth clockwise from +x, barrel twist. */
+  altitude: number;
+  azimuth: number;
+  twist: number;
+  /** A pen is hovering over the canvas (not drawing). */
+  hovering: boolean;
+  /** Predicted samples the browser offered on the last move. */
+  predicted: number;
   stamps: number;
 }
 
@@ -97,6 +108,8 @@ export interface StudioState {
   progress: Progress;
   /** First visit with nothing saved: show the welcome card until dismissed. */
   firstRun: boolean;
+  /** A pencil pressure calibration is collecting samples. */
+  calibrating: boolean;
 }
 
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
@@ -130,6 +143,7 @@ const DEFAULT_SETTINGS: Settings = {
   forceSensitivity: 1.25,
   pencilOnly: false,
   pencilAuto: true,
+  pencil: DEFAULT_PENCIL,
 };
 
 /** A previous committed image and the view it was rendered at, shown transformed while a rebuild runs. */
@@ -154,6 +168,27 @@ interface Live {
 
 const round = (v: number, d: number) => Math.round(v * d) / d;
 
+/**
+ * Per-stamp overrides for the engine (see the custom-tip hook in vite.config.ts):
+ * maps the distance along the plot to the segment it falls in and returns that
+ * segment's pencil-effect angle, and whether this stamp is skipped (a hash of
+ * the distance decides, so live strokes and replays skip the same stamps).
+ * Null when no segment carries an override.
+ */
+function stampHook(segs: Segment[], zoom: number): ((d: number) => { angle?: number; alpha?: number; skip?: boolean }) | null {
+  if (!segs.some((s) => s.keep !== undefined || s.alpha !== undefined || s.angle !== undefined)) return null;
+  const cum: number[] = [];
+  let acc = 0;
+  for (const s of segs) { acc += s.len * zoom; cum.push(acc); }
+  const hash = (d: number) => { const x = Math.sin(Math.round(d * 100) * 0.0129898) * 43758.5453; return x - Math.floor(x); };
+  return (d: number) => {
+    let lo = 0, hi = cum.length - 1;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (cum[mid] > d) hi = mid; else lo = mid + 1; }
+    const s = segs[lo];
+    return { angle: s.angle, alpha: s.alpha, skip: s.keep !== undefined && hash(d) >= s.keep };
+  };
+}
+
 /** Extra shaping applied to plot pressures while stamping: `env(s)` at path length `s` from `s0`. */
 interface StrokeShape { s0: number; env: (s: number) => number }
 
@@ -161,7 +196,7 @@ interface StrokeShape { s0: number; env: (s: number) => number }
 export class Studio {
   private state: StudioState = {
     settings: clone(DEFAULT_SETTINGS),
-    hud: { pointerType: null, pressure: 0, tiltX: 0, tiltY: 0, stamps: 0 },
+    hud: { pointerType: null, pressure: 0, tiltX: 0, tiltY: 0, altitude: 90, azimuth: 0, twist: 0, hovering: false, predicted: 0, stamps: 0 },
     canUndo: false,
     canRedo: false,
     strokeCount: 0,
@@ -174,6 +209,7 @@ export class Studio {
     lessonPreviews: null,
     progress: loadProgress(),
     firstRun: false,
+    calibrating: false,
   };
   private listeners = new Set<() => void>();
 
@@ -287,6 +323,7 @@ export class Studio {
         ...clone(DEFAULT_SETTINGS),
         ...s,
         spec: { ...clone(DEFAULT_SPEC), ...(s.spec ?? {}) },
+        pencil: { ...DEFAULT_PENCIL, ...(s.pencil ?? {}) },
         tool: 'brush',
       };
       try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
@@ -509,7 +546,11 @@ export class Studio {
     brush.scale(dpr);                    // work in CSS (screen) pixels
     brush.set(name, rec.color, rec.size);
     const t0 = performance.now();
-    plot.draw(origin.x * view.zoom + view.x, origin.y * view.zoom + view.y, 1);
+    const g = globalThis as unknown as { __p5brushStamp?: (d: number) => { angle?: number; alpha?: number; skip?: boolean } };
+    const hook = stampHook(segs, view.zoom);
+    if (hook) g.__p5brushStamp = hook;
+    try { plot.draw(origin.x * view.zoom + view.x, origin.y * view.zoom + view.y, 1); }
+    finally { if (hook) delete g.__p5brushStamp; }
     brush.pop();
     const t1 = performance.now();
     if (flush) brush.render();
@@ -1092,6 +1133,7 @@ export class Studio {
     const live = this.live;
     this.live = null;
     this.previewQueued = false;
+    this.clearPredicted();
     this.endLiveMask(live);
     this.sgl!.blit(this.sgl!.committedTex);
     this.queueHud({ pressure: 0 });
@@ -1313,12 +1355,19 @@ export class Studio {
   private pointFromEvent(e: PointerEvent, rect: DOMRect): Point {
     let p = e.pressure;
     if (!(p > 0)) p = e.pointerType === 'pen' ? 0.02 : 0.5;
+    if (e.pointerType === 'pen') {
+      if (this.calib) this.calib.samples.push(p);
+      p = calibratePressure(p, this.settings.pencil.calib);
+    }
     // rect is the on-screen box; if the page is scaled (an embedding frame, iOS
     // zoom) it differs from the CSS size the camera works in.
     const kx = rect.width ? this.cssW / rect.width : 1, ky = rect.height ? this.cssH / rect.height : 1;
     const w = this.toWorld((e.clientX - rect.left) * kx, (e.clientY - rect.top) * ky);
     // Quantise at capture so autosaved replays are identical to the live stroke.
-    return { x: round(w.x, 100), y: round(w.y, 100), p: round(p, 1000) };
+    const pt: Point = { x: round(w.x, 100), y: round(w.y, 100), p: round(p, 1000) };
+    const tilt = eventTilt(e);
+    if (tilt) { pt.alt = tilt.alt; pt.az = tilt.az; pt.tw = tilt.tw; }
+    return pt;
   }
 
   /** A record captures everything needed to replay the stroke deterministically. */
@@ -1328,7 +1377,7 @@ export class Studio {
     const spec = clone(s.spec);
     // 'stylus' mode disables the simulated envelope so only plot pressure remains.
     if (s.pressureMode === 'stylus') spec.pressure = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
-    return {
+    const rec: BrushRecord = {
       tool,
       spec,
       tipSource: s.tipSource,
@@ -1340,6 +1389,9 @@ export class Studio {
       points: [firstPt],
       input,
     };
+    const fx = input === 'pen' ? activeFx(s.pencil) : undefined;
+    if (fx) rec.fx = fx;
+    return rec;
   }
 
   private screenPoint(e: PointerEvent) {
@@ -1475,7 +1527,12 @@ export class Studio {
     }
     if (e.pointerType === 'touch' && this.activeTouches.has(e.pointerId)) this.activeTouches.set(e.pointerId, this.screenPoint(e));
     const live = this.live;
-    if (!live || e.pointerId !== live.id) return;
+    if (!live) {
+      // A hovering pencil (Pencil 2 on M2 iPads and later) reports tilt before it touches.
+      if (e.pointerType === 'pen' && e.target === this.canvas) this.updateHud(e, true);
+      return;
+    }
+    if (e.pointerId !== live.id) return;
     e.preventDefault();
     this.updateHud(e);
     const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [];
@@ -1501,12 +1558,87 @@ export class Studio {
         // next distance check stays where a point was last recorded.
         if (pts.length > 1) { last.x = pt.x; last.y = pt.y; }
         last.p = Math.max(last.p, pt.p);
+        if (pt.alt !== undefined) { last.alt = pt.alt; last.az = pt.az; last.tw = pt.tw; }
         continue;
       }
       pts.push(pt);
       live.lastRecorded = { ...pt };
     }
+    if (this.settings.pencil.predict && live.pointerType === 'pen') this.drawPredicted(e, live);
     this.schedulePreview();
+  }
+
+  // -- Pencil lab: predicted tail, calibration --------------------------------
+  private predictCanvas: HTMLCanvasElement | null = null;
+  private calib: { samples: number[]; until: number } | null = null;
+
+  /** 2D overlay above the ink canvas for the predicted tail; created on first use, sized to the ink canvas. */
+  private predictCtx(): CanvasRenderingContext2D | null {
+    const c = this.canvas;
+    if (!c) return null;
+    if (!this.predictCanvas) {
+      const pc = document.createElement('canvas');
+      pc.id = 'predict-canvas';
+      pc.className = 'pointer-events-none absolute inset-0 block h-full w-full';
+      c.parentElement?.appendChild(pc);
+      this.predictCanvas = pc;
+    }
+    const pc = this.predictCanvas;
+    if (pc.width !== this.glW || pc.height !== this.glH) { pc.width = this.glW; pc.height = this.glH; }
+    return pc.getContext('2d');
+  }
+
+  /**
+   * Draws the browser's predicted pen samples as a translucent tail from the last
+   * recorded point, so the mark appears to keep up with the pencil. Overwritten
+   * on the next move and cleared on lift; never part of the stroke.
+   */
+  private drawPredicted(e: PointerEvent, live: Live) {
+    const ctx = this.predictCtx();
+    if (!ctx) return;
+    ctx.clearRect(0, 0, this.glW, this.glH);
+    const rec = live.rec;
+    if (rec.tool !== 'brush') return;
+    const ev = e as PointerEvent & { getPredictedEvents?: () => PointerEvent[] };
+    const pred = typeof ev.getPredictedEvents === 'function' ? ev.getPredictedEvents() : [];
+    this.queueHud({ predicted: pred.length });
+    if (!pred.length) return;
+    const v = this.view, dpr = this.dpr;
+    const toScreen = (pt: Point) => [(pt.x * v.zoom + v.x) * dpr, (pt.y * v.zoom + v.y) * dpr] as const;
+    const last = rec.points[rec.points.length - 1];
+    const width = Math.max(2, rec.spec.weight * rec.size * this.state.tipExtent * rec.spec.pressure.min_max[1] * (rec.pressureMode === 'gaussian' ? 1 : mapStylus(last.p, rec.sensitivity))) * v.zoom * dpr;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.strokeStyle = rec.color; ctx.globalAlpha = 0.28; ctx.lineWidth = width;
+    ctx.beginPath();
+    ctx.moveTo(...toScreen(last));
+    for (const pe of pred) ctx.lineTo(...toScreen(this.pointFromEvent(pe, live.rect)));
+    ctx.stroke();
+  }
+
+  private clearPredicted() {
+    const pc = this.predictCanvas;
+    if (pc) pc.getContext('2d')?.clearRect(0, 0, pc.width, pc.height);
+  }
+
+  /** Pencil lab settings; effects apply to the next stroke, strokes keep the effects they were drawn with. */
+  setPencil = (patch: Partial<PencilSettings>) => { this.set({ pencil: { ...this.settings.pencil, ...patch } }); };
+
+  /** Collects pen pressures for a few seconds; the 5th–95th percentiles become the mapped range. */
+  startCalibration = (seconds = 8) => {
+    this.calib = { samples: [], until: performance.now() + seconds * 1000 };
+    this.emit({ calibrating: true });
+    this.toast(`Calibrating: draw for ${seconds} seconds, light strokes and hard ones`, { duration: 3500 });
+  };
+
+  private maybeFinishCalibration() {
+    const c = this.calib;
+    if (!c || performance.now() < c.until) return;
+    this.calib = null;
+    this.emit({ calibrating: false });
+    const r = calibrationFrom(c.samples);
+    if (!r) { this.toast('Calibration needs more variety: draw light and hard strokes, then try again', { duration: 4000 }); return; }
+    this.setPencil({ calib: r });
+    this.toast(`Pencil calibrated: ${r.min.toFixed(2)}–${r.max.toFixed(2)} now spans the full range`, { duration: 4000 });
   }
 
   private onPointerUp(e: PointerEvent) {
@@ -1524,7 +1656,9 @@ export class Studio {
     e.preventDefault();
     this.live = null;
     this.previewQueued = false;
-    this.queueHud({ pressure: 0 });
+    this.queueHud({ pressure: 0, predicted: 0 });
+    this.clearPredicted();
+    if (live.pointerType === 'pen') this.maybeFinishCalibration();
     if (live.rec.tool === 'brush') {
       // Stamp whatever is left as the last chunk. Nothing is re-rendered on lift:
       // the chunk boundaries are recorded, so every replay repeats exactly this.
@@ -1611,7 +1745,7 @@ export class Studio {
 
   /** One chunk of a hand-drawn stroke: seeded per chunk, per-stroke effects off, envelope folded into the plot. */
   private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number, flush: boolean): number {
-    const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec) };
+    const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec), rollFrom: rec.points[0].tw };
     return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) }, flush);
   }
 
@@ -1657,12 +1791,15 @@ export class Studio {
     });
   }
 
-  private updateHud(e: PointerEvent) {
+  private updateHud(e: PointerEvent, hovering = false) {
+    const tilt = eventTilt(e);
     this.queueHud({
       pointerType: e.pointerType || 'pointer',
       pressure: e.pressure > 0 ? e.pressure : 0,
       tiltX: e.tiltX || 0,
       tiltY: e.tiltY || 0,
+      altitude: tilt?.alt ?? 90, azimuth: tilt?.az ?? 0, twist: tilt?.tw ?? 0,
+      hovering,
     });
   }
 
@@ -1918,7 +2055,8 @@ export class Studio {
       const y = (c.y * v.zoom + v.y) * dpr, x0 = ((c.x - half) * v.zoom + v.x + 20) * dpr;
       return sgl.meanRed(Math.round(x0), Math.round(y - 3 * dpr), Math.round((2 * half * v.zoom - 40) * dpr), Math.round(6 * dpr));
     };
-    const restore = () => sgl.blit(sgl.committedTex);
+    // Measured on bare paper so the drawing underneath cannot skew the numbers.
+    const restore = () => sgl.blit(sgl.paperTex);
     restore();
     const paper = measure();
     this.stampRecord(base, this.glW, this.glH, dpr, v);
@@ -1928,7 +2066,8 @@ export class Studio {
     chunks.push(pts.length);
     const rec: BrushRecord = { ...base, chunks };
     this.renderChunked(rec);
-    const chunked = measure(); restore();
+    const chunked = measure();
+    sgl.blit(sgl.committedTex);
     return { paper, oneShot, chunked };
   }
 
@@ -1948,6 +2087,7 @@ export class Studio {
       rebuildAll: () => { this.repaintPaper(); this.flushPaint(); },
       pan: (dx: number, dy: number) => { this.setViewLive({ ...this.view, x: this.view.x + dx, y: this.view.y + dy }); this.commitView(); }, flushPaint: () => this.flushPaint(), isPainting: () => this.pending !== null, saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
       setCulling: (on: boolean) => { this.cullingEnabled = on; },
+      pencil: () => this.settings.pencil, setPencil: (p: Partial<PencilSettings>) => this.setPencil(p), startCalibration: (sec?: number) => this.startCalibration(sec),
       lastCulled: () => this.lastCulled,
       perf: () => ({ ...this.perf }),
       diagnostics: () => this.diagnostics(),

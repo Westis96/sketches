@@ -86,6 +86,21 @@ function p5brushInfiniteCanvas(): Plugin {
       if (!pcRe.test(out)) throw new Error('p5brush-infinite-canvas: pressure cache not found; check the p5.brush version');
       out = out.replace(pcRe, '$1.pressureCount>=1||void 0===$1.cachedPressure');
 
+      // Per-stamp overrides for custom tips: globalThis.__p5brushStamp(plotted) may
+      // return {angle, alpha, skip} for the stamp at that distance along the plot.
+      // The studio uses it for the Pencil effects (tilt shading thins and fades
+      // stamps, the azimuth-locked nib and barrel roll turn them). A skipped stamp returns
+      // before the engine draws random numbers for it, and the hook itself draws
+      // none, so strokes stay deterministic.
+      const onRe = /function on\((\w),(\w)=(\w+)\.alpha\)\{(.*?)let s=0;(.*?)\+(\w+)\.angle\(\)\)\*\(Math\.PI\/180\)\),function\(/;
+      const om = onRe.exec(out);
+      if (!om) throw new Error('p5brush-infinite-canvas: custom tip stamp not found; check the p5.brush version');
+      const [, pt, alpha, , pre, rot, pos] = om;
+      out = out.replace(onRe,
+        `function on(${pt},${alpha}=${om[3]}.alpha){const Y=globalThis.__p5brushStamp?globalThis.__p5brushStamp(${pos}.plotted):null;if(Y&&Y.skip)return;` +
+        `${pre}let s=0;${rot}+${pos}.angle())*(Math.PI/180));` +
+        `Y&&(Y.angle!=null&&(s=Y.angle*(Math.PI/180)),Y.alpha!=null&&(${alpha}*=Y.alpha)),function(`);
+
       return { code: out, map: null };
     },
   };

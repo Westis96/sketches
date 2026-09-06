@@ -15,6 +15,8 @@ import { PracticePanel } from '@/components/practice/PracticePanel';
 import { PracticePicker } from '@/components/practice/PracticePicker';
 import { PracticeComplete } from '@/components/practice/PracticeComplete';
 import { WelcomeCard } from '@/components/WelcomeCard';
+import { PencilLab } from '@/components/PencilLab';
+import { PENCIL_LAB } from '@/lab';
 
 declare global {
   interface Window { __studio?: ReturnType<Studio['debug']> }
@@ -147,6 +149,11 @@ function Shell() {
       <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
         <QuickActions onPractice={() => setPracticeOpen(true)} />
       </div>
+      {PENCIL_LAB && !practice && (
+        <div className="pointer-events-none fixed left-2 top-14 z-30 max-h-[calc(100%-120px)] overflow-y-auto">
+          <PencilLab />
+        </div>
+      )}
       <div className="pointer-events-none fixed right-2 top-2 z-30">
         <StylePanel open={panelOpen} />
       </div>

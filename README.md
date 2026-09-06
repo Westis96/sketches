@@ -47,6 +47,17 @@ sketch export replay the identical stamps and nothing changes when the pen lifts
 chunks of a stroke share one engine mask and are mixed with the image from before the
 stroke, so a chunk boundary leaves no mark in the ink.
 
+### Pencil lab
+
+Apple Pencil features beyond pressure live behind switches in the Pencil lab, so they
+can be tried before becoming part of the app: tilt shading (a flat pencil makes a wider,
+lighter mark), an azimuth-locked nib (the tip turns with the pencil's lean, like a broad
+nib), barrel roll (Pencil Pro), a hover footprint, the browser's predicted tail, and a
+pressure calibration. Everything is off by default. Open the lab with `?lab=1` (or `#lab`)
+in the URL, or build it in with `VITE_PENCIL_LAB=1`. Pen samples record altitude, azimuth
+and twist, and every stroke keeps the effects it was drawn with, so replays never depend
+on the current switches.
+
 Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
 pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the
 thumbnails are rendered by the engine) and trace it stroke by stroke. Each step sets the

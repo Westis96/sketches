@@ -368,6 +368,87 @@ try {
   });
   check('chunk boundaries leave no bands along a stroke', seam.chunks > 10 && seam.jump <= 8 && seam.max - seam.min <= 12 && seam.max < 240, JSON.stringify(seam));
 
+  // Pencil lab: every feature is off by default and strokes carry no effects.
+  // Mark width (rows with ink through the stroke's band, averaged over a few columns) and peak darkness (lowest red).
+  const coverage = () => page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    const gl = c.getContext('webgl2');
+    const px = new Uint8Array(c.width * c.height * 4);
+    gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let width = 0, minRed = 255;
+    for (const x of [420, 500, 580, 660]) {
+      let rows = 0;
+      for (let y = c.height - 400; y < c.height - 200; y++) { const r = px[(y * c.width + x) * 4]; if (r < 240) rows++; if (r < minRed) minRed = r; }
+      width += rows / 4;
+    }
+    return { width, minRed };
+  });
+  // Pen-like points along a screen-space wave (the view may be panned by earlier checks), with tilt fields.
+  await page.evaluate(() => { window.__penPts = (alt, az, tw = 0, y = 300) => { const pts = []; for (let i = 0; i <= 60; i++) pts.push({ ...window.__studio.toWorld(300 + i * 8, y + Math.sin(i / 6) * 12), p: 0.5, alt, az, tw }); return pts; }; });
+  const penPts = (alt, az, tw = 0) => [alt, az, tw];
+  const labDefaults = await studio((s) => { s.clear(); const p = s.pencil(); const r = s.commit([{ x: 300, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }, { x: 600, y: 500, p: 0.5, alt: 30, az: 90, tw: 0 }], { input: 'pen' }); return { off: !p.tiltShade && p.nib === 'stroke' && !p.roll && !p.hover && !p.predict && p.calib === null, fx: r.fx === undefined }; });
+  check('pencil lab features are off by default and leave strokes untouched', labDefaults.off && labDefaults.fx, JSON.stringify(labDefaults));
+
+  // Tilt shading: the same path drawn with a flat pencil is wider at the same darkness (fade 1), and lighter with a fade.
+  const tiltStroke = async (alt, tiltFade) => { await studio((s) => s.clear()); await studio((s, a, fx) => s.commit(window.__penPts(...a), { input: 'pen', fx, seed: 11, pressureMode: 'stylus' }), penPts(alt, 0), { tiltWidth: 2.5, tiltFade, nib: 'stroke', roll: false }); return coverage(); };
+  const upright = await tiltStroke(90, 1), flat = await tiltStroke(25, 1), faded = await tiltStroke(25, 0.5);
+  check('tilt shading: a flat pencil makes a wider mark at the same darkness, lighter with a fade',
+    flat.width > upright.width * 1.4 && Math.abs(flat.minRed - upright.minRed) <= 10 && faded.minRed > upright.minRed + 8, JSON.stringify({ upright, flat, faded }));
+
+  // Effects are part of the record: a rebuild reproduces the pixels, and the autosave keeps tilt + fx.
+  const flatDrawn = await checksum();
+  await studio((s) => s.rebuildAll());
+  check('a tilt-shaded stroke rebuilds to identical pixels', (await checksum()).h === flatDrawn.h);
+  await studio((s) => s.saveNow());
+  const savedFx = await page.evaluate((key) => { const d = JSON.parse(localStorage.getItem(key)); const r = d.strokes[d.strokes.length - 1]; return { tl: Array.isArray(r.tl) && r.tl.length === r.pts.length, fx: r.fx?.tiltWidth }; }, await studio((s) => s.saveKey));
+  check('autosave keeps tilt samples and the stroke effects', savedFx.tl && savedFx.fx === 2.5, JSON.stringify(savedFx));
+
+  // Azimuth nib: with the chisel, the pencil's azimuth decides the tip angle; without it, azimuth is ignored.
+  const nibOn = { tiltWidth: 1, tiltFade: 1, nib: 'azimuth', roll: false }, nibOff = { ...nibOn, nib: 'stroke' };
+  const drawAz = async (az, fx) => { await studio((s) => { s.clear(); s.applyTemplate('chisel'); }); await studio((s, a, fx) => s.commit(window.__penPts(...a), { input: 'pen', fx, seed: 5 }), penPts(60, az), fx); return (await checksum()).h; };
+  const az0 = await drawAz(0, nibOn), az90 = await drawAz(90, nibOn), off0 = await drawAz(0, nibOff), off90 = await drawAz(90, nibOff);
+  check('azimuth nib turns the chisel with the pencil, stroke nib ignores azimuth', az0 !== az90 && off0 === off90, JSON.stringify({ az0, az90, off0, off90 }));
+
+  // Barrel roll: twist changes the mark only when roll is on.
+  const rollOn = { ...nibOff, roll: true };
+  const tw0 = await drawAz(0, rollOn);
+  await studio((s) => { s.clear(); s.applyTemplate('chisel'); });
+  await studio((s, fx) => s.commit(window.__penPts(60, 0).map((p, i) => ({ ...p, tw: (i * 6) % 360 })), { input: 'pen', fx, seed: 5 }), rollOn);
+  const twSpin = (await checksum()).h;
+  check('barrel roll turns the tip with the twist', tw0 !== twSpin);
+
+  // Calibration: pressures seen while calibrating define the range mapped onto the curve.
+  await studio((s) => { s.clear(); s.applyTemplate('chisel'); s.startCalibration(0.05); });
+  await page.waitForTimeout(80);
+  await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    const ev = (type, x, y, p) => new PointerEvent(type, { pointerType: 'pen', pointerId: 9, isPrimary: true, bubbles: true, cancelable: true, clientX: x, clientY: y, pressure: p, buttons: 1 });
+    c.dispatchEvent(ev('pointerdown', 200, 650, 0.2));
+    for (let i = 1; i <= 80; i++) window.dispatchEvent(ev('pointermove', 200 + i * 5, 650 + Math.sin(i / 4) * 6, 0.2 + 0.4 * (i / 80)));
+    window.dispatchEvent(ev('pointerup', 600, 650, 0.6));
+  });
+  await page.waitForTimeout(100);
+  const calib = await studio((s) => s.pencil().calib);
+  check('pressure calibration maps the observed force range', !!calib && calib.min > 0.15 && calib.min < 0.3 && calib.max > 0.5 && calib.max < 0.65, JSON.stringify(calib));
+  await studio((s) => s.setPencil({ calib: null }));
+
+  // The lab panel opens with a lab flag in the URL; the hover footprint follows a hovering pen.
+  await page.goto(base + '?lab=1', { waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
+  const labShown = (await page.locator('[data-testid=pencil-lab]').count()) === 1;
+  await page.locator('[data-testid=pencil-lab] [aria-label="Hover footprint"]').click();
+  await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas');
+    c.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'pen', pointerId: 3, bubbles: true, clientX: 500, clientY: 400, pressure: 0, tiltX: 50, tiltY: 10 }));
+  });
+  await page.waitForTimeout(80);
+  const foot = await page.evaluate(() => { const f = document.querySelector('[data-testid=hover-footprint]'); return f ? { opacity: f.style.opacity, w: parseFloat(f.style.width), h: parseFloat(f.style.height), t: f.style.transform } : null; });
+  const hoverOn = await studio((s) => s.pencil().hover);
+  check('?lab shows the pencil lab and the hover footprint follows a tilted pen', labShown && hoverOn && !!foot && foot.opacity === '1' && foot.w > 0 && /rotate\(/.test(foot.t), JSON.stringify({ labShown, hoverOn, foot }));
+  await studio((s) => s.setPencil({ hover: false }));
+  await page.goto(base, { waitUntil: 'load' });
+  await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
+
   // WebKit delivers each coalesced pen batch twice; repeats must not enter the path.
   await page.evaluate(() => { PointerEvent.prototype.getCoalescedEvents = function () { return this.__coalesced || []; }; });
   const dupRec = await page.evaluate(async () => {

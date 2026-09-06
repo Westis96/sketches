@@ -3,6 +3,7 @@
  * renderer and the p5 sketch export.
  */
 import { checkTip } from './tipShim';
+import { lerpAngle, nibAngle, tiltFactors, type PencilFx } from './pencil';
 
 export interface GaussianPressure {
   mode: 'gaussian';
@@ -26,7 +27,29 @@ export type PressureMode = 'gaussian' | 'both' | 'stylus';
 export type Tool = 'brush' | 'eraser';
 export type PaperName = 'hotpress' | 'washi' | 'bristol';
 
-export interface Point { x: number; y: number; p: number }
+/** A path point; `alt`/`az`/`tw` (whole degrees) are present on pen samples: altitude, azimuth, barrel twist. */
+export interface Point { x: number; y: number; p: number; alt?: number; az?: number; tw?: number }
+
+/** Copies a point's extra fields (tilt) onto a new position. */
+const at = (src: Point, x: number, y: number, p: number): Point => {
+  const out: Point = { x, y, p };
+  if (src.alt !== undefined) { out.alt = src.alt; out.az = src.az; out.tw = src.tw; }
+  return out;
+};
+
+/** Linear interpolation between two points (angles along the shortest arc), at a given position. */
+const between = (a: Point, b: Point, t: number, x: number, y: number, p: number): Point => {
+  const out: Point = { x, y, p };
+  if (a.alt !== undefined && b.alt !== undefined) {
+    out.alt = Math.round(a.alt + (b.alt - a.alt) * t);
+    out.az = Math.round(lerpAngle(a.az ?? 0, b.az ?? 0, t));
+    out.tw = Math.round(lerpAngle(a.tw ?? 0, b.tw ?? 0, t));
+  } else if (a.alt !== undefined || b.alt !== undefined) {
+    const src = a.alt !== undefined ? a : b;
+    out.alt = src.alt; out.az = src.az; out.tw = src.tw;
+  }
+  return out;
+};
 
 /** Which device produced a stroke. Decides whether pressure is real or simulated. */
 export type InputKind = 'pen' | 'touch' | 'mouse';
@@ -52,6 +75,10 @@ export interface BrushRecord {
   chunks?: number[];
   /** View zoom the stroke was drawn at (informational). */
   zoom?: number;
+  /** Pencil effects the stroke was drawn with (tilt shading, nib, roll); absent = plain. */
+  fx?: PencilFx;
+  /** Barrel twist at pen-down, set on chunk records so the roll baseline is the stroke's, not the chunk's. Not saved. */
+  rollFrom?: number;
 }
 
 export interface EraserRecord {
@@ -77,15 +104,22 @@ export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
 export const SAVE_VERSION = 1;
 
 type SavedRecord =
-  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number }
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number; tl?: number[]; fx?: PencilFx }
   | { t: 'e'; size: number; pts: number[] }
   | { t: 'c' };
 
 const packPoints = (pts: Point[]) => pts.flatMap((p) => [p.x, p.y, p.p]);
-const unpackPoints = (a: number[]): Point[] => {
+/** Tilt triples (altitude, azimuth, twist) per point, or undefined when no point carries tilt. */
+const packTilt = (pts: Point[]) => (pts.some((p) => p.alt !== undefined) ? pts.flatMap((p) => [p.alt ?? 90, p.az ?? 0, p.tw ?? 0]) : undefined);
+const unpackPoints = (a: number[], tilt?: number[]): Point[] => {
   const out: Point[] = [];
   for (let i = 0; i + 2 < a.length; i += 3) out.push({ x: a[i], y: a[i + 1], p: a[i + 2] });
+  if (tilt && tilt.length === out.length * 3) out.forEach((p, i) => { p.alt = tilt[i * 3]; p.az = tilt[i * 3 + 1]; p.tw = tilt[i * 3 + 2]; });
   return out;
+};
+const isFx = (fx: unknown): fx is PencilFx => {
+  const f = fx as PencilFx;
+  return !!f && typeof f === 'object' && typeof f.tiltWidth === 'number' && typeof f.tiltFade === 'number' && (f.nib === 'stroke' || f.nib === 'azimuth') && typeof f.roll === 'boolean';
 };
 
 export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
@@ -96,6 +130,9 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
     if (r.input) saved.in = r.input;
     if (r.chunks) saved.ch = r.chunks;
     if (r.zoom !== undefined) saved.z = r.zoom;
+    const tl = packTilt(r.points);
+    if (tl) saved.tl = tl;
+    if (r.fx) saved.fx = r.fx;
     return saved;
   });
 }
@@ -107,13 +144,14 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
     if (!r || typeof r !== 'object') continue;
     if (r.t === 'c') { out.push({ tool: 'clear' }); continue; }
     if (!Array.isArray(r.pts) || r.pts.length < 3) continue;
-    const points = unpackPoints(r.pts);
+    const points = unpackPoints(r.pts, r.t === 'b' && Array.isArray(r.tl) ? r.tl : undefined);
     if (r.t === 'e') { out.push({ tool: 'eraser', size: +r.size || 24, points }); continue; }
     if (r.t === 'b' && r.spec && typeof r.tip === 'string') {
       const rec: BrushRecord = { tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points };
       if (r.in === 'pen' || r.in === 'touch' || r.in === 'mouse') rec.input = r.in;
       if (Array.isArray(r.ch) && r.ch.every((n) => Number.isInteger(n) && n > 0 && n <= points.length)) rec.chunks = r.ch;
       if (typeof r.z === 'number' && r.z > 0) rec.zoom = r.z;
+      if (isFx(r.fx)) rec.fx = r.fx;
       out.push(rec);
     }
   }
@@ -153,7 +191,7 @@ export const fmt = (n: number) => (Number.isInteger(n) ? String(n) : String(+n.t
  */
 export function resamplePath(points: Point[], segLen: number): Point[] {
   points = smoothPath(points);
-  const out: Point[] = [{ x: points[0].x, y: points[0].y, p: points[0].p }];
+  const out: Point[] = [{ ...points[0] }];
   let carry = 0;
   for (let i = 1; i < points.length; i++) {
     const a = points[i - 1], b = points[i];
@@ -163,16 +201,16 @@ export function resamplePath(points: Point[], segLen: number): Point[] {
     let d = segLen - carry;
     while (d <= len) {
       const t = d / len;
-      out.push({ x: a.x + dx * t, y: a.y + dy * t, p: a.p + (b.p - a.p) * t });
+      out.push(between(a, b, t, a.x + dx * t, a.y + dy * t, a.p + (b.p - a.p) * t));
       d += segLen;
     }
     carry = len - (d - segLen);
   }
   const last = points[points.length - 1];
   const tail = out[out.length - 1];
-  if (Math.hypot(last.x - tail.x, last.y - tail.y) > segLen * 0.35) out.push({ x: last.x, y: last.y, p: last.p });
+  if (Math.hypot(last.x - tail.x, last.y - tail.y) > segLen * 0.35) out.push({ ...last });
   // A tap still needs a plot with length: make it a tiny dash.
-  if (out.length < 2) out.push({ x: out[0].x + segLen, y: out[0].y, p: out[0].p });
+  if (out.length < 2) out.push({ ...out[0], x: out[0].x + segLen });
   return out;
 }
 
@@ -205,7 +243,7 @@ export function smoothPath(points: Point[]): Point[] {
       const b2x = ((t3 - t) * a2x + (t - t1) * a3x) / (t3 - t1), b2y = ((t3 - t) * a2y + (t - t1) * a3y) / (t3 - t1);
       const x = ((t2 - t) * b1x + (t - t1) * b2x) / (t2 - t1), y = ((t2 - t) * b1y + (t - t1) * b2y) / (t2 - t1);
       const u = k / SUB;
-      out.push({ x: k === SUB ? p2.x : x, y: k === SUB ? p2.y : y, p: p1.p + (p2.p - p1.p) * u });
+      out.push(between(p1, p2, u, k === SUB ? p2.x : x, k === SUB ? p2.y : y, p1.p + (p2.p - p1.p) * u));
     }
   }
   return out;
@@ -217,7 +255,8 @@ export const segmentLengthFor = (spacing: number) => spacing * Math.max(1, Math.
 export const mapStylus = (p: number, sensitivity: number) =>
   clamp(Math.pow(Math.max(p, 0.02) / 0.5, 0.75 * sensitivity), 0.3, 1.6);
 
-export interface Segment { a: number; len: number; p: number }
+/** `alpha`, `keep` (share of stamps drawn) and `angle` are per-stamp overrides from the pencil effects (see pencil.ts); absent = engine default. */
+export interface Segment { a: number; len: number; p: number; alpha?: number; keep?: number; angle?: number }
 export interface StrokeGeometry {
   origin: Point;
   segs: Segment[];
@@ -259,7 +298,7 @@ export function conditionPoints(rec: BrushRecord, final = false): Point[] {
   for (let i = 1; i < out.length; i++) {
     sx += (out[i].x - sx) * STREAMLINE;
     sy += (out[i].y - sy) * STREAMLINE;
-    smoothed.push({ x: Math.round(sx * 100) / 100, y: Math.round(sy * 100) / 100, p: out[i].p });
+    smoothed.push(at(out[i], Math.round(sx * 100) / 100, Math.round(sy * 100) / 100, out[i].p));
   }
   if (final) smoothed[smoothed.length - 1] = { ...out[out.length - 1] };
   return smoothed;
@@ -292,7 +331,7 @@ function conditionPressure(rec: BrushRecord): Point[] {
     for (let i = 0; i < pts.length; i++) {
       const p = i === 0 ? prev : prev + (pts[i].p - prev) * 0.5;
       prev = p;
-      out[i] = { x: pts[i].x, y: pts[i].y, p: Math.round(p * 1000) / 1000 };
+      out[i] = at(pts[i], pts[i].x, pts[i].y, Math.round(p * 1000) / 1000);
     }
     return out;
   }
@@ -319,7 +358,7 @@ function conditionPressure(rec: BrushRecord): Point[] {
     prev = p;
     // Tempered to tldraw's effective range so it maps to a moderate size swing
     // through mapStylus (0.5 → ×1).
-    out[i] = { x: pts[i].x, y: pts[i].y, p: 0.25 + 0.5 * p };
+    out[i] = at(pts[i], pts[i].x, pts[i].y, 0.25 + 0.5 * p);
   }
   return out;
 }
@@ -375,7 +414,11 @@ export function liveEnvelope(pressure: BrushSpec['pressure']): (s: number) => nu
 /** Segments (angle in degrees, p5.brush convention) for a brush record. */
 export function strokeSegments(rec: BrushRecord): StrokeGeometry {
   const pts = resamplePath(conditionPoints(rec), segmentLengthFor(rec.spec.spacing));
-  const pf = rec.pressureMode === 'gaussian' ? () => 1 : (pt: Point) => mapStylus(pt.p, rec.sensitivity);
+  const base = rec.pressureMode === 'gaussian' ? () => 1 : (pt: Point) => mapStylus(pt.p, rec.sensitivity);
+  const fx = rec.fx;
+  // Tilt shading widens the stamps of a flat pencil: folded into the plot pressure.
+  const pf = fx ? (pt: Point) => base(pt) * tiltFactors(pt.alt, fx, base(pt), rec.spec.opacity).widen : base;
+  const tw0 = fx?.roll ? rec.rollFrom ?? rec.points[0].tw ?? 0 : 0;
   const segs: Segment[] = [];
   let a = 0, stamps = 0;
   for (let i = 1; i < pts.length; i++) {
@@ -387,7 +430,16 @@ export function strokeSegments(rec: BrushRecord): StrokeGeometry {
     // drops a plot whose angles straddle the seam like that.
     a = Math.round((((Math.atan2(-dy, dx) * 180) / Math.PI + 360) % 360) * 1000) / 1000;
     if (a >= 360) a = 0;
-    segs.push({ a, len, p: pf(pts[i - 1]) });
+    const seg: Segment = { a, len, p: pf(pts[i - 1]) };
+    if (fx) {
+      const pt = pts[i - 1];
+      const { alpha, keep } = tiltFactors(pt.alt, fx, base(pt), rec.spec.opacity);
+      if (alpha < 1) seg.alpha = alpha;
+      if (keep < 1) seg.keep = keep;
+      const angle = nibAngle(pt, a, rec.spec.rotate, fx, tw0);
+      if (angle !== null) seg.angle = angle;
+    }
+    segs.push(seg);
     stamps += len / rec.spec.spacing;
   }
   return { origin: pts[0], segs, endA: a, endP: pf(pts[pts.length - 1]), stamps: Math.round(stamps) };
