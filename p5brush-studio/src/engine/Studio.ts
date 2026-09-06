@@ -181,6 +181,15 @@ export class Studio {
   private sampleQueued = false;
   private detach: (() => void) | null = null;
   private extentCache = new Map<string, number>();
+  /**
+   * The canvas as of the last stamped chunk of the stroke in progress. p5.brush
+   * composites by reading the canvas back from the default framebuffer, and on
+   * WebKit that read is only reliable for content drawn in the same frame:
+   * content left over from an earlier frame came back blank, which turned
+   * chunked strokes into solid black on iPad. Each preview frame therefore
+   * redraws this texture before stamping and snapshots it afterwards.
+   */
+  private liveTex: WebGLTexture | null = null;
   /** The user's drawing while a lesson occupies the canvas. */
   private practiceBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[]; settings: Settings; view: View } | null = null;
   private lessonPreviewsQueued = false;
@@ -1300,7 +1309,12 @@ export class Studio {
     if (!g) return false;
     const len = pathLength(g.pts);
     if (!final && len < rec.spec.spacing * 3) return false;
+    const sgl = this.sgl!;
+    this.liveTex ??= sgl.createTexture();
+    // Bring the stroke's current state into this frame's drawing buffer (see liveTex).
+    sgl.blit(live.chunk === 0 ? sgl.committedTex : this.liveTex);
     this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
+    sgl.snapshot(this.liveTex);
     (rec.chunks ??= []).push(upto);
     live.condLen = g.condLen;
     live.stampedLen += len;
