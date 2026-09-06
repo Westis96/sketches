@@ -200,3 +200,62 @@ level colours, then-vs-now pairs.
 The engine, the scoring, the assist tiers, routes, the studio's own chrome and its
 Ink & Paper theme. The display face changes to Nunito for headings, nodes and primary
 buttons so the course reads as friendly; body text stays Inter.
+
+
+---
+
+# v3: lessons that teach
+
+The v2 missions were "trace this stroke" with one hint. They measured; they did not
+teach. A learner could finish Level 1 without ever being told *why* a line is pulled
+from the shoulder or *what* a taper is for. This revision adds a teaching layer and
+ties the rest of the mission to it.
+
+## What a mission teaches, and how
+
+Every playable mission now has four parts, in order: **Lesson → Trainer → Guided →
+Perform**. The lesson is the new part (`/learn/:mission/teach`), and it comes first
+the first time; afterwards it stays one tap away from the mission bubble, the session
+controls ("Lesson") and the results panel ("Reread the lesson").
+
+A lesson is three to five slides, one idea each, following the pattern every
+drawing course people pay for uses (Drawabox, Proko, Peter Han): **concept → why it
+matters for this brush → the physical cue → right vs wrong → try it**.
+
+- **Concept slides** say the one idea in two or three sentences.
+- **Demo slides** have the engine draw the stroke on the paper with the real brush at
+  the real pace, through the same live pipeline a pen uses (`Studio.playDemo`). The
+  learner sees the mark form the way theirs will, not a static picture.
+- **Compare slides** draw the right way and then the way it goes wrong, one after
+  the other, labelled ✓ / ✗ on the paper (a confident pull vs a steered wobble; a
+  taper vs the same line at flat pressure; wash under line vs line under wash).
+- **Cue slides** carry one imperative sentence ("Press at the root. Lift through the
+  stroke. Finish in the air."). The cue is repeated under the instruction in every
+  Trainer and Guided session of that mission, so the feedback and the teaching point
+  at the same thing.
+- **Try it**: the last slide invites the learner to draw on the paper, unscored, then
+  hands over to the trainer.
+
+Slides are content (`src/practice/teach.ts`), written for 0.1, 1.1–1.4, 2.1–2.4, 3.5,
+5.5 and 6.1. Missions without slides skip the part.
+
+## Changes to the rest of the mission
+
+- **Superimposed lines** (1.1): the drill is now Drawabox's exercise, three lines
+  each drawn four times over itself, with its own hint on the repeat. Trainers can
+  declare `group` to repeat any rep.
+- **The guide shows the mark, not just the path.** At the Full tier the road around
+  the reference is a closed outline whose width follows the reference pressure, so a
+  taper narrows and a swell widens before the learner draws it.
+- **The results name the skill.** A drill's third tile is its focus dimension
+  (Confidence 78 %), computed from the per-stroke dimension scores, so the number the
+  learner takes away is the thing the lesson was about.
+
+## Screen
+
+The lesson docks like the results panel: a right column on wide screens, the lower
+half on phones; the paper is reframed to stay fully visible beside it. Top band in the
+level colour with the mission and a slide progress track; the slide title, body, cue
+chip and compare legend; Replay (R), Back (←) and Next (→ / Enter); the last slide's
+primary is "Try it · Trainer". Leaving is the X over the paper or Escape, back to the
+mission bubble.

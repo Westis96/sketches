@@ -13,6 +13,7 @@ import { HelpButton } from '@/components/HelpButton';
 import { BrushCursor } from '@/components/BrushCursor';
 import { PracticeGuide } from '@/components/practice/PracticeGuide';
 import { SessionScreen } from '@/components/practice/SessionScreen';
+import { TeachScreen } from '@/components/practice/TeachScreen';
 import { ResultsPanel } from '@/components/practice/ResultsPanel';
 import { LearnHome } from '@/components/practice/LearnHome';
 import { ProgressPage } from '@/components/practice/ProgressPage';
@@ -226,7 +227,7 @@ function Shell() {
       {sketch && <BrushCursor canvas={canvasEl} />}
 
       {/* Session: focused chrome, then the docked results */}
-      {mode === 'session' && practice?.status === 'active' && <SessionScreen />}
+      {mode === 'session' && practice?.status === 'active' && (practice.part === 'teach' ? <TeachScreen /> : <SessionScreen />)}
       {mode === 'session' && practice?.status === 'complete' && <ResultsPanel />}
 
       {/* Learn and Progress: full pages over the canvas */}

@@ -338,22 +338,56 @@ try {
   const missions = await studio((s) => s.practice.missions);
   check('the path declares 27 missions across 7 levels', missions.length === 27 && missions[0] === '0.1' && missions.at(-1) === '6.4', missions.join(','));
 
+  // The lesson: slides beside the paper, demos drawn by the engine, nothing scored.
+  await page.goto(page.url().split('#')[0] + '#/learn/1.1');
+  await page.waitForSelector('[data-testid="mission-sheet"]');
+  check('the mission bubble lists the lesson first', (await page.locator('[data-testid=part-teach]').count()) === 1 && (await page.locator('[data-testid=mission-start]').textContent()).includes('Lesson'));
+  await page.click('[data-testid=part-teach]');
+  await page.waitForSelector('[data-testid=teach-panel]');
+  let pr = await studio((s) => s.state.practice);
+  check('the lesson route opens the teach part with an empty paper', pr.part === 'teach' && pr.steps.length === 0 && (await page.evaluate(() => location.hash)) === '#/learn/1.1/teach' && (await studio((s) => s.history().length)) <= 1);
+  await page.waitForFunction(() => window.__studio.state.demo === true, null, { timeout: 5000 });
+  check('a demo stroke is drawn live by the engine', (await studio((s) => ({ demo: s.state.demo, drawing: s.state.drawing }))).demo === true && (await page.locator('[data-teach-label]').count()) >= 1);
+  await page.waitForFunction(() => !window.__studio.state.demo && window.__studio.history().length >= 2, null, { timeout: 20000 });
+  const demoRecs = await studio((s) => s.history().map((r) => ({ chunks: r.chunks?.length ?? 0, n: r.points.length, timed: r.points.every((p) => typeof p.t === 'number'), input: r.input })));
+  check('demo strokes go through the live pipeline: chunked, timestamped, no input kind', demoRecs.length === 2 && demoRecs.every((r) => r.chunks >= 2 && r.timed && r.input === undefined), JSON.stringify(demoRecs));
+  check('a compare slide labels the right way and the wrong way on the paper', (await page.locator('[data-teach-label]').count()) === 2 && (await page.locator('[data-teach-label]').first().textContent()).startsWith('✓'));
+  await studio((s) => s.commit([{ x: 100, y: 550, p: 0.5 }, { x: 300, y: 560, p: 0.5 }]));
+  pr = await studio((s) => s.state.practice);
+  check('drawing beside the lesson is kept and not scored', pr.step === 0 && pr.feedback === null && (await studio((s) => s.history().length)) === 3);
+  await page.click('[data-testid=teach-next]');
+  await page.waitForTimeout(300);
+  check('the next slide clears the paper and plays its own demo', (await page.evaluate(() => document.querySelector('[data-testid=teach-panel]').dataset.slide)) === '1' && (await studio((s) => s.history().length)) <= 1);
+  await studio((s) => s.practice.stopDemo());
+  check('a stopped demo leaves no stroke in progress', (await studio((s) => ({ demo: s.state.demo, drawing: s.state.drawing }))).demo === false && !(await studio((s) => s.state.drawing)));
+  const slideCount = await page.locator('[data-testid=teach-panel] [role=progressbar] > span').count();
+  for (let k = 1; k < slideCount; k++) { await page.click('[data-testid=teach-next]'); await page.waitForTimeout(120); }
+  await page.waitForTimeout(400);
+  pr = await studio((s) => s.state.practice);
+  const taught = await studio((s) => s.practice.progress().missions['1.1']?.taught);
+  check('finishing the slides marks the mission taught and opens the trainer', taught === true && pr?.part === 'trainer' && (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer' && (await page.locator('[data-testid=practice-cue]').count()) === 1, JSON.stringify({ taught, part: pr?.part }));
+
   // Trainer: generated reps, every stroke accepted, feedback words.
   await studio((s) => s.practice.mission('1.1', 'trainer'));
-  let pr = await studio((s) => s.state.practice);
-  check('a trainer opens with generated reps at the dots tier', pr.part === 'trainer' && pr.steps.length === 10 && pr.tier === 'dots' && pr.step === 0, JSON.stringify({ part: pr.part, n: pr.steps.length, tier: pr.tier }));
+  pr = await studio((s) => s.state.practice);
+  check('a trainer opens with generated reps at the dots tier', pr.part === 'trainer' && pr.steps.length === 12 && pr.tier === 'dots' && pr.step === 0, JSON.stringify({ part: pr.part, n: pr.steps.length, tier: pr.tier }));
+  check('superimposed reps repeat the same line four times with their own hint', pr.steps[0].points === pr.steps[3].points || JSON.stringify(pr.steps[0].points) === JSON.stringify(pr.steps[3].points), pr.steps[1].hint);
+  check('the fourth line of the drill is a new line', JSON.stringify(pr.steps[4].points) !== JSON.stringify(pr.steps[0].points));
   await page.waitForTimeout(100);
   check('the mission shows in the URL', (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer', await page.evaluate(() => location.hash));
   pr = await traceStep(0, { jitter: 14 });
   check('a drill accepts a rough stroke and says what to fix', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip !== null, JSON.stringify(pr.feedback.tip));
-  for (let i = 1; i < 10; i++) pr = await traceStep(i);
-  check('finishing the drill summarises clean reps and records it', pr.status === 'complete' && pr.summary.clean >= 8 && (await studio((s) => s.practice.progress())).missions['1.1'].trainer.plays === 1, JSON.stringify(pr.summary));
+  for (let i = 1; i < 12; i++) pr = await traceStep(i);
+  check('finishing the drill summarises clean reps and records it', pr.status === 'complete' && pr.summary.clean >= 10 && (await studio((s) => s.practice.progress())).missions['1.1'].trainer.plays === 1, JSON.stringify(pr.summary));
+  check('the drill reports how much of its focus dimension was in band', pr.summary.focus?.dim === 'confidence' && pr.summary.focus.mean > 0 && (await page.locator('[data-testid=focus-mean]').count()) === 1 && (await page.locator('[data-testid=results-lesson]').count()) === 1, JSON.stringify(pr.summary.focus));
 
   // Guided: full guide, bandwidth pill, pressure note for a mouse, auto-adjust.
   await studio((s) => s.practice.mission('1.1', 'guided'));
   pr = await studio((s) => s.state.practice);
   const nSteps = pr.steps.length;
   check('a guided run opens the piece with the full guide', pr.part === 'guided' && pr.lessonId === 'fence' && pr.tier === 'full' && (await page.locator('[data-guide=current]').count()) === 1 && (await page.locator('[data-guide=ghost]').count()) === nSteps - 1);
+  const road = await page.evaluate(() => document.querySelector('[data-guide=road]')?.getAttribute('d') || '');
+  check('the full guide draws a closed road shaped by the reference pressure', road.startsWith('M') && road.endsWith('Z') && road.split('L').length > 20, `${road.length} chars`);
   pr = await traceStep(0, { fraction: 0.5 });
   check('a half-length stroke is accepted with a "too short" instruction', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip?.dim === 'length', JSON.stringify(pr.feedback.tip));
   pr = await traceStep(1, { input: 'mouse' });

@@ -35,6 +35,19 @@ export function spline(ctrl: XY[], steps = 24, prof: Profile = bell): Point[] {
   return out;
 }
 
+/** Straight segments through `ctrl`, `per` samples per segment (corners stay corners). */
+export function poly(ctrl: XY[], per = 10, prof: Profile = flat(0.6)): Point[] {
+  const out: Point[] = [];
+  for (let i = 0; i < ctrl.length - 1; i++) {
+    const [a, b] = [ctrl[i], ctrl[i + 1]];
+    for (let k = 0; k < per; k++) { const t = k / per; out.push({ x: round2(a[0] + (b[0] - a[0]) * t), y: round2(a[1] + (b[1] - a[1]) * t), p: 0 }); }
+  }
+  const last = ctrl[ctrl.length - 1];
+  out.push({ x: last[0], y: last[1], p: 0 });
+  out.forEach((q, i) => { q.p = round2(prof(i / (out.length - 1))); });
+  return out;
+}
+
 /** Closed circle (or arc) around (cx, cy); `turns` < 1 gives an arc. */
 export function circle(cx: number, cy: number, r: number, n = 40, start = 0, turns = 1, prof: Profile = flat(0.7)): Point[] {
   const out: Point[] = [];

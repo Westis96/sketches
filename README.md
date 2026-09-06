@@ -84,7 +84,7 @@ makes a wider, lighter mark), the raw-input overlay and the full per-channel fil
 Open the lab with `?lab=1` in the URL, or build it in with `VITE_PENCIL_LAB=1`.
 
 The course is the home: a first visit lands on the Learn path (a winding path of missions in level colours, Duolingo-style), the free canvas is the Sketch mode one tap away, and returning users land where they were last. Learn (`L`, or the graduation-cap button) is the Yousician-style path: seven levels, one
-skill per mission, each mission a short generated drill, a guided piece traced with the
+skill per mission, each mission a short lesson (slides with the idea, a cue, and demos the engine draws with the real brush, right way and wrong way), a generated drill, a guided piece traced with the
 full guide, then the same piece performed with less guide for stars. Every stroke is
 scored on shape, length, direction, pressure profile, speed and confidence (one pull, no
 hesitation); the pill only speaks when a dimension is out of band, and always with an

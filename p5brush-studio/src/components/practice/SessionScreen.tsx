@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Flame, Repeat, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
+import { BookOpen, Flame, Lightbulb, Repeat, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -10,7 +10,8 @@ import { BRUSH_TEMPLATES } from '@/engine/templates';
 import type { PracticeFeedback } from '@/engine/Studio';
 import { TIERS, TIER_LABEL, levelVars, missionById, type Tier } from '@/practice/curriculum';
 import { stepHint } from '@/practice/lessons';
-import { learnPath, missionPath } from '@/practice/routes';
+import { learnPath, missionPath, sessionPath } from '@/practice/routes';
+import { hasLesson } from '@/practice/teach';
 import { cn } from '@/lib/utils';
 
 const pct = (v: number) => (Number.isNaN(v) ? 0 : Math.round(v * 100));
@@ -120,6 +121,9 @@ export function SessionScreen() {
         </div>
         <div className="mx-auto mt-2.5 max-w-[760px] rounded-[16px] bg-[var(--surface)] px-4 py-2.5 shadow-[var(--shadow-sm)] backdrop-blur-md">
           <div className="font-display text-[17px] font-extrabold leading-tight text-[var(--text-1)] sm:text-[19px]">{stepHint(pr.steps, pr.step)}</div>
+          {pr.cue && !perform && (
+            <div className="mt-1 inline-flex items-center gap-1.5 text-[12px] font-semibold text-[var(--lvl)]" data-testid="practice-cue"><Lightbulb className="h-3.5 w-3.5" />{pr.cue}</div>
+          )}
           <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-[var(--text-2)]">
             <span className="inline-flex items-center gap-1.5"><span className="h-3.5 w-3.5 rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]" style={{ background: st.color }} />{template?.name ?? st.template} · size {st.size}</span>
             <span className="font-mono text-[11px] tabular-nums text-[var(--text-3)]">{pr.title} · {pr.subtitle} · {drill ? 'rep' : 'stroke'} <span data-testid="practice-step">{pr.step + 1}</span>/{pr.steps.length}{perform ? ` · ${TIER_LABEL[pr.tier].toLowerCase()}` : ''}</span>
@@ -146,6 +150,7 @@ export function SessionScreen() {
             <TlTip label="Undo the last stroke" kbd="⌘Z"><Button variant="ghost" size="sm" disabled={pr.step === 0} onClick={studio.undo}><Undo2 />Undo</Button></TlTip>
             {!perform && <TlTip label="Skip this stroke (counts as 0)" kbd="N"><Button variant="ghost" size="sm" onClick={() => studio.skipStep()}><SkipForward />Skip</Button></TlTip>}
             {pr.loopOffer && <Button variant="secondary" size="sm" onClick={() => studio.loopStep()} data-testid="loop" className="text-[var(--lvl)]"><Repeat />Loop ×3</Button>}
+            {pr.missionId && hasLesson(pr.missionId) && !perform && <TlTip label="Back to the lesson"><Button variant="ghost" size="sm" onClick={() => navigate(sessionPath(pr.missionId!, 'teach'))} data-testid="session-lesson"><BookOpen />Lesson</Button></TlTip>}
             <TlTip label="Start over" kbd="C"><Button variant="ghost" size="icon" onClick={() => studio.restartPractice()}><RotateCcw /></Button></TlTip>
           </Card>
           <div className="sm:ml-auto"><FeedbackBar fb={pr.feedback} perform={perform} /></div>

@@ -11,6 +11,7 @@ import type { Point } from '@/engine/records';
 import { LESSONS, lessonById } from './lessons';
 import { bell, flat, frame, spline, taperOut, type Profile, type XY } from './geometry';
 import type { Dim } from './score';
+import { hasLesson } from './teach';
 
 export type SkillId = 'line' | 'confidence' | 'startstop' | 'pressure' | 'speed' | 'direction' | 'shape' | 'seeing' | 'repetition' | 'layering' | 'composition';
 export const SKILLS: Record<SkillId, { name: string; blurb: string; dim: Dim }> = {
@@ -27,7 +28,8 @@ export const SKILLS: Record<SkillId, { name: string; blurb: string; dim: Dim }> 
   composition: { name: 'Composition', blurb: 'A whole piece with a brush you chose', dim: 'shape' },
 };
 
-export type Part = 'trainer' | 'guided' | 'perform';
+/** The parts of a mission, in order: the lesson (slides + demos), the drill, the guided piece, the performance. */
+export type Part = 'teach' | 'trainer' | 'guided' | 'perform';
 export type Tier = 'full' | 'light' | 'dots' | 'blind';
 export const TIERS: Tier[] = ['full', 'light', 'dots', 'blind'];
 export const TIER_LABEL: Record<Tier, string> = { full: 'Full guide', light: 'Centreline', dots: 'Dots only', blind: 'Blind' };
@@ -105,8 +107,13 @@ export const levelOf = (mission: Mission) => LEVELS.find((l) => l.n === mission.
 export const capstoneOf = (level: Level) => [...level.missions].reverse().find((x) => x.piece && !x.planned) ?? null;
 /** A mission the user can start today: not planned, and its piece (if any) exists. */
 export const isPlayable = (x: Mission) => !x.planned && (!x.piece || !!lessonById(x.piece)) && (!!x.trainer || !!x.piece);
-/** The parts a mission has, in order. */
-export const partsOf = (x: Mission): Part[] => x.piece ? (x.trainer ? ['trainer', 'guided', 'perform'] : ['guided', 'perform']) : ['trainer'];
+/** The parts a mission has, in order; the lesson comes first when the mission has one. */
+export const partsOf = (x: Mission): Part[] => {
+  const play: Part[] = x.piece ? (x.trainer ? ['trainer', 'guided', 'perform'] : ['guided', 'perform']) : ['trainer'];
+  return hasLesson(x.id) ? ['teach', ...play] : play;
+};
+/** The parts that are played (scored), without the lesson. */
+export const playedParts = (x: Mission): Part[] => partsOf(x).filter((p) => p !== 'teach');
 
 // ---------------------------------------------------------------------------
 // Trainers: generated drills
@@ -135,6 +142,10 @@ export interface Trainer {
   speed: number;
   /** Builds one rep inside a cell (x, y, w, h) of the lesson box. */
   gen: (cell: Cell, rng: Rng, i: number) => Point[];
+  /** Superimposed reps: each generated stroke is drawn this many times over itself (Drawabox's superimposed lines). */
+  group?: number;
+  /** Hint for the repeats inside a group. */
+  againHint?: string;
 }
 export interface Cell { x: number; y: number; w: number; h: number }
 export type Rng = () => number;
@@ -213,7 +224,7 @@ const T = (t: Omit<Trainer, 'gen'> & { gen: Trainer['gen'] }): Trainer => t;
 export const TRAINERS: Record<string, Trainer> = {
   hold: T({ id: 'hold', title: 'Three strokes', hint: 'A line, a curve, then press and release. Nothing to get right yet.', reps: 3, tier: 'light', focus: 'shape', template: 'liner', color: '#1a1c23', size: 1.3, speed: 0.45,
     gen: (c, r, i) => (i === 0 ? lineIn(c, r, 0.2) : i === 1 ? curveIn(c, r) : lineIn(c, r, 0.2, bell)) }),
-  lines: T({ id: 'lines', title: 'Dot to dot', hint: 'Two dots. Ghost the line in the air twice, then one pull.', reps: 10, tier: 'dots', focus: 'confidence', template: 'liner', color: '#1a1c23', size: 1.3, speed: 0.7,
+  lines: T({ id: 'lines', title: 'Superimposed lines', hint: 'Two dots. Ghost the line in the air twice, then one pull.', reps: 12, group: 4, againHint: 'Same line again, over the first. Place the pen, then move.', tier: 'dots', focus: 'confidence', template: 'liner', color: '#1a1c23', size: 1.3, speed: 0.7,
     gen: (c, r) => lineIn(c, r, 0.9) }),
   curves: T({ id: 'curves', title: 'Arcs', hint: 'One smooth arc from dot to dot. Let the elbow do it.', reps: 8, tier: 'light', focus: 'shape', template: 'liner', color: '#1a1c23', size: 1.3, speed: 0.5,
     gen: (c, r) => curveIn(c, r) }),
@@ -243,11 +254,19 @@ export const TRAINERS: Record<string, Trainer> = {
     gen: (c, r) => waveIn(c, r) }),
 };
 
-/** Builds the reps of a trainer for a run seed. */
+/** Builds the reps of a trainer for a run seed. A grouped trainer lays out reps / group strokes and repeats each. */
 export function trainerReps(t: Trainer, seed: number): TrainerRep[] {
   const r = rng(seed);
-  const cells = cellsFor(t.reps);
-  return cells.map((c, i) => ({ points: t.gen(c, r, i), template: t.template, color: t.color, size: t.size, speed: t.speed, hint: i === 0 ? t.hint : undefined }));
+  const group = Math.max(1, t.group ?? 1);
+  const cells = cellsFor(Math.ceil(t.reps / group));
+  const out: TrainerRep[] = [];
+  cells.forEach((c, i) => {
+    const points = t.gen(c, r, i);
+    for (let k = 0; k < group && out.length < t.reps; k++) {
+      out.push({ points, template: t.template, color: t.color, size: t.size, speed: t.speed, hint: i === 0 && k === 0 ? t.hint : k === 1 && i === 0 ? t.againHint : k === 0 ? t.hint : undefined });
+    }
+  });
+  return out;
 }
 
 /** The warm-up: the Han / Drawabox set, three to five minutes. */

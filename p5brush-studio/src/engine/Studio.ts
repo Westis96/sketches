@@ -27,7 +27,8 @@ import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates'
 import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type LessonStep } from '@/practice/lessons';
 import { pathLength } from '@/practice/geometry';
 import { DEFAULT_SPEED, DIMS, PASS_SCORE, PERFORM_PASS_SCORE, STEP_DOWN_SCORE, praiseFor, scoreStroke, scoreTrace, starsFor, type Band, type Dim, type ScoreMode, type Tip } from '@/practice/score';
-import { addSeconds, loadProgress, recordGuided, recordPerform, recordTrainer, recordWarmup, saveProgress, type Progress } from '@/practice/progress';
+import { addSeconds, loadProgress, recordGuided, recordPerform, recordTaught, recordTrainer, recordWarmup, saveProgress, type Progress } from '@/practice/progress';
+import { teachCue, type DemoStroke } from '@/practice/teach';
 import { MISSIONS, TIER_LABEL, TIERS, TRAINERS, isPlayable, missionById, missionForPiece, partsOf, trainerReps, warmupReps, type Part, type Tier } from '@/practice/curriculum';
 
 export const paperPresets: Record<PaperName, { bg: [number, number, number]; grain: number; label: string }> = {
@@ -108,6 +109,8 @@ export interface PracticeSummary {
   costly: CostlyStep[];
   worstDim: Dim | null;
   worstText: string | null;
+  /** The drill's focus dimension and how much of it was in band, as a percentage. */
+  focus?: { dim: Dim; mean: number };
   /** Then vs now: the first Perform of this mission, once one exists. */
   firstScore?: number;
   firstThumb?: string | null;
@@ -122,6 +125,8 @@ export interface PracticeState {
   part: PracticePart;
   title: string;
   subtitle: string;
+  /** The lesson's cue, repeated inside the session. */
+  cue: string | null;
   /** Reference strokes: the piece's steps, or the drill's reps. */
   steps: LessonStep[];
   /** Index of the step being traced; equals the step count once complete. */
@@ -175,6 +180,8 @@ export interface StudioState {
   firstRun: boolean;
   /** A stroke is being drawn (pointer down on the canvas). */
   drawing: boolean;
+  /** A lesson demo stroke is being drawn by the engine. */
+  demo: boolean;
   /** A pencil pressure calibration is collecting samples. */
   calibrating: boolean;
   /** When the calibration window closes (performance.now() ms) and how long it was, for the progress bar. */
@@ -263,6 +270,18 @@ const round = (v: number, d: number) => Math.round(v * d) / d;
  */
 const LESSON_MIN_OPACITY = 14;
 const lessonSpec = (t: BrushTemplate): BrushSpec => ({ ...clone(t.spec), opacity: Math.max(t.spec.opacity, LESSON_MIN_OPACITY) });
+/** Room the session chrome (or a docked panel) takes around the lesson box, CSS px. */
+interface Dock { top?: number; right?: number; bottom?: number }
+/** Pointer id of the engine's own demo strokes (never a real pointer). */
+const DEMO_POINTER = -7;
+/** A constant-pace timeline for reference points that carry none. */
+function demoTimeline(pts: Point[], speed: number): Point[] {
+  let t = 0;
+  return pts.map((p, i) => {
+    if (i > 0) { const q = pts[i - 1]; t += Math.hypot(p.x - q.x, p.y - q.y) / speed; }
+    return { ...p, t: Math.round(t) };
+  });
+}
 /** Moves an assist tier `dir` steps (+1 = less help), clamped to [0, max]. */
 const stepTier = (tier: Tier, dir: number, max = TIERS.length - 1): Tier => TIERS[clamp(TIERS.indexOf(tier) + dir, 0, max)];
 const WORST_TEXT: Record<Dim, string> = {
@@ -316,6 +335,7 @@ export class Studio {
     progress: loadProgress(),
     firstRun: false,
     drawing: false,
+    demo: false,
     calibrating: false,
     calibration: null,
   };
@@ -836,6 +856,11 @@ export class Studio {
     const parts = partsOf(x);
     if (!parts.includes(part)) part = parts[0];
     const seed = (Date.now() % 1_000_000) | 0;
+    if (part === 'teach') {
+      // The lesson: slides beside the paper, demos drawn on it, nothing scored.
+      this.enterSession({ missionId: id, lessonId: x.piece ?? null, part, title: `${x.id} ${x.title}`, subtitle: 'Lesson', steps: [], tier: 'full', tierLocked: false }, { seed, mode: 'guided' }, this.teachDock());
+      return;
+    }
     let steps: LessonStep[], tier: Tier, mode: ScoreMode, focus: Dim | undefined, subtitle: string;
     if (part === 'trainer') {
       const t = TRAINERS[x.trainer!];
@@ -867,7 +892,8 @@ export class Studio {
     return stepTier(g.tier, 1, 2);
   }
 
-  private enterSession(init: Pick<PracticeState, 'missionId' | 'lessonId' | 'part' | 'title' | 'subtitle' | 'steps' | 'tier' | 'tierLocked'>, sess: { seed: number; mode: ScoreMode; focus?: Dim }) {
+  private enterSession(init: Pick<PracticeState, 'missionId' | 'lessonId' | 'part' | 'title' | 'subtitle' | 'steps' | 'tier' | 'tierLocked'>, sess: { seed: number; mode: ScoreMode; focus?: Dim }, dock: Dock = {}) {
+    this.stopDemo();
     if (this.live) this.cancelStroke(true);
     this.dismissWelcome();
     if (this.state.practice) this.bankSessionTime();
@@ -878,12 +904,17 @@ export class Studio {
     this.redoStack = [];
     this.session = { startedAt: performance.now(), dims: [], ...sess };
     this.emit({ practice: {
-      ...init, step: 0, results: [], tips: [], status: 'active', guide: this.state.practice?.guide ?? true,
+      ...init, cue: init.missionId ? teachCue(init.missionId) : null, step: 0, results: [], tips: [], status: 'active', guide: this.state.practice?.guide ?? true,
       feedback: null, streak: 0, misses: 0, loopOffer: false, loop: 0, note: null, reveal: null, pressureScored: true, summary: null,
     } });
-    this.frameLesson();
+    this.frameLesson(dock);
     this.syncHistory();
     this.practiceApplyBrush(0);
+  }
+
+  /** Where the lesson panel sits: a right column on wide screens, the lower half on phones. */
+  private teachDock(): Dock {
+    return this.cssW >= 768 ? { right: 400, top: 72 } : { bottom: Math.round(this.cssH * 0.5), top: 64 };
   }
 
   /** Adds the open session's time to the progress record. */
@@ -896,12 +927,12 @@ export class Studio {
   }
 
   /** Fits the lesson box in the viewport, leaving room for the session chrome; `dock` reserves room for the results panel. */
-  private frameLesson(dock: { right?: number; bottom?: number } = {}) {
+  private frameLesson(dock: Dock = {}) {
     const { w, h } = LESSON_BOX;
     // The session chrome: a top bar with the progress and the instruction, controls
     // and the feedback bar along the bottom. A phone held sideways gets less of both.
     const short = this.cssH <= 500;
-    const top = short ? 96 : this.cssW >= 640 ? 140 : 164, bottom = Math.max(short ? 76 : 104, dock.bottom ?? 0);
+    const top = dock.top ?? (short ? 96 : this.cssW >= 640 ? 140 : 164), bottom = Math.max(short ? 76 : 104, dock.bottom ?? 0);
     const left = 24, right = 24 + (dock.right ?? 0);
     const zoom = clamp(Math.min((this.cssW - left - right) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
     this.setViewLive({ zoom, x: left + (this.cssW - left - right) / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
@@ -912,6 +943,7 @@ export class Studio {
   /** Leaves the session. `keep` keeps the traced drawing as the document instead of restoring the previous one. */
   exitPractice(keep = false) {
     if (!this.state.practice) return;
+    this.stopDemo();
     if (this.live) this.cancelStroke(true);
     this.bankSessionTime();
     this.session = null;
@@ -977,10 +1009,91 @@ export class Studio {
     this.rebuild();
   }
 
+  // -- Lessons: demo strokes drawn by the engine --------------------------------
+  private demo: { live: Live; raf: number; resolve: (done: boolean) => void } | null = null;
+
+  /**
+   * Draws a demo stroke on the paper with the real brush at its own pace, through
+   * the same live pipeline as a pen: points arrive as their timestamps come due and
+   * are stamped chunk by chunk, so the learner sees the mark form the way theirs
+   * will. Resolves true when the stroke is down, false when it was stopped.
+   */
+  playDemo(d: DemoStroke): Promise<boolean> {
+    if (!this.sgl || !this.canvas || d.points.length < 2) return Promise.resolve(false);
+    this.stopDemo();
+    if (this.live) this.cancelStroke(true);
+    this.flushPaint();
+    const t = BRUSH_TEMPLATES.find((x) => x.id === d.template) ?? BRUSH_TEMPLATES[0];
+    this.set({ spec: lessonSpec(t), tipSource: t.tipSource, size: d.size, color: d.color, tool: 'brush', ...this.brushInput(t) });
+    this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
+    const src = d.points[0].t !== undefined ? d.points : demoTimeline(d.points, d.speed ?? DEFAULT_SPEED);
+    // No input kind: the pressures are the reference's and are not re-simulated or filtered.
+    const rec = { ...(this.newRecord('brush', { ...src[0], t: 0 }) as BrushRecord), input: undefined, zoom: this.view.zoom, seed: 5000 + ((src.length * 31 + Math.round(src[0].x)) % 997) };
+    const live: Live = { id: DEMO_POINTER, pointerType: 'demo', rect: this.canvas.getBoundingClientRect(), rec, erasedUpTo: 0, lastRecorded: { ...rec.points[0] }, recent: [], t0: 0, cond: freshCondState(), condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.live = live;
+    this.frameLog.length = 0; this.lastPreviewAt = 0;
+    this.emit({ drawing: true, demo: true });
+    const start = performance.now() + (d.delay ?? 0);
+    let next = 1;
+    return new Promise<boolean>((resolve) => {
+      const tick = () => {
+        if (this.live !== live) { this.demo = null; this.emit({ demo: false }); resolve(false); return; } // a finger turned it into a gesture
+        const el = performance.now() - start;
+        while (next < src.length && (src[next].t ?? 0) <= el) { rec.points.push({ ...src[next] }); next++; }
+        if (next < src.length) { if (el >= 0) this.schedulePreview(); this.demo!.raf = requestAnimationFrame(tick); return; }
+        // Lift: the same finish as a pen leaving the paper.
+        this.live = null;
+        this.previewQueued = false;
+        this.stampNextChunk(live, rec.points.length, true);
+        this.endLiveMask(live);
+        this.pushRecord(rec);
+        this.demo = null;
+        this.emit({ drawing: false, demo: false });
+        resolve(true);
+      };
+      this.demo = { live, raf: requestAnimationFrame(tick), resolve };
+    });
+  }
+
+  /** Stops the demo stroke in progress, if any; its promise resolves false. */
+  stopDemo() {
+    const dm = this.demo;
+    if (!dm) return;
+    cancelAnimationFrame(dm.raf);
+    this.demo = null;
+    if (this.live === dm.live) this.cancelStroke(true);
+    this.emit({ demo: false });
+    dm.resolve(false);
+  }
+
+  /** Wipes the demos (and any try-out strokes) off the lesson paper. */
+  clearDemo() {
+    this.stopDemo();
+    if (this.live) this.cancelStroke(true);
+    if (!this.strokes.length || !this.sgl) return;
+    this.flushPaint();
+    this.strokes = [];
+    this.redoStack = [];
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.paint(this.sgl.paperTex, []);
+    this.syncHistory();
+  }
+
+  /** The lesson slides were read to the end. */
+  markTaught(missionId: string) {
+    if (this.state.progress.missions[missionId]?.taught) return;
+    const progress = recordTaught(this.state.progress, missionId);
+    saveProgress(progress);
+    this.emit({ progress });
+  }
+
   /** Scores the stroke just committed against the current step and advances, rejects or loops. */
   private practiceEvaluate(rec: StrokeRecord) {
     const pr = this.state.practice, sess = this.session;
     if (!pr || !sess || pr.status !== 'active') return;
+    if (pr.part === 'teach') return; // trying it out beside the lesson: nothing is scored
     if (rec.tool !== 'brush') { this.dropLastStroke(); this.syncHistory(); this.toast('Lessons are traced with the brush'); return; }
     const st = pr.steps[pr.step];
     const tol = Math.max(10, stepWidth(st) * 0.6 + 4);
@@ -1029,7 +1142,7 @@ export class Studio {
   /** Leaves the current step open and moves on (not in Perform: there the third try counts). */
   skipStep() {
     const pr = this.state.practice;
-    if (pr?.status === 'active' && pr.part !== 'perform') this.advancePractice(null, null, {});
+    if (pr?.status === 'active' && pr.part !== 'perform' && pr.steps.length) this.advancePractice(null, null, {});
   }
 
   private advancePractice(score: number | null, feedback: PracticeFeedback | null, extra: { reveal?: PracticeState['reveal']; note?: string | null; pressureScored?: boolean }) {
@@ -1073,6 +1186,11 @@ export class Studio {
       if (m < worstMean) { worstMean = m; worstDim = d; }
     }
     const summary: PracticeSummary = { score: mean, stars: 0, newBest: false, clean, costly, worstDim: worstMean < 0.8 ? worstDim : null, worstText: worstMean < 0.8 && worstDim ? WORST_TEXT[worstDim] : null };
+    // The drill's focus: how much of the taught dimension was in band.
+    if (sess.focus) {
+      const vals = sess.dims.map((x) => x?.[sess.focus!]).filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
+      if (vals.length) summary.focus = { dim: sess.focus, mean: Math.round((100 * vals.reduce((a, v) => a + v, 0)) / vals.length) };
+    }
     let progress = this.state.progress;
     if (pr.part === 'trainer' && pr.missionId) progress = recordTrainer(progress, pr.missionId, mean, clean, n);
     else if (pr.part === 'warmup') progress = recordWarmup(progress);
@@ -1331,7 +1449,7 @@ export class Studio {
 
   undo = () => {
     if (this.live) this.cancelStroke();
-    if (this.state.practice) { this.practiceBack(); return; }
+    if (this.state.practice && this.state.practice.part !== 'teach') { this.practiceBack(); return; }
     if (!this.strokes.length) {
       if (this.clearedBackup) { this.restoreCleared(); return; }
       this.toast('Nothing to undo');
@@ -2480,6 +2598,7 @@ export class Studio {
         mission: (id: string, part: Part, tier?: Tier) => this.startMission(id, part, { tier }), warmup: () => this.startWarmup(),
         skip: () => this.skipStep(), restart: () => this.restartPractice(), guide: (on: boolean) => this.setPracticeGuide(on),
         tier: (t: Tier) => this.setPracticeTier(t), loop: () => this.loopStep(),
+        demo: (d: DemoStroke) => this.playDemo(d), stopDemo: () => this.stopDemo(), clearDemo: () => this.clearDemo(), taught: (id: string) => this.markTaught(id),
         previews: () => this.ensureLessonPreviews(),
         lessons: LESSONS.map((l) => l.id),
         missions: MISSIONS.map((x) => x.id),

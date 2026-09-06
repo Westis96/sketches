@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router';
-import { Check, ChevronRight, Dumbbell, Route as RouteIcon, Trophy } from 'lucide-react';
+import { BookOpen, Check, ChevronRight, Dumbbell, Route as RouteIcon, Trophy } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
@@ -12,6 +12,7 @@ import { sessionPath } from '@/practice/routes';
 import { cn } from '@/lib/utils';
 
 const PART_LABEL: Record<Part, { name: string; blurb: string; icon: typeof Dumbbell }> = {
+  teach: { name: 'Lesson', blurb: '2 min · the idea, shown in ink', icon: BookOpen },
   trainer: { name: 'Trainer', blurb: '60–90 s · every stroke scored', icon: Dumbbell },
   guided: { name: 'Guided piece', blurb: 'Full guide · practice, no stars', icon: RouteIcon },
   perform: { name: 'Perform', blurb: 'Less guide · this one counts', icon: Trophy },
@@ -32,7 +33,7 @@ export function MissionCard({ mission: x }: { mission: Mission }) {
   const [tier, setTier] = useState<Tier>(() => defaultTier(mp?.guided?.tier));
   const parts = partsOf(x);
   const brush = BRUSH_TEMPLATES.find((t) => t.id === x.brush);
-  const done: Record<Part, boolean> = { trainer: !!mp?.trainer, guided: !!mp?.guided, perform: !!mp?.perform };
+  const done: Record<Part, boolean> = { teach: !!mp?.taught, trainer: !!mp?.trainer, guided: !!mp?.guided, perform: !!mp?.perform };
   const nextPart = parts.find((p) => !done[p]) ?? parts[parts.length - 1];
   const start = (part: Part) => navigate(sessionPath(x.id, part, part === 'perform' ? tier : undefined));
 
@@ -55,7 +56,7 @@ export function MissionCard({ mission: x }: { mission: Mission }) {
         {parts.map((part) => {
           const meta = PART_LABEL[part];
           const Icon = meta.icon;
-          const best = part === 'trainer' ? mp?.trainer : part === 'guided' ? mp?.guided : mp?.perform;
+          const best = part === 'trainer' ? mp?.trainer : part === 'guided' ? mp?.guided : part === 'perform' ? mp?.perform : undefined;
           const isNext = part === nextPart;
           return (
             <button
@@ -95,7 +96,7 @@ export function MissionCard({ mission: x }: { mission: Mission }) {
       )}
 
       <Button variant="duo" className="w-full" onClick={() => start(nextPart)} data-testid="mission-start">
-        {done[nextPart] ? 'Play again' : 'Start'} · {PART_LABEL[nextPart].name}
+        {done[nextPart] ? (nextPart === 'teach' ? 'Read again' : 'Play again') : 'Start'} · {PART_LABEL[nextPart].name}
       </Button>
     </div>
   );

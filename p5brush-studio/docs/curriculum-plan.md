@@ -329,6 +329,15 @@ session length (target 5–10 min), share of users reaching Level 2 and Level 4,
 completion rate, free-drawing minutes per day, and the 3★ rate per mission (20–40% is
 the healthy band; higher means the mission is too easy).
 
+### Update: the teaching layer (shipped)
+
+Phase 1 shipped the structure but the missions only measured. The teaching layer adds
+a **Lesson** part before every trainer: slides with the concept, the reason it matters
+for this brush, a physical cue, and engine-drawn demos of the right and wrong way. The
+cue is repeated inside the session; drills report the focus dimension; the guide's
+road follows the reference pressure; 1.1 became superimposed lines. See
+`practice-ux.md`, "v3: lessons that teach".
+
 ## 12. Risks and how the plan handles them
 
 - **Tracing isn't drawing.** Level 4 is not tracing at all, Perform fades the guide,

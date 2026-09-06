@@ -1,11 +1,13 @@
 import { useNavigate } from 'react-router';
-import { ArrowRight, Eye, EyeOff, RotateCcw } from 'lucide-react';
+import { ArrowRight, BookOpen, Eye, EyeOff, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Stars } from './Stars';
 import { resultTone } from './tone';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { levelVars, missionById, nextMission, partsOf } from '@/practice/curriculum';
 import { missionDone } from '@/practice/progress';
+import { DIM_NAME } from '@/practice/score';
+import { hasLesson } from '@/practice/teach';
 import { learnPath, missionPath, sessionPath, sketchPath } from '@/practice/routes';
 import { cn } from '@/lib/utils';
 
@@ -80,7 +82,9 @@ export function ResultsPanel() {
           {drill
             ? <Tile label="Clean" value={`${s.clean}/${pr.steps.length}`} delay={80} />
             : <Tile label={perform ? 'Stars' : 'Clean'} value={perform ? `${s.stars}/3` : `${s.clean}/${pr.steps.length}`} delay={80} />}
-          <Tile label={perform && s.newBest ? 'New best' : perform && s.firstScore !== undefined ? 'First try' : 'Strokes'} value={perform && s.newBest ? '★' : perform && s.firstScore !== undefined ? s.firstScore : pr.steps.length} delay={160} />
+          {drill && s.focus
+            ? <Tile label={DIM_NAME[s.focus.dim]} value={<span data-testid="focus-mean">{s.focus.mean}%</span>} delay={160} />
+            : <Tile label={perform && s.newBest ? 'New best' : perform && s.firstScore !== undefined ? 'First try' : 'Strokes'} value={perform && s.newBest ? '★' : perform && s.firstScore !== undefined ? s.firstScore : pr.steps.length} delay={160} />}
         </div>
 
         <div className="mt-3 flex h-2 gap-[2px]" aria-label="Score per stroke">
@@ -124,6 +128,7 @@ export function ResultsPanel() {
               {pr.guide ? <EyeOff /> : <Eye />}{pr.guide ? 'Hide reference' : 'Compare with the reference'}
             </Button>
           )}
+          {mission && hasLesson(mission.id) && <Button variant="ghost" size="sm" onClick={() => navigate(sessionPath(mission.id, 'teach'))} data-testid="results-lesson"><BookOpen />Reread the lesson</Button>}
           <Button variant="ghost" size="sm" onClick={() => { studio.exitPractice(true); navigate(sketchPath()); }} title="Replaces the drawing you had open with this one">Keep this drawing</Button>
           <Button variant="ghost" size="sm" onClick={studio.exportPNG}>Export PNG</Button>
         </div>

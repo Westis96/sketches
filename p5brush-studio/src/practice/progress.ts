@@ -5,7 +5,7 @@
  * traced with the full guide) migrates onto the matching mission's Perform at the
  * Full tier, so nobody loses their stars.
  */
-import { missionById, missionForPiece, partsOf, type Tier } from './curriculum';
+import { missionById, missionForPiece, playedParts, type Tier } from './curriculum';
 
 export interface PartBest { best: number; plays: number }
 export interface PerformBest extends PartBest {
@@ -17,6 +17,8 @@ export interface PerformBest extends PartBest {
 /** The first Perform of a mission, kept for "then vs now". Strokes are the saved-record form. */
 export interface FirstAttempt { at: number; score: number; stars: number; strokes: unknown[] }
 export interface MissionProgress {
+  /** The lesson slides were read to the end. */
+  taught?: boolean;
   trainer?: PartBest & { clean: number; reps: number };
   guided?: PartBest & { tier: Tier };
   perform?: PerformBest;
@@ -74,7 +76,12 @@ export const missionDone = (p: Progress, id: string) => {
   return !!m && (!!m.perform || (!!m.trainer && !m.guided && !m.perform && isTrainerOnly(id)));
 };
 // A mission with no piece is done once its trainer has been played.
-const isTrainerOnly = (id: string) => { const x = missionById(id); return !!x && partsOf(x).length === 1; };
+const isTrainerOnly = (id: string) => { const x = missionById(id); return !!x && playedParts(x).length === 1; };
+
+export function recordTaught(p: Progress, id: string): Progress {
+  const m = { ...(p.missions[id] ?? {}), taught: true };
+  return { ...p, missions: { ...p.missions, [id]: m }, lastMission: id };
+}
 
 export function recordTrainer(p: Progress, id: string, score: number, clean: number, reps: number): Progress {
   const m = { ...(p.missions[id] ?? {}) };

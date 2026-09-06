@@ -20,6 +20,7 @@ import { pathLength, resampleN } from './geometry';
 
 export type Dim = 'shape' | 'length' | 'direction' | 'pressure' | 'speed' | 'confidence';
 export const DIMS: Dim[] = ['shape', 'length', 'direction', 'pressure', 'speed', 'confidence'];
+export const DIM_NAME: Record<Dim, string> = { shape: 'Shape', length: 'Length', direction: 'Direction', pressure: 'Pressure', speed: 'Speed', confidence: 'Confidence' };
 export type Band = 'ok' | 'low' | 'high' | 'na';
 /** What the stroke is being scored for: the weights and the band width follow. */
 export type ScoreMode = 'warmup' | 'trainer' | 'guided' | 'perform' | 'seeing';

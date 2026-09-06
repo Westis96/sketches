@@ -6,6 +6,28 @@ import { DEFAULT_SPEED } from '@/practice/score';
 import type { Point } from '@/engine/records';
 
 const d = (pts: Point[]) => 'M' + pts.map((p) => `${p.x} ${p.y}`).join('L');
+
+/**
+ * The road: a closed outline around the reference whose width follows its
+ * pressure, so the guide shows the mark the brush is expected to make (a taper
+ * narrows, a swell widens) and not just where it goes. `base` is the brush's
+ * visible width; `pad` is the constant margin in world units.
+ */
+export function roadPath(pts: Point[], base: number, pad: number): string {
+  const n = pts.length;
+  if (n < 2) return '';
+  const L: string[] = [], R: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = pts[i], a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    dx /= len; dy /= len;
+    const w = (base * (0.3 + 1.1 * p.p)) / 2 + pad;
+    L.push(`${(p.x - dy * w).toFixed(1)} ${(p.y + dx * w).toFixed(1)}`);
+    R.push(`${(p.x + dy * w).toFixed(1)} ${(p.y - dx * w).toFixed(1)}`);
+  }
+  return 'M' + L.join('L') + 'L' + R.reverse().join('L') + 'Z';
+}
 const REVEAL_MS = 1200;
 
 /**
@@ -79,7 +101,7 @@ export function PracticeGuide() {
           <g data-guide="current">
             {tier === 'full' && (
               <g className="guide-layer" style={{ opacity: dim ? 0 : 1 }}>
-                <path d={d(cur.points)} stroke={cur.color} strokeWidth={stepWidth(cur) + 10 / z} opacity={0.08} />
+                <path data-guide="road" d={roadPath(cur.points, stepWidth(cur), 5 / z)} fill={cur.color} opacity={0.1} strokeLinejoin="round" />
               </g>
             )}
             {tier !== 'dots' && (

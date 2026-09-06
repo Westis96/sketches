@@ -6,7 +6,7 @@
  *   /sketch                    free drawing (the studio)
  *   /learn                     the Path
  *   /learn/:mission            the Path with a mission sheet on top
- *   /learn/:mission/:part      a session (trainer | guided | perform); ?tier=light for Perform
+ *   /learn/:mission/:part      a session (teach | trainer | guided | perform); ?tier=light for Perform
  *   /warmup                    the warm-up session
  *   /progress                  stars, bests, minutes
  */
@@ -22,7 +22,7 @@ export type Route =
   | { kind: 'warmup' }
   | { kind: 'progress' };
 
-const PARTS: Part[] = ['trainer', 'guided', 'perform'];
+const PARTS: Part[] = ['teach', 'trainer', 'guided', 'perform'];
 
 export function parseRoute(pathname: string, search = ''): Route {
   const seg = pathname.split('/').filter(Boolean);
