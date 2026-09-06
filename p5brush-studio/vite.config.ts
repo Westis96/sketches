@@ -42,6 +42,21 @@ function p5brushInfiniteCanvas(): Plugin {
         `(d?(()=>{const x0=Math.max(0,Math.floor(d.minX-4)),x1=Math.min(W,Math.ceil(d.maxX+4)),y0=Math.max(0,Math.floor(d.minY-4)),y1=Math.min(H,Math.ceil(d.maxY+4));` +
         `if(x1>x0&&y1>y0){${gl}.enable(${gl}.SCISSOR_TEST);${gl}.scissor(x0,y0,x1-x0,y1-y0);${gl}.clear(${gl}.COLOR_BUFFER_BIT);${gl}.disable(${gl}.SCISSOR_TEST)}})():${gl}.clear(${gl}.COLOR_BUFFER_BIT)),`;
       out = out.replace(clearRe, scissored);
+
+      // Composite source: before compositing a stroke the engine copies the canvas
+      // region under it from the default framebuffer with blitFramebuffer. On
+      // WebKit that copy came back blank for the small per-chunk regions, so the
+      // pigment was mixed against nothing and strokes rendered solid black. The
+      // studio keeps an exact mirror texture of the canvas and supplies the source
+      // itself through globalThis.__p5brushBlitSource(gl, x0, y0, x1, y1) (GL
+      // coordinates, draw framebuffer already bound to the engine's source FBO);
+      // the engine's own blit remains the fallback for other contexts.
+      const blitRe = /(\w)\.blitFramebuffer\((\w)\?\.x\?\?0,\2\?\.y\?\?0,\2\?\2\.x\+\2\.width:(\w),\2\?\2\.y\+\2\.height:(\w),\2\?\.x\?\?0,\2\?\.y\?\?0,\2\?\2\.x\+\2\.width:\3,\2\?\2\.y\+\2\.height:\4,\1\.COLOR_BUFFER_BIT,\1\.NEAREST\)/;
+      const bm = blitRe.exec(out);
+      if (!bm) throw new Error('p5brush-infinite-canvas: composite source blit not found; check the p5.brush version');
+      const [call, g, box, w, h] = bm;
+      const args = `${g},${box}?.x??0,${box}?.y??0,${box}?${box}.x+${box}.width:${w},${box}?${box}.y+${box}.height:${h}`;
+      out = out.replace(blitRe, `((globalThis.__p5brushBlitSource&&globalThis.__p5brushBlitSource(${args}))||${call})`);
       return { code: out, map: null };
     },
   };

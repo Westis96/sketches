@@ -197,14 +197,34 @@ export class Studio {
   private detach: (() => void) | null = null;
   private extentCache = new Map<string, number>();
   /**
-   * The canvas as of the last stamped chunk of the stroke in progress. p5.brush
-   * composites by reading the canvas back from the default framebuffer, and on
-   * WebKit that read is only reliable for content drawn in the same frame:
-   * content left over from an earlier frame came back blank, which turned
-   * chunked strokes into solid black on iPad. Each preview frame therefore
-   * redraws this texture before stamping and snapshots it afterwards.
+   * Exact mirror of the canvas, kept current whenever the engine renders on it.
+   * p5.brush composites each stroke against a copy of the canvas region under
+   * it, which it takes from the default framebuffer with blitFramebuffer; on
+   * WebKit that copy came back blank for small regions and hand-drawn strokes
+   * rendered solid black on iPad. The engine's source copy is therefore served
+   * from this texture instead (see the build-time transform in vite.config.ts),
+   * and the live preview restores chunk regions from it too.
    */
-  private liveTex: WebGLTexture | null = null;
+  private mirrorTex: WebGLTexture | null = null;
+  private mirrorReady = false;
+
+  /** Whole-canvas refresh of the mirror; call after any non-engine write to the canvas the engine may read. */
+  private refreshMirror() {
+    const sgl = this.sgl!;
+    this.mirrorTex ??= sgl.createTexture();
+    sgl.snapshot(this.mirrorTex);
+    this.mirrorReady = true;
+  }
+  private refreshMirrorRegion(r: { x: number; y: number; w: number; h: number }) {
+    if (!this.mirrorReady) { this.refreshMirror(); return; }
+    this.sgl!.snapshotRegion(this.mirrorTex!, r.x, r.y, r.w, r.h);
+  }
+  /** Engine hook: draws the mirror into the engine's bound source framebuffer instead of a canvas readback. */
+  private blitSource = (gl: WebGL2RenderingContext, x0: number, y0: number, x1: number, y1: number): boolean => {
+    if (!this.sgl || gl !== this.sgl.gl || !this.mirrorReady || !this.mirrorTex) return false;
+    this.sgl.drawIntoBound(this.mirrorTex, x0, y0, x1, y1);
+    return true;
+  };
   /** Rolling cost counters (ms), read through the debug hook. */
   private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, restoreMs: 0, stampMs: 0, snapMs: 0, plotMs: 0, compositeMs: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0 };
   /** The user's drawing while a lesson occupies the canvas. */
@@ -343,6 +363,7 @@ export class Studio {
       }
     }
 
+    (globalThis as unknown as { __p5brushBlitSource?: unknown }).__p5brushBlitSource = this.blitSource;
     const onDown = (e: PointerEvent) => this.onPointerDown(e);
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onUp = (e: PointerEvent) => this.onPointerUp(e);
@@ -376,6 +397,8 @@ export class Studio {
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
     this.detach = () => {
+      const g = globalThis as unknown as { __p5brushBlitSource?: unknown };
+      if (g.__p5brushBlitSource === this.blitSource) delete g.__p5brushBlitSource;
       canvas.removeEventListener('wheel', onWheel);
       document.removeEventListener('gesturestart', prevent);
       window.removeEventListener('keydown', onKey);
@@ -459,7 +482,9 @@ export class Studio {
   /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
   private renderBrushStroke(rec: BrushRecord): number {
     if (rec.chunks) return this.renderChunked(rec);
-    return this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
+    const stamps = this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
+    this.refreshMirrorRegion(this.chunkRegion(rec, rec.points));
+    return stamps;
   }
 
   /**
@@ -806,8 +831,8 @@ export class Studio {
   }
 
   private renderRecord(rec: StrokeRecord) {
-    if (rec.tool === 'clear') this.sgl!.blit(this.sgl!.paperTex);
-    else if (rec.tool === 'eraser') this.sgl!.eraseDabs(this.eraserDabs(rec, 0));
+    if (rec.tool === 'clear') { this.sgl!.blit(this.sgl!.paperTex); this.refreshMirror(); }
+    else if (rec.tool === 'eraser') { this.sgl!.eraseDabs(this.eraserDabs(rec, 0)); this.refreshMirror(); }
     else this.renderBrushStroke(rec);
   }
 
@@ -839,6 +864,7 @@ export class Studio {
     if (!p) return;
     cancelAnimationFrame(p.raf);
     this.sgl!.blit(p.scratch);
+    this.refreshMirror();
     while (p.index < p.records.length) this.paintOne(p.records[p.index++]);
     this.finishProgressive(p);
   }
@@ -883,6 +909,7 @@ export class Studio {
       if (this.pending !== p) return;
       const t0 = performance.now();
       sgl.blit(scratch);
+      this.refreshMirror();
       while (p.index < p.records.length && performance.now() - t0 < PROGRESSIVE_BUDGET_MS) this.paintOne(p.records[p.index++]);
       sgl.snapshot(scratch);
       this.perf.rebuildMs += performance.now() - t0;
@@ -901,6 +928,7 @@ export class Studio {
     this.cancelPaint();
     const sgl = this.sgl!;
     sgl.blit(baseTex);
+    this.refreshMirror();
     this.lastCulled = 0;
     for (const rec of records) this.paintOne(rec);
     sgl.snapshot(sgl.committedTex);
@@ -949,6 +977,7 @@ export class Studio {
   private commitRecord(rec: StrokeRecord, clearRedo = true) {
     this.flushPaint();
     this.sgl!.blit(this.sgl!.committedTex);
+    this.refreshMirror();
     this.renderRecord(rec);
     this.pushRecord(rec, clearRedo);
   }
@@ -1442,25 +1471,21 @@ export class Studio {
     const len = pathLength(g.pts);
     if (!final && len < rec.spec.spacing * 3) return false;
     const sgl = this.sgl!;
-    this.liveTex ??= sgl.createTexture();
     const t0 = performance.now();
     if (live.chunk === 0) {
-      // First chunk: whole canvas, once per stroke (also gives liveTex its full-size storage).
+      // First chunk: start from the committed image, whole canvas once per stroke.
       sgl.blit(sgl.committedTex);
+      this.refreshMirror();
       this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
-      sgl.snapshot(this.liveTex);
     } else {
-      // Later chunks: only the region the chunk can touch (see liveTex), so the
-      // per-frame cost no longer scales with the canvas.
+      // Later chunks: restore only the region the chunk can touch from the mirror
+      // (guards the canvas against stale content between frames) and stamp.
       const r = this.chunkRegion(rec, g.pts);
       const a = performance.now();
-      sgl.blitRegion(this.liveTex, r.x, r.y, r.w, r.h);
+      sgl.blitRegion(this.mirrorTex!, r.x, r.y, r.w, r.h);
       const b = performance.now();
       this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
-      const c = performance.now();
-      sgl.snapshotRegion(this.liveTex, r.x, r.y, r.w, r.h);
-      const d = performance.now();
-      this.perf.restoreMs += b - a; this.perf.stampMs += c - b; this.perf.snapMs += d - c;
+      this.perf.restoreMs += b - a; this.perf.stampMs += performance.now() - b;
     }
     live.lastChunkAt = performance.now();
     this.perf.chunkMs += performance.now() - t0; this.perf.chunks++;
@@ -1493,7 +1518,12 @@ export class Studio {
   private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number): number {
     if (index === 0) this.primeEngine(this.glW, this.glH, this.dpr);
     const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec) };
-    return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
+    const stamps = this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
+    // The next chunk (or stroke) composites against the mirror: keep it current.
+    const t = performance.now();
+    this.refreshMirrorRegion(this.chunkRegion(rec, pts));
+    this.perf.snapMs += performance.now() - t;
+    return stamps;
   }
 
   /**

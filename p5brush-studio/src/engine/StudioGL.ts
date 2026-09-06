@@ -150,6 +150,35 @@ export class StudioGL {
     this.end();
   }
 
+  /**
+   * Draws `tex` 1:1 into whatever draw framebuffer is currently bound, limited to
+   * a GL-coordinate box (origin bottom-left). Used to feed the engine's composite
+   * source from the canvas mirror; leaves framebuffer bindings untouched.
+   */
+  drawIntoBound(tex: WebGLTexture, x0: number, y0: number, x1: number, y1: number) {
+    const gl = this.gl;
+    const vp = gl.getParameter(gl.VIEWPORT) as Int32Array;
+    gl.viewport(0, 0, this.w, this.h);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(Math.max(0, x0), Math.max(0, y0), Math.max(0, x1 - x0), Math.max(0, y1 - y0));
+    gl.bindVertexArray(this.vao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.useProgram(this.blitProg);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.uniform1i(this.u.blitTex, 0);
+    gl.uniform4f(this.u.blitRect, 0, 0, this.w, this.h);
+    gl.uniform2f(this.u.blitRes, this.w, this.h);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.bindVertexArray(null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.useProgram(null);
+    gl.enable(gl.BLEND);
+    gl.viewport(vp[0], vp[1], vp[2], vp[3]);
+  }
+
   /** Draws only a device-pixel region of `tex` (y from top), 1:1; clamped to the canvas. */
   blitRegion(tex: WebGLTexture, x: number, y: number, w: number, h: number) {
     const r = this.clampRegion(x, y, w, h);
