@@ -259,3 +259,24 @@ level colour with the mission and a slide progress track; the slide title, body,
 chip and compare legend; Replay (R), Back (←) and Next (→ / Enter); the last slide's
 primary is "Try it · Trainer". Leaving is the X over the paper or Escape, back to the
 mission bubble.
+
+## Motion
+
+- **The pen.** A white ring in the level colour travels the demo stroke on the paper
+  with the demo's exact pacing (pauses at corners, the flick of a blade) via SMIL
+  `animateMotion` with `keyPoints`/`keyTimes` computed from the stroke's timeline. It
+  waits on the start point during the demo's lead-in beat, so the learner sees where
+  the pen lands before the ink appears, and leads the ink by the live-chunk latency,
+  the way a real pen tip leads its mark.
+- **Pressure along the stroke.** When a demo's pressure varies, the panel shows a
+  small area chart of pressure against distance in the demo's tone (green for the
+  right way, red for the wrong way), with a cursor that follows the pen. The invisible
+  variable becomes visible; after the stroke the trace stays.
+- **Slides** enter from the right going forward and from the left going back (260 ms,
+  ease-out); the progress pills fill left-to-right; a compare row lights up while its
+  stroke is drawn and its ✓/✗ badge pops when the stroke lands; labels settle onto the
+  paper with a 4 px rise. The panel slides in from where it docks (right column, or up
+  from the bottom on phones). Replay is always live: it interrupts the run in progress
+  rather than queueing behind it.
+- **Reduced motion** turns every entrance into a fade and the pill fill into a snap;
+  the pen and the trace cursor keep moving because they carry information.

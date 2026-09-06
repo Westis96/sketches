@@ -485,6 +485,41 @@ export const TEACH: Record<string, TeachSlide[]> = {
   ],
 };
 
+/** The demo's points with their timeline (ms from pen-down), whether authored or at its constant pace. */
+export function demoTimed(d: DemoStroke): Point[] {
+  return d.points[0]?.t !== undefined ? d.points : timed(d.points, d.speed ?? 0.45);
+}
+/** Whether a demo is about pressure: its profile moves enough to show. */
+export function pressureVaries(d: DemoStroke): boolean {
+  let lo = 1, hi = 0;
+  for (const p of d.points) { if (p.p < lo) lo = p.p; if (p.p > hi) hi = p.p; }
+  return hi - lo >= 0.15;
+}
+/**
+ * SMIL pacing for a demo: the motion path (relative to the first point), the
+ * cumulative-length keyPoints and the time keyTimes, so a marker can travel the
+ * stroke at exactly the demo's pace, pauses and flicks included.
+ */
+export function demoMotion(d: DemoStroke): { path: string; keyPoints: string; keyTimes: string; dur: number; hpath: string } {
+  const pts = demoTimed(d);
+  const T = Math.max(1, pts[pts.length - 1].t ?? 1);
+  const cum: number[] = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  const L = cum[cum.length - 1] || 1;
+  const kp: string[] = [], kt: string[] = [], rel: string[] = [];
+  let lastT = -1;
+  const x0 = pts[0].x, y0 = pts[0].y;
+  pts.forEach((p, i) => {
+    let t = (p.t ?? 0) / T;
+    if (t <= lastT) t = Math.min(1, lastT + 1e-4); // strictly increasing, as SMIL wants
+    if (i === pts.length - 1) t = 1;
+    lastT = t;
+    kp.push((cum[i] / L).toFixed(4)); kt.push(t.toFixed(4));
+    rel.push(`${(p.x - x0).toFixed(1)} ${(p.y - y0).toFixed(1)}`);
+  });
+  return { path: 'M' + rel.join('L'), keyPoints: kp.join(';'), keyTimes: kt.join(';'), dur: T / 1000, hpath: 'M0 0L1 0' };
+}
+
 /** Whether a mission has a lesson. */
 export const hasLesson = (missionId: string) => !!TEACH[missionId];
 export const teachSlides = (missionId: string): TeachSlide[] => TEACH[missionId] ?? [];

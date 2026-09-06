@@ -245,6 +245,19 @@
 /* Cards that appear occasionally (a lesson step card, the result, the welcome
    card): rise 6px into place. `--enter-delay` staggers a group. */
 @keyframes enter-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Lesson motion: the panel slides in from where it docks, slides step forward or back, labels settle onto the paper, badges land. */
+@keyframes enter-right { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: none; } }
+.enter-right { animation: enter-right 300ms var(--ease-out) both; }
+@keyframes slide-fwd { from { opacity: 0; transform: translateX(14px); } to { opacity: 1; transform: none; } }
+@keyframes slide-back { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+.slide-fwd { animation: slide-fwd 260ms var(--ease-out) both; }
+.slide-back { animation: slide-back 260ms var(--ease-out) both; }
+@keyframes label-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.label-in { animation: label-in 280ms var(--ease-out) both; transform-box: fill-box; transform-origin: center; }
+@keyframes badge-pop { 0% { transform: scale(0.6); opacity: 0; } 60% { transform: scale(1.12); opacity: 1; } 100% { transform: scale(1); } }
+.badge-pop { animation: badge-pop 320ms var(--ease-out) both; }
+.pill-fill { transform-origin: left; transition: transform 320ms var(--ease-out); }
+.pen-tip { filter: drop-shadow(0 1px 2px rgba(28, 24, 18, 0.35)); }
 .enter-up { animation: enter-up 260ms var(--ease-out) both; animation-delay: var(--enter-delay, 0ms); }
 .welcome-in { --enter-delay: 320ms; }
 
@@ -255,7 +268,8 @@
 @media (prefers-reduced-motion: reduce) {
   /* Fewer and gentler, not none: opacity stays (it carries meaning), movement goes. */
   .guide-flow { animation: none; }
-  .star-pop, .enter-up, .tile-in { animation-name: fade-in; }
+  .star-pop, .enter-up, .tile-in, .enter-right, .slide-fwd, .slide-back, .label-in, .badge-pop { animation-name: fade-in; }
+  .pill-fill { transition-duration: 0ms; }
   .start-bubble { animation: none; }
   .bar-fill { transition-timing-function: var(--ease-out); }
   [data-guide='speed-ghost'] { display: none; }
