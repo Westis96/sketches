@@ -23,7 +23,7 @@ export function QuickActions({ onPractice }: { onPractice?: () => void }) {
         <DropdownMenuTrigger asChild>
           <button type="button" aria-label="Menu" className="tl-btn data-[state=open]:bg-[var(--tl-low)]"><Menu /></button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" sideOffset={6} className="w-64 rounded-[11px] border-0 p-1.5 text-[12px] shadow-[var(--tl-shadow)]">
+        <DropdownMenuContent align="start" sideOffset={6} className="w-72 rounded-[11px] border-0 p-1.5 text-[12px] shadow-[var(--tl-shadow)]">
           <DropdownMenuLabel className="px-2 py-1.5">
             <div className="text-[12px] font-semibold text-[var(--tl-text-1)]">p5.brush Realtime Studio</div>
             <div className="text-[11px] font-normal text-[var(--tl-text-3)]">Rendered by the p5.brush 2.2.2 engine</div>

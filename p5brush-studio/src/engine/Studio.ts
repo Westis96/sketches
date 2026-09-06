@@ -95,6 +95,8 @@ export interface StudioState {
   /** Lesson id → engine-rendered PNG data URL; null until requested. */
   lessonPreviews: Record<string, string> | null;
   progress: Progress;
+  /** First visit with nothing saved: show the welcome card until dismissed. */
+  firstRun: boolean;
 }
 
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
@@ -105,6 +107,7 @@ const MAX_CHECKPOINTS = 4;
 const POOL = 8;
 const SAVE_KEY = `p5brush-studio:v${SAVE_VERSION}`;
 const SAVE_DEBOUNCE_MS = 700;
+const WELCOME_KEY = 'p5brush-studio:welcomed';
 
 const DEFAULT_SETTINGS: Settings = {
   spec: DEFAULT_SPEC,
@@ -147,6 +150,7 @@ export class Studio {
     practice: null,
     lessonPreviews: null,
     progress: loadProgress(),
+    firstRun: false,
   };
   private listeners = new Set<() => void>();
 
@@ -357,10 +361,10 @@ export class Studio {
       if (this.restored) {
         this.toast(`Restored your drawing (${visibleRecords(this.strokes).length} strokes)`);
       } else {
-        setTimeout(() => {
-          this.drawSampleStroke();
-          this.toast('Draw anywhere. D brush · E eraser · ? shortcuts', { duration: 4500 });
-        }, 120);
+        setTimeout(() => this.drawSampleStroke(), 120);
+        let welcomed = false;
+        try { welcomed = localStorage.getItem(WELCOME_KEY) === '1'; } catch { /* ignore */ }
+        if (!welcomed) this.emit({ firstRun: true });
       }
     }
   }
@@ -836,6 +840,12 @@ export class Studio {
     if (!rec) return;
     this.commitRecord(rec, false);
   };
+
+  dismissWelcome() {
+    if (!this.state.firstRun) return;
+    this.emit({ firstRun: false });
+    try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* ignore */ }
+  }
 
   /** Clears the paper as an undoable history entry. */
   clear = () => {

@@ -72,6 +72,14 @@ try {
   await page.waitForTimeout(200);
   check('boots and draws the sample stroke', (await studio((s) => s.strokes().length)) === 1);
 
+  // First visit: the welcome card shows once and stays dismissed.
+  const welcomeShown = (await page.locator('[data-testid=welcome]').count()) === 1;
+  await page.click('text=Start drawing');
+  await page.waitForTimeout(100);
+  const welcomeGone = (await page.locator('[data-testid=welcome]').count()) === 0;
+  const welcomedFlag = await page.evaluate(() => localStorage.getItem('p5brush-studio:welcomed'));
+  check('welcome card shows on first visit and dismisses for good', welcomeShown && welcomeGone && welcomedFlag === '1');
+
   // Drawing with the mouse commits a stroke.
   const blank = await checksum();
   await drag([[200, 600], [400, 560], [600, 620], [800, 580]]);

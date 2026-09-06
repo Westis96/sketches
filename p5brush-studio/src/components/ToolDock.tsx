@@ -5,12 +5,15 @@ import { useStudio, useStudioState } from '@/hooks/useStudio';
 /** Bottom-center tool dock, tldraw style: the active tool is blue. */
 export function ToolDock({ panelOpen, onTogglePanel, onPractice }: { panelOpen: boolean; onTogglePanel: () => void; onPractice: () => void }) {
   const studio = useStudio();
-  const { tool, pencilOnly } = useStudioState((s) => s.settings);
+  const { tool, pencilOnly, color } = useStudioState((s) => s.settings);
   const inLesson = useStudioState((s) => s.practice !== null);
 
   return (
     <div className="tl-panel pointer-events-auto flex items-center p-1">
-      <TlButton label="Brush" kbd="D" active={tool === 'brush'} onClick={() => studio.setTool('brush')}><PenLine /></TlButton>
+      <TlButton label="Brush" kbd="D" active={tool === 'brush'} onClick={() => studio.setTool('brush')}>
+        <PenLine />
+        <span aria-hidden className="absolute bottom-1.5 right-1.5 h-2 w-2 rounded-full shadow-[0_0_0_1.5px_rgba(255,255,255,0.95)]" style={{ background: color }} />
+      </TlButton>
       <TlButton label="Paper eraser" kbd="E" active={tool === 'eraser'} onClick={() => studio.setTool('eraser')}><Eraser /></TlButton>
       <span className="tl-divider" />
       <TlButton label="Draw a p5.brush sample stroke" kbd="T" onClick={studio.drawSampleStroke}><Sparkles /></TlButton>

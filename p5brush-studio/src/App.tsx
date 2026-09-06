@@ -14,6 +14,7 @@ import { PracticeGuide } from '@/components/practice/PracticeGuide';
 import { PracticePanel } from '@/components/practice/PracticePanel';
 import { PracticePicker } from '@/components/practice/PracticePicker';
 import { PracticeComplete } from '@/components/practice/PracticeComplete';
+import { WelcomeCard } from '@/components/WelcomeCard';
 
 declare global {
   interface Window { __studio?: ReturnType<Studio['debug']> }
@@ -28,6 +29,7 @@ export default function App() {
         <Toaster
           position="bottom-center"
           offset={64}
+          mobileOffset={76}
           duration={2200}
           toastOptions={{ className: 'rounded-[11px] border-0 shadow-[var(--tl-shadow)] text-[12px]' }}
         />
@@ -118,6 +120,11 @@ function Shell() {
           <PracticePanel />
         </div>
       )}
+      {!practice && (
+        <div className="pointer-events-none fixed bottom-16 left-1/2 z-30 -translate-x-1/2">
+          <WelcomeCard onTryLesson={() => setPracticeOpen(true)} />
+        </div>
+      )}
       {practice?.status === 'complete' && (
         <div className="pointer-events-none fixed bottom-16 left-1/2 z-30 -translate-x-1/2">
           <PracticeComplete onChooseLesson={() => setPracticeOpen(true)} />
@@ -144,7 +151,7 @@ function Shell() {
           onClick={() => setPanelOpen((o) => !o)}
           className="tl-panel-sm pointer-events-auto hidden h-9 items-center px-3 text-[11px] font-medium text-[var(--tl-text-2)] hover:bg-[var(--tl-low)] sm:inline-flex"
         >
-          {panelOpen ? 'Hide styles' : 'Show styles'}<kbd className="ml-2 rounded bg-[var(--tl-low)] px-1 font-mono text-[10px]">P</kbd>
+          {panelOpen ? "Hide styles" : "Show styles"}<kbd className="tl-kbd-hint ml-2 rounded bg-[var(--tl-low)] px-1 font-mono text-[10px]">P</kbd>
         </button>
         <HelpButton open={helpOpen} onOpenChange={setHelpOpen} />
       </div>

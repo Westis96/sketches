@@ -127,7 +127,7 @@ export function StylePanel({ open }: { open: boolean }) {
   return (
     <aside
       className={cn(
-        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(100vh-4.25rem)] flex-col overflow-hidden transition-all duration-200',
+        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(100dvh-5.25rem)] flex-col overflow-hidden transition-all duration-200 sm:max-h-[calc(100dvh-4.25rem)]',
         !open && 'pointer-events-none translate-x-4 opacity-0',
       )}
     >
@@ -140,7 +140,7 @@ export function StylePanel({ open }: { open: boolean }) {
           ))}
         </TabsList>
 
-        <div className="tl-scroll min-h-0 overflow-y-auto overflow-x-hidden">
+        <div className="tl-scroll tl-scroll-fade min-h-0 overflow-y-auto overflow-x-hidden">
           {/* ------------------------------------------------------------ Style */}
           <TabsContent value="style" className="m-0 space-y-4 p-3">
             {/* Brush templates: previews are strokes rendered by the engine itself */}

@@ -111,6 +111,11 @@
   }
 
   .tl-scroll::-webkit-scrollbar { width: 6px; }
+  /* Soft edge where a scrolling panel is cut off, so a clipped control reads as "more below" */
+  .tl-scroll-fade {
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+  }
   .tl-scroll::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); border-radius: 9999px; border: 1px solid transparent; }
 
   .code-area {
@@ -144,3 +149,9 @@
   .guide-flow, .guide-start, .guide-pulse-bar, .star-pop { animation: none; }
   .feedback-pop { animation-duration: 0.01s; animation-delay: 2.4s; opacity: 1; }
 }
+
+/* Touch devices: keyboard hints only add noise */
+@media (pointer: coarse) { .tl-kbd, .tl-kbd-hint { display: none; } }
+
+@keyframes welcome-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+.welcome-in { animation: welcome-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: 0.4s; }
