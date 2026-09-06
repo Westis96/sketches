@@ -217,6 +217,18 @@ export class StudioGL {
     this.end();
   }
 
+  /** Mean red channel (0..255) of a device-pixel rectangle (y from top) of the canvas; for diagnostics. */
+  meanRed(x: number, y: number, w: number, h: number): number {
+    const r = this.clampRegion(x, y, w, h);
+    if (!r) return -1;
+    const gl = this.gl;
+    const px = new Uint8Array(r.w * r.h * 4);
+    gl.readPixels(r.x, this.h - r.y - r.h, r.w, r.h, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let sum = 0;
+    for (let i = 0; i < px.length; i += 4) sum += px[i];
+    return Math.round(sum / (px.length / 4));
+  }
+
   /** Copies the current canvas into `tex`. */
   snapshot(tex: WebGLTexture) {
     const gl = this.gl;

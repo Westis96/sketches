@@ -1769,6 +1769,89 @@ export class Studio {
     return lines.join('\n');
   }
 
+  // ---------------------------------------------------------------------------
+  // Diagnostics (remote debugging of device-specific rendering)
+  // ---------------------------------------------------------------------------
+  /** Copies environment, the last hand-drawn stroke and a render self-test to the clipboard; summary in a toast. */
+  copyDiagnostics = async () => {
+    const d = this.diagnostics();
+    if (!d) { this.toast('Diagnostics: finish the current stroke first'); return null; }
+    let copied = false;
+    try { await navigator.clipboard.writeText(JSON.stringify(d)); copied = true; } catch { /* clipboard unavailable */ }
+    console.log('[studio] diagnostics', d);
+    this.toast(`${d.summary}${copied ? ' · copied' : ''}`, { duration: 15000 });
+    return d;
+  };
+
+  diagnostics() {
+    const sgl = this.sgl;
+    if (!sgl || this.live) return null;
+    this.flushPaint();
+    const gl = sgl.gl;
+    const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+    const env = {
+      ua: navigator.userAgent, dpr: this.dpr, css: [this.cssW, this.cssH], gl: [this.glW, this.glH],
+      renderer: String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)),
+      halfFloat: !!gl.getExtension('EXT_color_buffer_half_float'), floatBuf: !!gl.getExtension('EXT_color_buffer_float'),
+      zoom: this.view.zoom, pressureMode: this.settings.pressureMode, template: this.activeTemplate()?.id ?? 'custom', size: this.settings.size,
+    };
+    const last = [...this.strokes].reverse().find((r): r is BrushRecord => r.tool === 'brush' && !!r.chunks);
+    const ps = last ? last.points.map((p) => p.p) : [];
+    const stroke = last ? {
+      input: last.input, n: last.points.length, chunks: last.chunks!.length, zoom: last.zoom, pressureMode: last.pressureMode, size: last.size, color: last.color, seed: last.seed, spec: last.spec,
+      p: { min: Math.min(...ps), max: Math.max(...ps), mean: +(ps.reduce((a, b) => a + b, 0) / ps.length).toFixed(3) },
+      points: last.points.slice(0, 600), chunkEnds: last.chunks!.slice(0, 600),
+    } : null;
+    const tests = this.renderSelfTest();
+    const summary = `render: paper ${tests.paper} · one-shot ${tests.oneShot} · chunked ${tests.chunked} · live-path ${tests.livePath} · engine-readback ${tests.engineReadback}`
+      + (stroke ? ` | last stroke: ${stroke.input} ${stroke.n} pts, ${stroke.chunks} chunks, p ${stroke.p.min}–${stroke.p.max}, ${stroke.pressureMode}` : ' | no hand-drawn stroke');
+    return { env, stroke, tests, summary };
+  }
+
+  /**
+   * Renders the same short chisel line four ways in the middle of the viewport and
+   * measures its darkness (mean red, paper ≈ 250): as one engine stroke, as
+   * replayed chunks, along the live drawing path (region restores between chunks),
+   * and as chunks with the engine's own canvas readback instead of the mirror.
+   * On a healthy device all four agree. The canvas is restored afterwards.
+   */
+  private renderSelfTest() {
+    const sgl = this.sgl!, v = this.committedView, dpr = this.dpr;
+    const c = this.toWorld(this.cssW / 2, this.cssH / 2), half = 120 / v.zoom;
+    const pts: Point[] = [];
+    for (let i = 0; i <= 60; i++) pts.push({ x: round(c.x - half + (2 * half * i) / 60, 100), y: round(c.y, 100), p: 0.5 });
+    const base: BrushRecord = { tool: 'brush', spec: clone(DEFAULT_SPEC), tipSource: DEFAULT_TIP_SOURCE, size: 1, color: '#1a1c23', pressureMode: 'gaussian', sensitivity: 1.25, seed: 4242, points: pts, input: 'pen', zoom: v.zoom };
+    const measure = () => {
+      const y = (c.y * v.zoom + v.y) * dpr, x0 = ((c.x - half) * v.zoom + v.x + 20) * dpr;
+      return sgl.meanRed(Math.round(x0), Math.round(y - 3 * dpr), Math.round((2 * half * v.zoom - 40) * dpr), Math.round(6 * dpr));
+    };
+    const restore = () => { sgl.blit(sgl.committedTex); this.refreshMirror(); };
+    restore();
+    const paper = measure();
+    this.stampRecord(base, this.glW, this.glH, dpr, v);
+    const oneShot = measure(); restore();
+    const chunks: number[] = [];
+    for (let i = 10; i < pts.length; i += 8) chunks.push(i);
+    chunks.push(pts.length);
+    const rec: BrushRecord = { ...base, chunks };
+    this.renderChunked(rec);
+    const chunked = measure(); restore();
+    let condLen = 0, s0 = 0;
+    chunks.forEach((upto, i) => {
+      const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
+      if (!g) return;
+      if (i > 0) { const r = this.chunkRegion(rec, g.pts); sgl.blitRegion(this.mirrorTex!, r.x, r.y, r.w, r.h); }
+      this.stampChunk(rec, g.pts, i, s0);
+      condLen = g.condLen; s0 += pathLength(g.pts);
+    });
+    const livePath = measure(); restore();
+    this.mirrorReady = false;
+    this.renderChunked(rec);
+    this.mirrorReady = true;
+    const engineReadback = measure(); restore();
+    return { paper, oneShot, chunked, livePath, engineReadback };
+  }
+
   /** Exposed for the headless test harness. */
   debug() {
     const studio = this;
@@ -1786,6 +1869,7 @@ export class Studio {
       setCulling: (on: boolean) => { this.cullingEnabled = on; },
       lastCulled: () => this.lastCulled,
       perf: () => ({ ...this.perf }),
+      diagnostics: () => this.diagnostics(),
       resetPerf: () => { for (const k of Object.keys(this.perf) as Array<keyof typeof this.perf>) this.perf[k] = 0; },
       conditioned: (rec: BrushRecord) => conditionPoints(rec),
       practice: {

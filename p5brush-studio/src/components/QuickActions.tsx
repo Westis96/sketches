@@ -39,6 +39,7 @@ export function QuickActions({ onPractice }: { onPractice?: () => void }) {
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={studio.drawSampleStroke}>Draw sample stroke<DropdownMenuShortcut>T</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => onPractice?.()}>Practice lessons…<DropdownMenuShortcut>L</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => studio.resetDefaults()}>Reset brush to myBrush defaults</DropdownMenuItem>
+          <DropdownMenuItem className="rounded-[7px] py-1.5" onSelect={() => { void studio.copyDiagnostics(); }}>Copy diagnostics</DropdownMenuItem>
           <DropdownMenuSeparator className="bg-[var(--tl-hint)]" />
           <DropdownMenuItem className="rounded-[7px] py-1.5 text-[var(--tl-danger)] focus:text-[var(--tl-danger)]" onSelect={studio.clear}>Clear canvas<DropdownMenuShortcut>C</DropdownMenuShortcut></DropdownMenuItem>
         </DropdownMenuContent>

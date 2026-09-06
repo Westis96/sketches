@@ -307,6 +307,14 @@ try {
   const kept = await studio((s) => ({ n: s.history().length, practice: s.state.practice }));
   check('keeping the traced drawing replaces the document', kept.practice === null && kept.n === 1);
 
+  // Render self-test: all four ways of drawing the same line agree on this renderer.
+  await drag([[200, 300], [400, 330], [600, 300]]);
+  const diag = await studio((s) => s.diagnostics());
+  const t = diag.tests;
+  const agree = Math.max(t.oneShot, t.chunked, t.livePath, t.engineReadback) - Math.min(t.oneShot, t.chunked, t.livePath, t.engineReadback) < 20;
+  check('render self-test: one-shot, chunked, live-path and engine-readback agree', agree && t.oneShot < t.paper - 20, JSON.stringify(t));
+  check('diagnostics describe the last hand-drawn stroke', diag.stroke && diag.stroke.input === 'mouse' && diag.stroke.chunks >= 1, diag.summary);
+
   check('no page errors', pageErrors.length === 0, pageErrors.join(' | '));
 } catch (err) {
   console.error(err);
