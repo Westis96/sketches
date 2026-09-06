@@ -139,6 +139,23 @@ try {
   await studio((s) => s.zoomBy(0.5, 600, 400));
   await page.waitForTimeout(100);
   const backToOne = await checksum();
+  // Strokes that start off-screen (left/above) must still render when zoomed in.
+  await studio((s) => s.commit(Array.from({ length: 60 }, (_, i) => ({ x: 100 + i * 13, y: 200, p: 0.6 })), { seed: 3 }));
+  await studio((s) => { s.resetView(); s.zoomBy(4, 400, 200); });
+  const zoomedInk = await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2');
+    const px = new Uint8Array(160 * 160 * 4); gl.readPixels(320, c.height - 280, 160, 160, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let ink = 0; for (let i = 0; i < px.length; i += 4) ink += 255 - px[i]; return ink;
+  });
+  await studio((s) => s.resetView());
+  const baseInk = await page.evaluate(() => {
+    const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2');
+    const px = new Uint8Array(40 * 40 * 4); gl.readPixels(380, c.height - 220, 40, 40, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    let ink = 0; for (let i = 0; i < px.length; i += 4) ink += 255 - px[i]; return ink;
+  });
+  check('a stroke that starts off-screen still renders when zoomed in', zoomedInk > baseInk * 8, `zoomed ${zoomedInk} vs base ${baseInk} (x16 area)`);
+  await studio((s) => s.undo()); // leave the earlier strokes in place for the checks below
+
   check('zoom in then out re-renders identically', backToOne.h === atOne.h);
   await studio((s) => s.zoomToFit());
   check('zoom to fit changes the view', (await studio((s) => s.view().zoom)) !== 1 || (await studio((s) => s.view().x)) !== 0);
