@@ -1466,20 +1466,16 @@ export class Studio {
   }
 
   /**
-   * Replays a hand-drawn stroke. At the zoom it was drawn at, the same chunks
-   * with the same seeds: pixel-identical to what was on screen at lift. At any
-   * other zoom the picture is necessarily different (stamps are rescaled), so
-   * the stroke is stamped as one chunk-style pass instead, which costs one
-   * engine render rather than one per chunk and keeps zoomed rebuilds fast.
+   * Replays a hand-drawn stroke: the same chunks with the same seeds, at every
+   * zoom. At the drawing zoom that is pixel-identical to what was on screen at
+   * lift; at other zooms the engine scales weight, spacing and scatter with the
+   * view, so the same chunk sequence gives the same stroke rescaled. (Merging the
+   * chunks into one pass at other zooms was tried for speed and reshuffled the
+   * texture visibly.)
    */
   private renderChunked(rec: BrushRecord): number {
     let condLen = 0, s0 = 0, stamps = 0;
     const chunks = rec.chunks!;
-    const drawnZoom = rec.zoom ?? 1;
-    if (chunks.length > 1 && Math.abs(drawnZoom - this.committedView.zoom) > 1e-9) {
-      const g = chunkPoints(rec, rec.points.length, 0, true);
-      return g ? this.stampChunk(rec, g.pts, 0, 0) : 0;
-    }
     chunks.forEach((upto, i) => {
       const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
       if (!g) return;

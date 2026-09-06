@@ -50,7 +50,7 @@ export interface BrushRecord {
    * every later render shows. Absent on programmatic strokes, rendered in one go.
    */
   chunks?: number[];
-  /** View zoom the chunks were stamped at. Replays at that zoom repeat the chunks exactly; at any other zoom the stroke is one pass. */
+  /** View zoom the stroke was drawn at (informational). */
   zoom?: number;
 }
 
