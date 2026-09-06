@@ -8,8 +8,8 @@ const d = (pts: Point[]) => 'M' + pts.map((p) => `${p.x} ${p.y}`).join('L');
  * On-canvas guide for the open lesson. The current reference stroke is a pale
  * "road" a little wider than the mark with a thin flowing dashed centreline, a
  * start dot and an arrowhead; the remaining strokes are faint ghosts. Nothing
- * opaque sits on the path, and the whole guide fades while a stroke is being
- * drawn, so the ink stays visible under it. Drawn in world units under the
+ * opaque sits on the path, and the current stroke's guide disappears while a
+ * stroke is being drawn (the ghosts only fade), so the ink is all you see. Drawn in world units under the
  * camera transform, so it pans and zooms with the paper. Pointer events pass
  * through to the canvas.
  */
@@ -54,15 +54,15 @@ export function PracticeGuide() {
         {cur && (
           <g data-guide="current">
             {/* the road: a pale band slightly wider than the mark, so the ink shows inside it */}
-            <g className="guide-layer" style={{ opacity: dim ? 0.3 : 1 }}>
+            <g className="guide-layer" style={{ opacity: dim ? 0 : 1 }}>
               <path d={d(cur.points)} stroke={cur.color} strokeWidth={stepWidth(cur) + 10 / z} opacity={0.08} />
             </g>
             {/* the centreline: thin, so it never hides the ink; fades while drawing */}
-            <g className="guide-layer" style={{ opacity: dim ? 0.4 : 0.95 }}>
+            <g className="guide-layer" style={{ opacity: dim ? 0 : 0.95 }}>
               <path className="guide-flow" d={d(cur.points)} stroke="var(--tl-selected)" strokeWidth={1.75} strokeDasharray="8 7" vectorEffect="non-scaling-stroke" />
               {arrow && <path d={arrow} fill="var(--tl-selected)" stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
             </g>
-            <circle className="guide-start" cx={cur.points[0].x} cy={cur.points[0].y} r={9 / z} fill="var(--tl-selected)" stroke="#fff" strokeWidth={2.5} vectorEffect="non-scaling-stroke" style={{ opacity: dim ? 0.5 : 1 }} />
+            <circle className="guide-start" cx={cur.points[0].x} cy={cur.points[0].y} r={9 / z} fill="var(--tl-selected)" stroke="#fff" strokeWidth={2.5} vectorEffect="non-scaling-stroke" style={{ opacity: dim ? 0 : 1, transition: 'opacity 160ms ease-out' }} />
           </g>
         )}
       </g>
