@@ -38,7 +38,10 @@
     --tl-danger: #e03131;
     --tl-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.07), 0 6px 16px rgba(0, 0, 0, 0.08);
     --tl-shadow-sm: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.1);
+    /* Viewport height for floating panels: dynamic units where supported (iOS toolbars), plain vh otherwise */
+    --tl-vh: 100vh;
   }
+  @supports (height: 100dvh) { :root { --tl-vh: 100dvh; } }
 
   * {
     @apply border-border;
@@ -111,11 +114,13 @@
   }
 
   .tl-scroll::-webkit-scrollbar { width: 6px; }
-  /* Soft edge where a scrolling panel is cut off, so a clipped control reads as "more below" */
+  /* Soft edge where a scrolling panel is cut off. The content adds matching bottom
+     padding, so at the end of the scroll the fade only ever covers empty space. */
   .tl-scroll-fade {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
   }
+  .tl-scroll-fade > * { padding-bottom: 1.75rem; }
   .tl-scroll::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); border-radius: 9999px; border: 1px solid transparent; }
 
   .code-area {
@@ -146,7 +151,7 @@
 @keyframes star-pop { 0% { transform: scale(0.3); opacity: 0; } 60% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
 .star-pop { animation: star-pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 @media (prefers-reduced-motion: reduce) {
-  .guide-flow, .guide-start, .guide-pulse-bar, .star-pop { animation: none; }
+  .guide-flow, .guide-start, .guide-pulse-bar, .star-pop, .welcome-in { animation: none; }
   .feedback-pop { animation-duration: 0.01s; animation-delay: 2.4s; opacity: 1; }
 }
 

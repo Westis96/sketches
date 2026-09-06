@@ -26,15 +26,23 @@ export default function App() {
     <StudioContext.Provider value={studio}>
       <TooltipProvider delayDuration={250} skipDelayDuration={400}>
         <Shell />
-        <Toaster
-          position="bottom-center"
-          offset={64}
-          mobileOffset={76}
-          duration={2200}
-          toastOptions={{ className: 'rounded-[11px] border-0 shadow-[var(--tl-shadow)] text-[12px]' }}
-        />
+        <StudioToaster />
       </TooltipProvider>
     </StudioContext.Provider>
+  );
+}
+
+/** Toasts sit above the dock; while the welcome card occupies that spot they move above it. */
+function StudioToaster() {
+  const firstRun = useStudioState((s) => s.firstRun);
+  return (
+    <Toaster
+      position="bottom-center"
+      offset={firstRun ? 312 : 64}
+      mobileOffset={firstRun ? 324 : 76}
+      duration={2200}
+      toastOptions={{ className: 'rounded-[11px] border-0 shadow-[var(--tl-shadow)] text-[12px]' }}
+    />
   );
 }
 
@@ -47,6 +55,7 @@ function Shell() {
   const studio = useStudio();
   const fatal = useStudioState((s) => s.fatal);
   const practice = useStudioState((s) => s.practice);
+  const firstRun = useStudioState((s) => s.firstRun);
 
   // Attach the engine to the canvas once it is mounted.
   useEffect(() => {
@@ -58,10 +67,11 @@ function Shell() {
     return () => studio.dispose();
   }, [studio]);
 
-  // A lesson sets the brush for you and needs the whole canvas: collapse the style
-  // panel while one is open and bring it back afterwards.
+  // A lesson sets the brush for you and needs the whole canvas, and the welcome
+  // card would sit under the panel on an iPad in portrait: collapse the style
+  // panel while either is up and bring it back afterwards.
   const panelBeforeLesson = useRef<boolean | null>(null);
-  const inLesson = practice !== null;
+  const inLesson = practice !== null || firstRun;
   useEffect(() => {
     if (inLesson) {
       if (panelBeforeLesson.current === null) { panelBeforeLesson.current = panelOpen; setPanelOpen(false); }
@@ -99,7 +109,7 @@ function Shell() {
       else if (k === 'f') studio.zoomToFit();
       else if (e.key === '+' || e.key === '=') studio.zoomBy(1.25);
       else if (e.key === '-' || e.key === '_') studio.zoomBy(1 / 1.25);
-      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else { setHelpOpen(false); setPracticeOpen(false); } }
+      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else { setHelpOpen(false); setPracticeOpen(false); studio.dismissWelcome(); } }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);

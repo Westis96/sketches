@@ -359,6 +359,7 @@ export class Studio {
     if (!this.sampleQueued) {
       this.sampleQueued = true;
       if (this.restored) {
+        try { localStorage.setItem(WELCOME_KEY, '1'); } catch { /* ignore */ } // returning users never need the card
         this.toast(`Restored your drawing (${visibleRecords(this.strokes).length} strokes)`);
       } else {
         setTimeout(() => this.drawSampleStroke(), 120);
@@ -587,6 +588,7 @@ export class Studio {
     const lesson = lessonById(id);
     if (!lesson || !this.sgl) return;
     if (this.live) this.cancelStroke(true);
+    this.dismissWelcome();
     if (!this.practiceBackup) {
       this.practiceBackup = { strokes: this.strokes, redo: this.redoStack, settings: clone(this.settings), view: { ...this.view } };
     }
@@ -1152,6 +1154,7 @@ export class Studio {
     const rect = this.canvas!.getBoundingClientRect();
     const input: InputKind = e.pointerType === 'pen' ? 'pen' : e.pointerType === 'touch' ? 'touch' : 'mouse';
     const first = this.pointFromEvent(e, rect);
+    if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
     this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first } };
     this.updateHud(e);

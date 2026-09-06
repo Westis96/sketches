@@ -127,7 +127,7 @@ export function StylePanel({ open }: { open: boolean }) {
   return (
     <aside
       className={cn(
-        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(100dvh-5.25rem)] flex-col overflow-hidden transition-all duration-200 sm:max-h-[calc(100dvh-4.25rem)]',
+        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(var(--tl-vh)-5.25rem)] flex-col overflow-hidden transition-all duration-200 sm:max-h-[calc(var(--tl-vh)-4.25rem)]',
         !open && 'pointer-events-none translate-x-4 opacity-0',
       )}
     >

@@ -22,7 +22,7 @@ export function HelpButton({ open, onOpenChange }: { open: boolean; onOpenChange
           ?
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" sideOffset={8} className="tl-scroll max-h-[calc(100dvh-5rem)] w-[min(30rem,calc(100vw-1rem))] overflow-y-auto rounded-[11px] border-0 p-3.5 text-[12px] shadow-[var(--tl-shadow)]">
+      <PopoverContent side="top" align="end" sideOffset={8} className="tl-scroll max-h-[calc(var(--tl-vh)-5rem)] w-[min(30rem,calc(100vw-1rem))] overflow-y-auto rounded-[11px] border-0 p-3 text-[12px] shadow-[var(--tl-shadow)]">
         <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
           <div className="order-2 sm:order-1">
             <div className="mb-2 font-semibold text-[var(--tl-text-1)]">Keyboard shortcuts</div>

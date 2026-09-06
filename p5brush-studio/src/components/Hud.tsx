@@ -27,7 +27,7 @@ export function Hud() {
         <div className="tl-panel-sm hidden h-9 items-center gap-2 px-2.5 text-[11px] font-medium text-[var(--tl-text-2)] lg:flex" aria-live="off">
           <span className="text-[var(--tl-selected)]">Pencil</span>
           <span className="h-1.5 w-12 overflow-hidden rounded-full bg-[var(--tl-hint-strong)]">
-            <span className="block h-full bg-[var(--tl-selected)] transition-[width] duration-75" style={{ width: `${Math.round(Math.min(1, hud.pressure) * 100)}%` }} />
+            <span className="block h-full bg-[var(--tl-selected)]" style={{ width: `${Math.round(Math.min(1, hud.pressure) * 100)}%` }} />
           </span>
           <span className="w-7 font-mono text-[10.5px] tabular-nums">{hud.pressure.toFixed(2)}</span>
           <span className="hidden font-mono text-[10.5px] tabular-nums text-[var(--tl-text-3)] 2xl:inline">tilt {Math.round(hud.tiltX)}°, {Math.round(hud.tiltY)}°</span>

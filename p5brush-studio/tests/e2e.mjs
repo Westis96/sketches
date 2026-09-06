@@ -74,7 +74,7 @@ try {
 
   // First visit: the welcome card shows once and stays dismissed.
   const welcomeShown = (await page.locator('[data-testid=welcome]').count()) === 1;
-  await page.click('text=Start drawing');
+  if (welcomeShown) await page.locator('text=Start drawing').click({ timeout: 2000 });
   await page.waitForTimeout(100);
   const welcomeGone = (await page.locator('[data-testid=welcome]').count()) === 0;
   const welcomedFlag = await page.evaluate(() => localStorage.getItem('p5brush-studio:welcomed'));
