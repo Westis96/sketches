@@ -172,7 +172,35 @@ try {
   const progressive = await checksum();
   await studio((s) => s.rebuildAll());
   check('large rebuilds are spread over frames and match a synchronous rebuild', spread === true && (await checksum()).h === progressive.h);
+  // While a zoom rebuild is in flight the previous image stays on screen (transformed), not blank paper.
+  const midZoom = await studio((s) => { s.zoomBy(1.15); const painting = s.isPainting(); return painting; });
+  const midInk = await checksum();
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 30000 });
+  check('a zoom rebuild keeps the previous drawing visible while it runs', midZoom === true && midInk.ink > blank.ink * 0.5, `ink ${midInk.ink} vs blank ${blank.ink}`);
+  await studio((s) => { s.zoomBy(1 / 1.15); s.flushPaint(); });
   await studio((s) => { s.zoomBy(1 / 1.1); s.flushPaint(); });
+
+  // Panning at the same zoom shifts the image and renders only the exposed strips.
+  const beforePan = await checksum();
+  const grabRed0 = () => page.evaluate(() => { const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2'); const px = new Uint8Array(c.width * c.height * 4); gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px); const out = new Array(px.length / 4); for (let i = 0; i < out.length; i++) out[i] = px[i * 4]; return out; });
+  const beforePanPx0 = await grabRed0();
+  await studio((s) => s.resetPerf());
+  await studio((s) => s.pan(37, 22));
+  const panPainted = await studio((s) => s.perf().paintStrokes);
+  const total = await studio((s) => s.strokes().length);
+  const grabRed = () => page.evaluate(() => { const c = document.getElementById('ink-canvas'); const gl = c.getContext('webgl2'); const px = new Uint8Array(c.width * c.height * 4); gl.readPixels(0, 0, c.width, c.height, gl.RGBA, gl.UNSIGNED_BYTE, px); const out = new Array(px.length / 4); for (let i = 0; i < out.length; i++) out[i] = px[i * 4]; return out; });
+  const nearlySame = (a, b) => { let n = 0, maxd = 0; for (let i = 0; i < a.length; i++) { const d = Math.abs(a[i] - b[i]); if (d) { n++; if (d > maxd) maxd = d; } } return { ok: n < 64 && maxd <= 2, n, maxd }; };
+  const beforePanPx = beforePanPx0;
+  const pannedPx = await grabRed();
+  await studio((s) => s.rebuildAll());
+  const rebuiltPx = await grabRed();
+  const same1 = nearlySame(pannedPx, rebuiltPx);
+  check('a pan renders only strokes touching the exposed strips', panPainted < total, `${panPainted} of ${total}`);
+  check('a pan equals a full rebuild at the new view (to rounding)', same1.ok, JSON.stringify(same1));
+  await studio((s) => s.pan(-37, -22));
+  const same2 = nearlySame(await grabRed(), beforePanPx);
+  check('panning there and back restores the pixels (to rounding)', same2.ok, JSON.stringify(same2));
+  void beforePan;
   for (let i = 0; i < 16; i++) await studio((s) => s.undo());
   await studio((s) => s.zoomToFit());
   check('zoom to fit changes the view', (await studio((s) => s.view().zoom)) !== 1 || (await studio((s) => s.view().x)) !== 0);

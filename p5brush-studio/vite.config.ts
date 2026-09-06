@@ -43,6 +43,25 @@ function p5brushInfiniteCanvas(): Plugin {
         `if(x1>x0&&y1>y0){${gl}.enable(${gl}.SCISSOR_TEST);${gl}.scissor(x0,y0,x1-x0,y1-y0);${gl}.clear(${gl}.COLOR_BUFFER_BIT);${gl}.disable(${gl}.SCISSOR_TEST)}})():${gl}.clear(${gl}.COLOR_BUFFER_BIT)),`;
       out = out.replace(clearRe, scissored);
 
+      // Composite clip: when the studio re-renders only a newly exposed strip after a
+      // pan, the engine's composite into the canvas must stay inside that strip
+      // (pixels outside it are already correct and would be composited twice).
+      // globalThis.__p5brushClip = {x, y, w, h} in GL device pixels intersects the
+      // composite's scissor box; an empty intersection skips the draw.
+      const scRe = /=\((\w),(\w),(\w),(\w)=!0\)=>\{const (\w)=(\w)\(\2,\4\);if\(\5\)\{\1\.enable\(\1\.SCISSOR_TEST\)/;
+      const sm = scRe.exec(out);
+      if (!sm) throw new Error('p5brush-infinite-canvas: withScissor not found; check the p5.brush version');
+      const [, gl2, rect, draw, flip, box, toBox] = sm;
+      const sizeFn = /const\{height:\w\}=(\w)\(\);return\{x:\w\.minX/.exec(out)?.[1];
+      if (!sizeFn) throw new Error('p5brush-infinite-canvas: target size helper not found; check the p5.brush version');
+      const clipped =
+        `=(${gl2},${rect},${draw},${flip}=!0)=>{let ${box}=${toBox}(${rect},${flip});const C=globalThis.__p5brushClip;` +
+        `if(${flip}&&C){if(!${box}){const{width:W,height:H}=${sizeFn}();${box}={x:0,y:0,width:W,height:H}}` +
+        `const x0=Math.max(${box}.x,C.x),y0=Math.max(${box}.y,C.y),x1=Math.min(${box}.x+${box}.width,C.x+C.w),y1=Math.min(${box}.y+${box}.height,C.y+C.h);` +
+        `if(x1<=x0||y1<=y0)return;${box}={x:x0,y:y0,width:x1-x0,height:y1-y0}}` +
+        `if(${box}){${gl2}.enable(${gl2}.SCISSOR_TEST)`;
+      out = out.replace(scRe, clipped);
+
       return { code: out, map: null };
     },
   };

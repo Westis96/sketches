@@ -113,11 +113,16 @@ export class StudioGL {
     gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
+  /** Device-pixel clip (GL coordinates, origin bottom-left) applied to every draw; null = none. */
+  private clip: { x: number; y: number; w: number; h: number } | null = null;
+  setClip(clip: { x: number; y: number; w: number; h: number } | null) { this.clip = clip; }
+
   private begin() {
     const gl = this.gl;
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.viewport(0, 0, this.w, this.h);
-    gl.disable(gl.SCISSOR_TEST);
+    if (this.clip) { gl.enable(gl.SCISSOR_TEST); gl.scissor(this.clip.x, this.clip.y, this.clip.w, this.clip.h); }
+    else gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.DEPTH_TEST);
     gl.bindVertexArray(this.vao);
     gl.activeTexture(gl.TEXTURE0);

@@ -132,6 +132,9 @@ const DEFAULT_SETTINGS: Settings = {
   pencilAuto: true,
 };
 
+/** A previous committed image and the view it was rendered at, shown transformed while a rebuild runs. */
+interface Overlay { tex: WebGLTexture; view: View }
+
 interface Live {
   id: number;
   pointerType: string;
@@ -187,7 +190,7 @@ export class Studio {
   private redoSnaps: Array<{ count: number; tex: WebGLTexture }> = [];
   private texPool: WebGLTexture[] = [];
   /** Progressive rebuild in flight (large drawings after a view or paper change). */
-  private pending: { records: StrokeRecord[]; index: number; scratch: WebGLTexture; raf: number } | null = null;
+  private pending: { records: StrokeRecord[]; index: number; scratch: WebGLTexture; raf: number; overlay: Overlay | null } | null = null;
 
   private live: Live | null = null;
   private previewQueued = false;
@@ -838,19 +841,36 @@ export class Studio {
     this.finishProgressive(p);
   }
 
-  private cancelPaint() {
+  /** Cancels a progressive rebuild; returns its overlay (still valid) for the caller to reuse or release. */
+  private cancelPaint(): Overlay | null {
     const p = this.pending;
-    if (!p) return;
+    if (!p) return null;
     cancelAnimationFrame(p.raf);
     this.releaseTexture(p.scratch);
     this.pending = null;
+    return p.overlay;
   }
 
   private finishProgressive(p: NonNullable<typeof this.pending>) {
     const sgl = this.sgl!;
     sgl.snapshot(sgl.committedTex);
     this.releaseTexture(p.scratch);
+    if (p.overlay) this.releaseTexture(p.overlay.tex);
     this.pending = null;
+  }
+
+  /** What to show for a cheap transformed preview: the image being replaced while a rebuild runs, else the committed one. */
+  private displaySource(): Overlay {
+    return this.pending?.overlay ?? { tex: this.sgl!.committedTex, view: this.committedView };
+  }
+
+  /** Draws `o.tex` (rendered at `o.view`) transformed to the current committed view, over the paper colour. */
+  private drawOverlay(o: Overlay) {
+    const sgl = this.sgl!, v = this.committedView, c = o.view, dpr = this.dpr;
+    const k = v.zoom / c.zoom;
+    const bg = paperPresets[this.settings.paper].bg;
+    sgl.clearColor(bg[0], bg[1], bg[2]);
+    sgl.blitRect(o.tex, (v.x - c.x * k) * dpr, (v.y - c.y * k) * dpr, this.glW * k, this.glH * k);
   }
 
   private paintOne(rec: StrokeRecord) {
@@ -865,14 +885,15 @@ export class Studio {
    * reads the canvas back while compositing, and on WebKit that read is only
    * reliable for content drawn in the same frame) and ends with a snapshot.
    */
-  private paintProgressive(baseTex: WebGLTexture, records: StrokeRecord[]) {
-    this.cancelPaint();
+  private paintProgressive(baseTex: WebGLTexture, records: StrokeRecord[], overlay: Overlay | null = null) {
+    const stale = this.cancelPaint();
+    if (stale && stale !== overlay) this.releaseTexture(stale.tex);
     const sgl = this.sgl!;
     const scratch = this.takeTexture();
     sgl.blit(baseTex);
     sgl.snapshot(scratch);
     this.lastCulled = 0;
-    const p = { records, index: 0, scratch, raf: 0 };
+    const p = { records, index: 0, scratch, raf: 0, overlay };
     this.pending = p;
     const step = () => {
       if (this.pending !== p) return;
@@ -881,8 +902,10 @@ export class Studio {
       while (p.index < p.records.length && performance.now() - t0 < PROGRESSIVE_BUDGET_MS) this.paintOne(p.records[p.index++]);
       sgl.snapshot(scratch);
       this.perf.rebuildMs += performance.now() - t0;
-      if (p.index >= p.records.length) { this.finishProgressive(p); this.perf.rebuilds++; }
-      else p.raf = requestAnimationFrame(step);
+      if (p.index >= p.records.length) { this.finishProgressive(p); this.perf.rebuilds++; return; }
+      // Keep the previous image on screen (transformed) until the exact one is ready.
+      if (p.overlay) this.drawOverlay(p.overlay);
+      p.raf = requestAnimationFrame(step);
     };
     step();
   }
@@ -893,7 +916,8 @@ export class Studio {
   }
 
   private paintInner(baseTex: WebGLTexture, records: StrokeRecord[]) {
-    this.cancelPaint();
+    const stale = this.cancelPaint();
+    if (stale) this.releaseTexture(stale.tex);
     const sgl = this.sgl!;
     sgl.blit(baseTex);
     this.lastCulled = 0;
@@ -909,15 +933,16 @@ export class Studio {
   }
 
   /** Rebuilds the committed image for the current stroke list from the newest usable checkpoint. */
-  private rebuild(progressive = false) {
+  private rebuild(progressive = false, overlay: Overlay | null = null) {
     const n = this.strokes.length;
     this.truncateCheckpoints(n);
     this.undoSnaps = this.undoSnaps.filter((s) => s.count < n || (this.releaseTexture(s.tex), false));
     const cp = this.checkpoints[this.checkpoints.length - 1];
     const base = cp ? cp.tex : this.sgl!.paperTex;
     const records = cp ? this.strokes.slice(cp.count) : this.strokes;
-    if (progressive && records.length > PROGRESSIVE_MIN_STROKES) this.paintProgressive(base, records);
-    else this.paint(base, records);
+    if (progressive && records.length > PROGRESSIVE_MIN_STROKES) { this.paintProgressive(base, records, overlay); return; }
+    this.paint(base, records);
+    if (overlay) this.releaseTexture(overlay.tex);
   }
 
   /** Appends a record whose pixels are already in the framebuffer. */
@@ -1046,23 +1071,25 @@ export class Studio {
     }
     gctx.putImageData(img, 0, 0);
     ctx.save();
+    // The pattern follows the transform: translating by the pan anchors the grain
+    // to the paper and scaling by the zoom makes it grow with it, so the texture
+    // stays put and scales like the drawing when panning and zooming.
     ctx.scale(dpr, dpr);
-    // The pattern origin follows the transform, so translating by the pan anchors
-    // the grain to the world; it keeps its paper-sized scale at any zoom.
     ctx.translate(v.x, v.y);
+    ctx.scale(v.zoom, v.zoom);
     ctx.fillStyle = ctx.createPattern(g, 'repeat')!;
-    ctx.fillRect(-v.x, -v.y, cssW, cssH);
+    ctx.fillRect(-v.x / v.zoom, -v.y / v.zoom, cssW / v.zoom, cssH / v.zoom);
     ctx.restore();
     this.sgl!.uploadPaper(c);
   }
 
   /** Paper or view changed: checkpoints embed the old paper/view, so replay everything. */
-  private repaintPaper() {
+  private repaintPaper(overlay: Overlay | null = null) {
     this.renderPaper();
     this.truncateCheckpoints(-1);
     this.dropSnaps(this.undoSnaps);
     this.dropSnaps(this.redoSnaps);
-    this.rebuild(true);
+    this.rebuild(true, overlay);
   }
 
   private resize(force = false) {
@@ -1108,11 +1135,12 @@ export class Studio {
       this.viewPreviewQueued = false;
       const sgl = this.sgl;
       if (!sgl) return;
-      const v = this.view, c = this.committedView, dpr = this.dpr;
+      const src = this.displaySource();
+      const v = this.view, c = src.view, dpr = this.dpr;
       const k = v.zoom / c.zoom;
       const bg = paperPresets[this.settings.paper].bg;
       sgl.clearColor(bg[0], bg[1], bg[2]);
-      sgl.blitRect(sgl.committedTex, (v.x - c.x * k) * dpr, (v.y - c.y * k) * dpr, this.glW * k, this.glH * k);
+      sgl.blitRect(src.tex, (v.x - c.x * k) * dpr, (v.y - c.y * k) * dpr, this.glW * k, this.glH * k);
     });
   }
 
@@ -1120,9 +1148,68 @@ export class Studio {
   private commitView() {
     const v = this.view, c = this.committedView;
     if (v.x === c.x && v.y === c.y && v.zoom === c.zoom) return;
-    this.committedView = { ...v };
-    this.repaintPaper();
+    const sgl = this.sgl!;
+    // A rebuild still in flight: its overlay is the last complete image, start over from it.
+    const inflight = this.cancelPaint();
+    if (v.zoom === c.zoom && !inflight) {
+      this.shiftCommitted(c, v);
+    } else {
+      // Keep the previous image on screen, transformed, until the exact rebuild lands.
+      const overlay: Overlay = inflight ?? { tex: sgl.committedTex, view: { ...c } };
+      if (!inflight) sgl.committedTex = this.takeTexture();
+      this.committedView = { ...v };
+      this.repaintPaper(overlay);
+    }
     this.scheduleSave();
+  }
+
+  /**
+   * Pan at the same zoom: nothing already on screen changes, so translate the
+   * committed image by a whole number of device pixels and render only the
+   * strips that came into view, with strokes clipped to them. The snap keeps the
+   * translated pixels and the freshly rendered ones on the same grid.
+   */
+  private shiftCommitted(from: View, to: View) {
+    const sgl = this.sgl!, dpr = this.dpr, { glW, glH } = this;
+    const sx = Math.round((to.x - from.x) * dpr), sy = Math.round((to.y - from.y) * dpr);
+    const snapped: View = { zoom: to.zoom, x: from.x + sx / dpr, y: from.y + sy / dpr };
+    this.view = snapped;
+    this.emit({ view: { ...snapped } });
+    this.committedView = { ...snapped };
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.renderPaper();
+    const old = sgl.committedTex;
+    sgl.committedTex = this.takeTexture();
+    sgl.blit(sgl.paperTex);
+    sgl.blitRect(old, sx, sy, glW, glH);
+    this.releaseTexture(old);
+    // Exposed strips (device px, y from top), made disjoint so nothing is composited twice.
+    const strips: Array<{ x: number; y: number; w: number; h: number }> = [];
+    if (sx > 0) strips.push({ x: 0, y: 0, w: sx, h: glH }); else if (sx < 0) strips.push({ x: glW + sx, y: 0, w: -sx, h: glH });
+    const x0 = sx > 0 ? sx : 0, x1 = sx < 0 ? glW + sx : glW;
+    if (sy > 0) strips.push({ x: x0, y: 0, w: x1 - x0, h: sy }); else if (sy < 0) strips.push({ x: x0, y: glH + sy, w: x1 - x0, h: -sy });
+    const t0 = performance.now();
+    for (const s of strips) {
+      if (s.w <= 0 || s.h <= 0) continue;
+      const clip = { x: s.x, y: glH - s.y - s.h, w: s.w, h: s.h };
+      const world = { minX: (s.x / dpr - snapped.x) / snapped.zoom, minY: (s.y / dpr - snapped.y) / snapped.zoom, maxX: ((s.x + s.w) / dpr - snapped.x) / snapped.zoom, maxY: ((s.y + s.h) / dpr - snapped.y) / snapped.zoom };
+      sgl.setClip(clip);
+      (globalThis as unknown as { __p5brushClip?: unknown }).__p5brushClip = clip;
+      try {
+        for (const rec of this.strokes) {
+          if (rec.tool !== 'clear' && !boundsIntersect(recordBounds(rec), world)) continue;
+          this.renderRecord(rec);
+          this.perf.paintStrokes++;
+        }
+      } finally {
+        sgl.setClip(null);
+        delete (globalThis as unknown as { __p5brushClip?: unknown }).__p5brushClip;
+      }
+    }
+    this.perf.rebuildMs += performance.now() - t0; this.perf.rebuilds++;
+    sgl.snapshot(sgl.committedTex);
   }
 
   /** Zooms by `factor` around a screen point (defaults to the viewport centre). */
@@ -1785,7 +1872,8 @@ export class Studio {
       setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),
       setTipSource: (s: string) => this.setTipSource(s), applySpecCode: (t: string) => this.applySpecCode(t),
       applyTemplate: (id: string) => this.applyTemplate(id), templates: BRUSH_TEMPLATES.map((t) => t.id),
-      rebuildAll: () => { this.repaintPaper(); this.flushPaint(); }, flushPaint: () => this.flushPaint(), isPainting: () => this.pending !== null, saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
+      rebuildAll: () => { this.repaintPaper(); this.flushPaint(); },
+      pan: (dx: number, dy: number) => { this.setViewLive({ ...this.view, x: this.view.x + dx, y: this.view.y + dy }); this.commitView(); }, flushPaint: () => this.flushPaint(), isPainting: () => this.pending !== null, saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
       setCulling: (on: boolean) => { this.cullingEnabled = on; },
       lastCulled: () => this.lastCulled,
       perf: () => ({ ...this.perf }),
