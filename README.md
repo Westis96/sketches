@@ -83,7 +83,7 @@ Experimental features stay behind switches in the Pencil lab: tilt shading (a fl
 makes a wider, lighter mark), the raw-input overlay and the full per-channel filter card.
 Open the lab with `?lab=1` in the URL, or build it in with `VITE_PENCIL_LAB=1`.
 
-Learn (`L`, or the graduation-cap button) is the Yousician-style path: seven levels, one
+The course is the home: a first visit lands on the Learn path (a winding path of missions in level colours, Duolingo-style), the free canvas is the Sketch mode one tap away, and returning users land where they were last. Learn (`L`, or the graduation-cap button) is the Yousician-style path: seven levels, one
 skill per mission, each mission a short generated drill, a guided piece traced with the
 full guide, then the same piece performed with less guide for stars. Every stroke is
 scored on shape, length, direction, pressure profile, speed and confidence (one pull, no
@@ -94,7 +94,7 @@ three-stroke loop; Perform gives three tries and a critique at the end with the
 costliest strokes, the dimension that cost the most, and your first Perform of that
 piece next to today's. A three-minute warm-up (lines, arcs, ellipses, waves) sits on the
 Path. Levels 0–2 are built; Levels 3–6 show as "soon". Routes live in the URL hash
-(`#/learn`, `#/learn/1.2`, `#/learn/1.2/perform`, `#/warmup`, `#/progress`), so the
+(`#/learn`, `#/learn/1.2`, `#/learn/1.2/perform`, `#/warmup`, `#/progress`, `#/sketch`), so the
 back button works and links can be shared. Progress is local; older bests migrate. The
 plan is in `p5brush-studio/docs/curriculum-plan.md`, the UX spec in `docs/practice-ux.md`.
 

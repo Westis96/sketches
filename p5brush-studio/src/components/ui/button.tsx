@@ -4,19 +4,22 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
 const buttonVariants = cva(
-  'relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[9px] text-[12px] font-medium outline-none press focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:shrink-0',
+  'relative inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-[9px] text-[12px] font-medium outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 disabled:pointer-events-none disabled:opacity-45 [&_svg]:pointer-events-none [&_svg]:shrink-0',
   {
     variants: {
       variant: {
-        default: 'bg-[var(--accent)] text-white shadow-[var(--shadow-sm)] hover:bg-[var(--accent-strong)]',
-        secondary: 'bg-[var(--accent-soft)] text-[var(--accent-strong)] hover:bg-[var(--accent-soft-strong)]',
-        outline: 'ring-1 ring-inset ring-[var(--hint-strong)] bg-transparent text-[var(--text-1)] hover:bg-[var(--low)]',
-        ghost: 'text-[var(--text-2)] hover:bg-[var(--low)] hover:text-[var(--text-1)] data-[active=true]:bg-[var(--hint-strong)] data-[active=true]:text-[var(--text-1)]',
+        default: 'press bg-[var(--accent)] text-white shadow-[var(--shadow-sm)] hover:bg-[var(--accent-strong)]',
+        /** The Duolingo button: solid face on a darker bottom edge that presses flat; colour from --lvl. */
+        duo: 'duo-btn duo-primary h-11 px-5 text-[13px]',
+        'duo-secondary': 'duo-btn duo-secondary h-11 px-5 text-[13px]',
+        secondary: 'press bg-[var(--accent-soft)] text-[var(--accent-strong)] hover:bg-[var(--accent-soft-strong)]',
+        outline: 'press ring-1 ring-inset ring-[var(--hint-strong)] bg-transparent text-[var(--text-1)] hover:bg-[var(--low)]',
+        ghost: 'press text-[var(--text-2)] hover:bg-[var(--low)] hover:text-[var(--text-1)] data-[active=true]:bg-[var(--hint-strong)] data-[active=true]:text-[var(--text-1)]',
         /** Toolbar unit: 40px icon button, accent when active. */
-        tool: 'h-10 w-10 rounded-[10px] text-[var(--text-1)] hover:bg-[var(--low)] active:bg-[var(--hint-strong)] data-[active=true]:bg-[var(--accent)] data-[active=true]:text-white data-[active=true]:hover:bg-[var(--accent-strong)] data-[popup-open]:bg-[var(--low)] [&_svg]:size-[18px] [&_svg]:stroke-[1.75]',
-        ink: 'bg-[var(--ink)] text-[var(--ink-fg)] hover:bg-[var(--ink-strong)]',
-        link: 'h-auto rounded-none px-0 text-[var(--accent-strong)] underline-offset-4 hover:underline',
-        danger: 'bg-[var(--danger)] text-white hover:brightness-95',
+        tool: 'press h-10 w-10 rounded-[10px] text-[var(--text-1)] hover:bg-[var(--low)] active:bg-[var(--hint-strong)] data-[active=true]:bg-[var(--accent)] data-[active=true]:text-white data-[active=true]:hover:bg-[var(--accent-strong)] data-[popup-open]:bg-[var(--low)] [&_svg]:size-[18px] [&_svg]:stroke-[1.75]',
+        ink: 'press bg-[var(--ink)] text-[var(--ink-fg)] hover:bg-[var(--ink-strong)]',
+        link: 'press h-auto rounded-none px-0 text-[var(--accent-strong)] underline-offset-4 hover:underline',
+        danger: 'press bg-[var(--danger)] text-white hover:brightness-95',
       },
       size: {
         default: 'h-9 px-3.5 [&_svg]:size-4',

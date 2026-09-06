@@ -895,15 +895,14 @@ export class Studio {
     if (secs > 0) { const progress = addSeconds(this.state.progress, secs); saveProgress(progress); this.emit({ progress }); }
   }
 
-  /** Fits the lesson box in the viewport, leaving room for the step card at the top. */
-  private frameLesson() {
+  /** Fits the lesson box in the viewport, leaving room for the session chrome; `dock` reserves room for the results panel. */
+  private frameLesson(dock: { right?: number; bottom?: number } = {}) {
     const { w, h } = LESSON_BOX;
-    // The step card sits top-centre on tablets and desktops (~180px tall) and below
-    // the quick actions on phones; the dock takes the bottom.
-    // A phone held sideways puts the card in a left column instead.
-    const short = this.cssH <= 500 && this.cssW >= 640;
-    const top = short ? 24 : this.cssW >= 768 ? 200 : 228, bottom = 72;
-    const left = short ? 324 : 24, right = 24;
+    // The session chrome: a top bar with the progress and the instruction, controls
+    // and the feedback bar along the bottom. A phone held sideways gets less of both.
+    const short = this.cssH <= 500;
+    const top = short ? 96 : this.cssW >= 640 ? 140 : 164, bottom = Math.max(short ? 76 : 104, dock.bottom ?? 0);
+    const left = 24, right = 24 + (dock.right ?? 0);
     const zoom = clamp(Math.min((this.cssW - left - right) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
     this.setViewLive({ zoom, x: left + (this.cssW - left - right) / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
     this.committedView = { ...this.view };
@@ -1090,6 +1089,8 @@ export class Studio {
     saveProgress(progress);
     this.emit({ progress, practice: { ...pr, status: 'complete', summary } });
     this.syncHistory();
+    // The results dock on the right on wide screens and rise from the bottom on phones: keep the drawing beside them.
+    this.frameLesson(this.cssW >= 768 ? { right: 400 } : { bottom: Math.round(this.cssH * 0.58) });
   }
 
   /** Engine-rendered thumbnails of the first Perform and today's, for the critique. */

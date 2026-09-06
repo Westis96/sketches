@@ -2,7 +2,8 @@
  * Hash routes for the studio. The engine owns the run; the route says which run
  * should exist and which sheets are open.
  *
- *   /                          free drawing
+ *   /                          redirect: first run → /learn, otherwise the last mode used
+ *   /sketch                    free drawing (the studio)
  *   /learn                     the Path
  *   /learn/:mission            the Path with a mission sheet on top
  *   /learn/:mission/:part      a session (trainer | guided | perform); ?tier=light for Perform
@@ -13,6 +14,7 @@ import type { Part, Tier } from './curriculum';
 import { TIERS } from './curriculum';
 
 export type Route =
+  | { kind: 'root' }
   | { kind: 'studio' }
   | { kind: 'learn' }
   | { kind: 'mission'; missionId: string }
@@ -24,6 +26,8 @@ const PARTS: Part[] = ['trainer', 'guided', 'perform'];
 
 export function parseRoute(pathname: string, search = ''): Route {
   const seg = pathname.split('/').filter(Boolean);
+  if (seg.length === 0) return { kind: 'root' };
+  if (seg[0] === 'sketch') return { kind: 'studio' };
   if (seg[0] === 'warmup') return { kind: 'warmup' };
   if (seg[0] === 'progress') return { kind: 'progress' };
   if (seg[0] === 'learn') {
@@ -43,6 +47,7 @@ export function parseRoute(pathname: string, search = ''): Route {
 export const routeKey = (r: Route) =>
   r.kind === 'session' ? `session:${r.missionId}:${r.part}:${r.tier ?? ''}` : r.kind === 'mission' ? `mission:${r.missionId}` : r.kind;
 
+export const sketchPath = () => '/sketch';
 export const learnPath = () => '/learn';
 export const missionPath = (id: string) => `/learn/${id}`;
 export const sessionPath = (id: string, part: Part, tier?: Tier) => `/learn/${id}/${part}${tier ? `?tier=${tier}` : ''}`;

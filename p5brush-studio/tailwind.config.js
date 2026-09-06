@@ -9,12 +9,14 @@ export default {
       fontFamily: {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+        display: ['Nunito', 'Inter', 'system-ui', 'sans-serif'],
       },
       // The built-in curves are too weak to read; `ease-out` / `ease-in-out` resolve to the tokens in index.css.
       transitionTimingFunction: {
         out: 'var(--ease-out)',
         'in-out': 'var(--ease-in-out)',
         drawer: 'var(--ease-drawer)',
+        spring: 'var(--ease-spring)',
       },
       // Duration scale: press 100–160, tooltips 125, menus 180–200, modals 250. UI stays under 300ms.
       transitionDuration: { 125: '125ms', 180: '180ms', 250: '250ms', 400: '400ms' },

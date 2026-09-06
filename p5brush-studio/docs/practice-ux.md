@@ -125,3 +125,78 @@ Staged tool disclosure and first launch into 0.1 (phase 3), the daily goal, stre
 Today's goal ring (phase 2), seeing modes and the Level 3–6 pieces beyond the ones that
 exist (phase 4), anything needing a backend (phase 5). The Path shows those missions as
 "soon" so the shape of the whole curriculum is visible from day one.
+
+---
+
+# v2: the Learn experience, from first principles
+
+The first build put Learn inside the studio: dialogs over the canvas, a floating step
+card, the tool dock still visible. That is a studio with lessons bolted on. Yousician and
+Duolingo are the other way round: the course is the home and the instrument is the
+thing you pick up inside a lesson. Version 2 restructures the app around that.
+
+## Principles
+
+1. **The course is the home.** First launch lands on the Path. The free canvas is a
+   mode called Sketch, one tap away, and returning users land wherever they were last.
+2. **One thing on screen.** A session shows the stroke to draw, a progress bar and the
+   canvas. No dock, no style panel, no HUD. Everything that isn't the stroke is gone.
+3. **Progress you can feel.** A fat bar that fills with every stroke, nodes that turn
+   the level's colour when done, stars under them, a START bubble that bobs on the
+   next one. The state of the whole course is legible from a scroll.
+4. **Feedback is a colour before it is a word.** Green, amber, red across the bottom
+   the instant the pen lifts, then the word and the number. Perform stays neutral.
+5. **Physical controls.** Primary buttons and path nodes have a bottom edge that
+   presses down (the Duolingo button). Presses are felt, not just seen.
+6. **Celebrate rarely, properly.** A run ends in a docked results panel: stars pop,
+   stat tiles arrive one after another, the drawing stays visible beside them. Nothing
+   else in the app animates like that.
+7. **Motion rules still hold.** Springs only on the things that are alive (the START
+   bubble, the progress bar); everything else is ease-out under 300 ms; keyboard
+   toggles are instant; reduced motion keeps the fades and drops the movement.
+
+## Structure
+
+| Route | Mode | Chrome |
+| --- | --- | --- |
+| `/` | redirect | first run → `/learn`, otherwise the last mode used |
+| `/learn`, `/learn/:mission` | Learn | header nav (Learn · Sketch · Progress), the winding path, a mission bubble anchored to its node |
+| `/learn/:mission/:part`, `/warmup` | Session | top bar (close, progress, streak), instruction, canvas, bottom controls, feedback bar; results panel when done |
+| `/progress` | Progress | header nav, stats, stars per level, then-vs-now |
+| `/sketch` | Sketch | the studio as before; the graduation cap goes to Learn |
+
+## Screens
+
+**Learn home.** A vertical path, one node per mission, nodes offset left and right in a
+gentle zigzag. Each level opens with a banner in its own colour (Level 1 ochre, 2 olive,
+3 teal, 4 indigo, 5 plum, 6 ink, 0 sienna) carrying the theme, a one-line description
+and, when the level's capstone is still open, "Jump here?". Nodes are 68 px discs with
+a 6 px bottom edge; done nodes are solid in the level colour with a check and three
+small stars beneath; the next node is larger, in colour, with a bobbing START bubble;
+open nodes are outlined; locked nodes grey with a lock; unbuilt nodes dashed with
+"soon". A piece's engine-rendered thumbnail sits inside its disc. Tapping a node opens
+a bubble under it with the mission's parts, bests, the Perform tier and a Start button
+in the level colour.
+
+**Session.** Top bar: close, a 14 px progress bar in the level colour that fills per
+stroke with a small overshoot, the streak flame when it reaches two. Below it the
+instruction in the display face, then the brush chip and, outside Perform, the tier
+pips. The canvas takes the rest. Bottom left: Undo, Skip, Loop, Restart as quiet
+buttons. Bottom right (full width on phones): the feedback bar, which slides up in the
+outcome's colour, shows the word, the ring and the number, and slides away after two
+seconds; a new stroke retargets it rather than restarting it. Closing a Perform with
+strokes on the page asks first, in a small dialog.
+
+**Results.** A docked panel: a bottom sheet on phones, a right column on wide screens,
+so the drawing stays visible with the costly strokes highlighted. A colour band with
+the heading and the stars, then stat tiles (Score, Clean, Best) arriving 80 ms apart,
+the critique, then-vs-now, and a sticky action row with a fat Continue.
+
+**Progress.** A page, not a dialog: the three numbers, stars per level as bars in the
+level colours, then-vs-now pairs.
+
+## What stays
+
+The engine, the scoring, the assist tiers, routes, the studio's own chrome and its
+Ink & Paper theme. The display face changes to Nunito for headings, nodes and primary
+buttons so the course reads as friendly; body text stays Inter.

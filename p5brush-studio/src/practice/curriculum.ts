@@ -6,6 +6,7 @@
  * run. Everything is declared here so the Path can show the whole shape of the
  * course, including missions whose piece is not built yet.
  */
+import type React from 'react';
 import type { Point } from '@/engine/records';
 import { LESSONS, lessonById } from './lessons';
 import { bell, flat, frame, spline, taperOut, type Profile, type XY } from './geometry';
@@ -46,48 +47,50 @@ export interface Mission {
   planned?: boolean;
 }
 
-export interface Level { n: number; theme: string; missions: Mission[] }
+export interface Level { n: number; theme: string; blurb: string; missions: Mission[] }
+/** CSS variables of a level's colour and its bottom edge, for `style`. */
+export const levelVars = (n: number) => ({ '--lvl': `var(--lvl-${n})`, '--lvl-deep': `var(--lvl-${n}-deep)` }) as React.CSSProperties;
 
 const m = (id: string, title: string, skill: SkillId, brush: string, about: string, o: Partial<Mission> = {}): Mission =>
   ({ id, level: +id.split('.')[0], title, skill, brush, about, kind: 'trace', ...o });
 
 export const LEVELS: Level[] = [
-  { n: 0, theme: 'Hold the pen', missions: [
+  { n: 0, theme: 'Hold the pen', blurb: 'Three strokes to meet the brush.', missions: [
     m('0.1', 'Three strokes', 'line', 'liner', 'Pull a line, draw a curve, press and release. Three minutes.', { trainer: 'hold' }),
   ] },
-  { n: 1, theme: 'Lines', missions: [
+  { n: 1, theme: 'Lines', blurb: 'Straight, curved, cornered, and always from the dot.', missions: [
     m('1.1', 'Dot to dot', 'confidence', 'liner', 'Two dots, one pull. Ghost it in the air first.', { trainer: 'lines', piece: 'fence' }),
     m('1.2', 'Curves and waves', 'line', 'liner', 'One smooth arc, then a wave without stopping.', { trainer: 'curves', piece: 'waves' }),
     m('1.3', 'Corners', 'line', 'graphite', 'Stop, change direction, go. Corners stay sharp.', { trainer: 'corners', piece: 'mountains' }),
     m('1.4', 'Start at the dot', 'direction', 'liner', 'Every stroke has a beginning. Go the way the arrow points.', { trainer: 'directions', piece: 'kites' }),
   ] },
-  { n: 2, theme: 'Pressure', missions: [
+  { n: 2, theme: 'Pressure', blurb: 'Taper, swell, thick and thin, fade.', missions: [
     m('2.1', 'Taper out', 'startstop', 'bristle', 'Press at the root, lift as you go: the bristles fade.', { trainer: 'taper', piece: 'grass' }),
     m('2.2', 'Swell', 'pressure', 'nib', 'Light in, heavy in the middle, light out.', { trainer: 'swell', piece: 'rain' }),
     m('2.3', 'Thick and thin', 'pressure', 'nib', 'The nib is a pressure instrument. Press at both ends, ease off between.', { trainer: 'thickthin', piece: 'bamboo' }),
     m('2.4', 'Fade and lift', 'startstop', 'bristle', 'A long stroke that disappears at the tip.', { trainer: 'fade', piece: 'reeds' }),
   ] },
-  { n: 3, theme: 'Shape and direction', missions: [
+  { n: 3, theme: 'Shape and direction', blurb: 'Ellipses, S-curves, and what the tip does when you turn it.', missions: [
     m('3.1', 'Ellipses in planes', 'shape', 'graphite', 'Round, closed, and inside the box.', { trainer: 'ellipses', piece: 'pebbles', planned: true }),
     m('3.2', 'S-curves and spirals', 'shape', 'liner', 'Two bends in one motion.', { trainer: 'scurves', piece: 'vine', planned: true }),
     m('3.3', 'The angled tip', 'direction', 'chisel', 'The chisel changes width with direction. Use it.', { trainer: 'chiselangles', piece: 'ribbon', planned: true }),
     m('3.4', 'Lean and roll', 'direction', 'nib', 'Barrel roll and tilt turn the nib.', { trainer: 'curves', piece: 'feather', planned: true }),
     m('3.5', 'Outline over wash', 'layering', 'wash', 'Wet first, then one clean line around it.', { trainer: 'curves', piece: 'leaf', brushLabel: 'wash + liner' }),
   ] },
-  { n: 4, theme: 'Seeing', missions: [
+  { n: 4, theme: 'Seeing', blurb: 'Draw what is there, not what you know. None of this is tracing.', missions: [
     m('4.1', 'Blind contour', 'seeing', 'liner', 'The ink is hidden until you lift. Look at the subject, not the page.', { piece: 'hand', kind: 'seeing', planned: true }),
     m('4.2', 'Negative space', 'seeing', 'wash', 'Paint the space around it.', { piece: 'chair', kind: 'seeing', planned: true }),
     m('4.3', 'Upside-down copy', 'seeing', 'graphite', 'The reference is flipped. Draw the lines you see.', { piece: 'portrait', kind: 'seeing', planned: true }),
     m('4.4', 'From memory', 'seeing', 'liner', 'Ten seconds to look. Then it is gone.', { piece: 'cup', kind: 'seeing', planned: true }),
   ] },
-  { n: 5, theme: 'Value and layering', missions: [
+  { n: 5, theme: 'Value and layering', blurb: 'Washes, order, soft edges and rhythm.', missions: [
     m('5.1', 'Flat bands', 'layering', 'wash', 'Edge to edge, even pressure, no stopping.', { trainer: 'bands', piece: 'seabands', planned: true }),
     m('5.2', 'Light before dark', 'layering', 'wash', 'Order matters: the pale wash goes down first.', { trainer: 'bands', piece: 'stones', planned: true }),
     m('5.3', 'Spray and soft edges', 'speed', 'spray', 'Speed gives the spray its edge.', { trainer: 'ellipses', piece: 'moon', planned: true }),
     m('5.4', 'Hatching rhythm', 'repetition', 'ballpoint', 'Parallel, evenly spaced, same speed.', { trainer: 'hatching', piece: 'cube', planned: true }),
     m('5.5', 'Layered ridges', 'layering', 'bristle', 'Far to near, light to dark.', { trainer: 'curves', piece: 'dusk' }),
   ] },
-  { n: 6, theme: 'Compose', missions: [
+  { n: 6, theme: 'Compose', blurb: 'Whole pieces, your brush, a reference beside you.', missions: [
     m('6.1', 'Petals and centre', 'composition', 'wash', 'A flower from the centre out.', { trainer: 'curves', piece: 'bloom', brushLabel: 'wash + chisel' }),
     m('6.2', 'Living line', 'composition', 'brushpen', 'One line that thickens and thins as it moves.', { trainer: 'scurves', piece: 'koi', planned: true }),
     m('6.3', 'From a reference', 'composition', 'liner', 'No guide. Your brush. Match the silhouette.', { piece: 'teacup', kind: 'free', planned: true }),
