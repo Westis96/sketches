@@ -1,5 +1,8 @@
 import { useNavigate } from 'react-router';
-import { BarChart3, GraduationCap, PenLine, Star, Timer } from 'lucide-react';
+import { BarChart3, GraduationCap, PenLine, Star, Timer, Volume2, VolumeX } from 'lucide-react';
+import { TlTip } from '@/components/TlButton';
+import { useSoundEnabled } from '@/hooks/useSfx';
+import { sfx } from '@/sound/sfx';
 import { useStudioState } from '@/hooks/useStudio';
 import { MISSIONS } from '@/practice/curriculum';
 import { learnPath, progressPath, sketchPath, warmupPath } from '@/practice/routes';
@@ -17,6 +20,7 @@ export function LearnNav({ active }: { active: 'learn' | 'progress' }) {
   const progress = useStudioState((s) => s.progress);
   const stars = MISSIONS.reduce((a, x) => a + (progress.missions[x.id]?.perform?.stars ?? 0), 0);
   const minutes = Math.round((progress.seconds ?? 0) / 60);
+  const sound = useSoundEnabled();
   return (
     <div className="safe-t sticky top-0 z-10 bg-[var(--paper)]/85 px-3 pb-2 pt-2 backdrop-blur-md">
       <div className="mx-auto flex max-w-[560px] items-center gap-2">
@@ -43,6 +47,11 @@ export function LearnNav({ active }: { active: 'learn' | 'progress' }) {
           <button type="button" data-testid="today-warmup" onClick={() => navigate(warmupPath())} className="duo-btn duo-secondary h-9 px-3 text-[11.5px] normal-case tracking-normal" style={{ '--lvl': 'var(--accent)' } as React.CSSProperties}>
             <Timer className="h-3.5 w-3.5 text-[var(--accent)]" />Warm-up
           </button>
+          <TlTip label={sound ? 'Sound on' : 'Sound off'} side="bottom">
+            <button type="button" data-testid="sound-toggle" aria-pressed={sound} aria-label={sound ? 'Turn sound off' : 'Turn sound on'} onClick={() => sfx.toggle()} className="press grid h-9 w-9 place-items-center rounded-full bg-[var(--surface-solid)] text-[var(--text-2)] shadow-[var(--shadow-sm)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]">
+              {sound ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
+            </button>
+          </TlTip>
         </div>
       </div>
     </div>

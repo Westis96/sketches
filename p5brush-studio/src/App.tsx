@@ -22,6 +22,8 @@ import { PencilLab } from '@/components/PencilLab';
 import { InputFilters } from '@/components/InputFilters';
 import { PENCIL_LAB } from '@/lab';
 import { usePersistedState } from '@/hooks/usePersistedState';
+import { useSfx } from '@/hooks/useSfx';
+import { sfx } from '@/sound/sfx';
 import { learnPath, missionPath, parseRoute, routeKey, sessionPath, sketchPath, warmupPath, type Route } from '@/practice/routes';
 import { FlaskConical, PanelLeftClose } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -29,7 +31,7 @@ import { Card } from '@/components/ui/card';
 import { Kbd } from '@/components/ui/kbd';
 
 declare global {
-  interface Window { __studio?: ReturnType<Studio['debug']> }
+  interface Window { __studio?: ReturnType<Studio['debug']>; __sfx?: typeof sfx }
 }
 
 /**
@@ -81,6 +83,7 @@ function Shell() {
   const practice = useStudioState((s) => s.practice);
   const firstRun = useStudioState((s) => s.firstRun);
   const [labOpen, setLabOpen] = usePersistedState('p5brush-studio:lab:open', true);
+  useSfx(studio);
   const location = useLocation();
   const navigate = useNavigate();
   const route = useMemo(() => parseRoute(location.pathname, location.search), [location.pathname, location.search]);
@@ -118,6 +121,7 @@ function Shell() {
     studio.attach(canvas);
     setCanvasEl(canvas);
     window.__studio = studio.debug();
+    window.__sfx = sfx;
     return () => studio.dispose();
   }, [studio]);
 

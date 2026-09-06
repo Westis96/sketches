@@ -8,6 +8,7 @@ import { levelVars, missionById, playedParts, type Mission, type Part } from '@/
 import { demoMotion, labelAnchor, pressureVaries, teachSlides, type DemoStroke, type TeachSlide } from '@/practice/teach';
 import { missionPath, sessionPath } from '@/practice/routes';
 import { cn } from '@/lib/utils';
+import { sfx } from '@/sound/sfx';
 
 const PART_NAME: Record<Part, string> = { teach: 'Lesson', trainer: 'Trainer', guided: 'Guided piece', perform: 'Perform' };
 
@@ -96,27 +97,31 @@ function Slides({ mission }: { mission: Mission }) {
     setTake((t) => t + 1);
     const demos = slides[k]?.demos ?? [];
     for (let d = 0; d < demos.length; d++) {
+      // The pen lands after the demo's lead-in beat.
+      window.setTimeout(() => { if (run.current === id) sfx.play('penDown'); }, demos[d].delay ?? 0);
       const ok = await studio.playDemo(demos[d]);
       if (run.current !== id) return;
       if (!ok) return;
       setPlayed(d + 1);
+      if (demos[d].label && demos[d].good !== undefined) sfx.play(demos[d].good ? 'good' : 'bad');
     }
   }, [studio, slides]);
   useEffect(() => { void play(i); }, [i, play]);
   useEffect(() => () => { run.current++; studio.stopDemo(); }, [studio]);
 
   const finish = () => { studio.markTaught(mission.id); navigate(sessionPath(mission.id, nextPart)); };
-  const go = (k: number) => { setDir(k > i ? 'fwd' : 'back'); setI(Math.max(0, Math.min(slides.length - 1, k))); };
-  const next = () => (last ? finish() : go(i + 1));
-  const back = () => go(i - 1);
+  // Buttons already click; a keyboard slide change gets the page cue instead.
+  const go = (k: number, viaKey = false) => { if (k === i) return; if (viaKey) sfx.play('slide'); setDir(k > i ? 'fwd' : 'back'); setI(Math.max(0, Math.min(slides.length - 1, k))); };
+  const next = (viaKey = false) => (last ? finish() : go(i + 1, viaKey));
+  const back = (viaKey = false) => go(i - 1, viaKey);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement;
       if (['input', 'textarea', 'select'].includes(el.tagName?.toLowerCase()) || el.isContentEditable) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
-      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); next(); }
-      else if (e.key === 'ArrowLeft') { e.preventDefault(); back(); }
+      if (e.key === 'ArrowRight' || e.key === 'Enter') { e.preventDefault(); next(true); }
+      else if (e.key === 'ArrowLeft') { e.preventDefault(); back(true); }
       else if (e.key.toLowerCase() === 'r') { e.preventDefault(); void play(i); }
     };
     window.addEventListener('keydown', onKey);
@@ -221,8 +226,8 @@ function Slides({ mission }: { mission: Mission }) {
               <Button variant="duo-secondary" size="icon" className="h-11 w-11 shrink-0" aria-label="Replay" onClick={() => void play(i)} data-testid="teach-replay"><RotateCcw className="h-4 w-4" /></Button>
             </TlTip>
           )}
-          {i > 0 && <Button variant="duo-secondary" size="icon" className="h-11 w-11 shrink-0" aria-label="Previous slide" onClick={back} data-testid="teach-back"><ArrowLeft className="h-4 w-4" /></Button>}
-          <Button variant="duo" className="min-w-0 flex-1" onClick={next} data-testid="teach-next">
+          {i > 0 && <Button variant="duo-secondary" size="icon" className="h-11 w-11 shrink-0" aria-label="Previous slide" onClick={() => back()} data-testid="teach-back"><ArrowLeft className="h-4 w-4" /></Button>}
+          <Button variant="duo" className="min-w-0 flex-1" onClick={() => next()} data-testid="teach-next">
             <span className="truncate">{last ? `Try it · ${PART_NAME[nextPart]}` : 'Next'}</span>{last ? <PenLine className="h-4 w-4 shrink-0" /> : <ArrowRight className="h-4 w-4 shrink-0" />}
           </Button>
         </div>

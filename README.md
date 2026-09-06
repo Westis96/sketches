@@ -93,7 +93,7 @@ you improve (full, centreline, dots, blind), steps back up after two misses and 
 three-stroke loop; Perform gives three tries and a critique at the end with the
 costliest strokes, the dimension that cost the most, and your first Perform of that
 piece next to today's. A three-minute warm-up (lines, arcs, ellipses, waves) sits on the
-Path. Levels 0–2 are built; Levels 3–6 show as "soon". Routes live in the URL hash
+Path. Levels 0–2 are built; Levels 3–6 show as "soon". Short synthesized sound cues (a note per clean stroke, pitched by the score; a chime and star notes at the results; a tock when the lesson's pen lands) can be turned off from the Learn header. Routes live in the URL hash
 (`#/learn`, `#/learn/1.2`, `#/learn/1.2/perform`, `#/warmup`, `#/progress`, `#/sketch`), so the
 back button works and links can be shared. Progress is local; older bests migrate. The
 plan is in `p5brush-studio/docs/curriculum-plan.md`, the UX spec in `docs/practice-ux.md`.

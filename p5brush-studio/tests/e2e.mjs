@@ -365,6 +365,8 @@ try {
   await page.waitForTimeout(400);
   pr = await studio((s) => s.state.practice);
   const taught = await studio((s) => s.practice.progress().missions['1.1']?.taught);
+  const teachSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name));
+  check('the lesson cues the pen landing and the verdict of a compare stroke', teachSounds.includes('penDown') && teachSounds.includes('good') && teachSounds.includes('bad'), teachSounds.join(','));
   check('finishing the slides marks the mission taught and opens the trainer', taught === true && pr?.part === 'trainer' && (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer' && (await page.locator('[data-testid=practice-cue]').count()) === 1, JSON.stringify({ taught, part: pr?.part }));
 
   // Trainer: generated reps, every stroke accepted, feedback words.
@@ -377,8 +379,19 @@ try {
   check('the mission shows in the URL', (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer', await page.evaluate(() => location.hash));
   pr = await traceStep(0, { jitter: 14 });
   check('a drill accepts a rough stroke and says what to fix', pr.step === 1 && pr.feedback.accepted && pr.feedback.tip !== null, JSON.stringify(pr.feedback.tip));
+  check('a stroke with an instruction plays the tip cue', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'tip', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
   for (let i = 1; i < 12; i++) pr = await traceStep(i);
   check('finishing the drill summarises clean reps and records it', pr.status === 'complete' && pr.summary.clean >= 10 && (await studio((s) => s.practice.progress())).missions['1.1'].trainer.plays === 1, JSON.stringify(pr.summary));
+  check('the results play the completion chime', (await page.evaluate(() => window.__sfx.log.some((e) => e.name === 'complete'))) === true);
+  await page.evaluate(() => window.__sfx.setEnabled(false));
+  await studio((s) => s.practice.mission('1.1', 'trainer'));
+  pr = await traceStep(0);
+  const muted = await page.evaluate(() => ({ last: window.__sfx.log.at(-1), stored: localStorage.getItem('p5brush-studio:sound'), enabled: window.__sfx.enabled }));
+  check('sound off is remembered and silences the cues without losing them', muted.enabled === false && muted.stored === '0' && muted.last?.played === false && ['clean', 'great', 'tip'].includes(muted.last?.name), JSON.stringify(muted));
+  await page.evaluate(() => window.__sfx.setEnabled(true));
+  await studio((s) => s.practice.mission('1.1', 'trainer'));
+  pr = await traceStep(0, { jitter: 14 });
+  for (let i = 1; i < 12; i++) pr = await traceStep(i);
   check('the drill reports how much of its focus dimension was in band', pr.summary.focus?.dim === 'confidence' && pr.summary.focus.mean > 0 && (await page.locator('[data-testid=focus-mean]').count()) === 1 && (await page.locator('[data-testid=results-lesson]').count()) === 1, JSON.stringify(pr.summary.focus));
 
   // Guided: full guide, bandwidth pill, pressure note for a mouse, auto-adjust.

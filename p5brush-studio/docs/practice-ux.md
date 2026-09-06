@@ -280,3 +280,31 @@ mission bubble.
   rather than queueing behind it.
 - **Reduced motion** turns every entrance into a fade and the pill fill into a snap;
   the pen and the trace cursor keep moving because they carry information.
+
+## Sound
+
+Short synthesized cues (Web Audio, no samples, so the app stays one file), tuned to a
+C pentatonic scale so nothing clashes, with a soft limiter over the top. On by default;
+a speaker toggle in the Learn header and the session controls turns them off, and the
+choice is remembered.
+
+| Moment | Cue |
+| --- | --- |
+| Primary button, path node | a click, a softer tap |
+| Stroke in band | one triangle note, pitched by the score (E5 → C6) |
+| Stroke at 95+ | two rising notes |
+| Stroke with an instruction | two falling notes, quiet |
+| Stroke rejected | a low thud |
+| Loop rehearsal | a muted tick |
+| Guide steps down / up | rising / falling pair |
+| Streak of 3, then every 5 | three-note arpeggio |
+| Undo inside a session | a short downward slide |
+| Run complete | a four-note arpeggio, C major |
+| Stars | one note per star, timed with the pops (C6, E6, G6) |
+| New best | a high sparkle after the stars |
+| Lesson: pen lands | a soft tock, after the lead-in beat |
+| Lesson: compare stroke lands | a ding for the right way, a low buzz for the wrong way |
+| Lesson: keyboard slide change | a page tick (buttons already click) |
+
+Perform stays neutral: every counted stroke is the same tap, so the sound never grades
+a run before the results do.

@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { BookOpen, Flame, Lightbulb, Repeat, RotateCcw, SkipForward, Undo2, X } from 'lucide-react';
+import { BookOpen, Flame, Lightbulb, Repeat, RotateCcw, SkipForward, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { useSoundEnabled } from '@/hooks/useSfx';
+import { sfx } from '@/sound/sfx';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
@@ -91,6 +93,7 @@ export function SessionScreen() {
   const navigate = useNavigate();
   const practice = useStudioState((s) => s.practice);
   const [leaving, setLeaving] = useState(false);
+  const sound = useSoundEnabled();
   if (!practice || practice.status !== 'active') return null;
   const pr = practice;
   const st = pr.steps[pr.step];
@@ -152,6 +155,7 @@ export function SessionScreen() {
             {pr.loopOffer && <Button variant="secondary" size="sm" onClick={() => studio.loopStep()} data-testid="loop" className="text-[var(--lvl)]"><Repeat />Loop ×3</Button>}
             {pr.missionId && hasLesson(pr.missionId) && !perform && <TlTip label="Back to the lesson"><Button variant="ghost" size="sm" onClick={() => navigate(sessionPath(pr.missionId!, 'teach'))} data-testid="session-lesson"><BookOpen />Lesson</Button></TlTip>}
             <TlTip label="Start over" kbd="C"><Button variant="ghost" size="icon" onClick={() => studio.restartPractice()}><RotateCcw /></Button></TlTip>
+            <TlTip label={sound ? 'Sound on' : 'Sound off'}><Button variant="ghost" size="icon" aria-pressed={sound} aria-label={sound ? 'Turn sound off' : 'Turn sound on'} onClick={() => sfx.toggle()} data-testid="session-sound">{sound ? <Volume2 /> : <VolumeX />}</Button></TlTip>
           </Card>
           <div className="sm:ml-auto"><FeedbackBar fb={pr.feedback} perform={perform} /></div>
         </div>
