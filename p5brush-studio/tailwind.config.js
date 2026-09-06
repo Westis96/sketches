@@ -17,7 +17,7 @@ export default {
         drawer: 'var(--ease-drawer)',
       },
       // Duration scale: press 100–160, tooltips 125, menus 180–200, modals 250. UI stays under 300ms.
-      transitionDuration: { 125: '125ms', 180: '180ms', 250: '250ms' },
+      transitionDuration: { 125: '125ms', 180: '180ms', 250: '250ms', 400: '400ms' },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
@@ -40,5 +40,11 @@ export default {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    // Input-driven variants: `coarse:` for touch-first targets, `short:` for a phone held sideways.
+    ({ addVariant }) => {
+      addVariant('coarse', '@media (pointer: coarse)');
+      addVariant('short', '@media (max-height: 500px) and (min-width: 640px)');
+    },
+  ],
 };

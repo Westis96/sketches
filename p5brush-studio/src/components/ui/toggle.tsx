@@ -13,9 +13,9 @@ const toggleVariants = cva(
         outline: 'border border-[var(--hint-strong)] bg-transparent hover:bg-[var(--low)] data-[pressed]:border-[var(--accent)] data-[pressed]:text-[var(--accent-strong)]',
       },
       size: {
-        default: 'h-8 min-w-8 px-2',
-        sm: 'h-7 min-w-7 px-1.5 text-[11px]',
-        lg: 'h-9 min-w-9 px-2.5',
+        default: 'h-8 min-w-8 px-2 coarse:h-9 coarse:min-w-9',
+        sm: 'h-7 min-w-7 px-1.5 text-[11px] coarse:h-8 coarse:min-w-8',
+        lg: 'h-9 min-w-9 px-2.5 coarse:h-10 coarse:min-w-10',
       },
     },
     defaultVariants: { variant: 'default', size: 'default' },

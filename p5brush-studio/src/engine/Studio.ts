@@ -781,9 +781,12 @@ export class Studio {
     const { w, h } = LESSON_BOX;
     // The step card sits top-centre on tablets and desktops (~180px tall) and below
     // the quick actions on phones; the dock takes the bottom.
-    const top = this.cssW >= 768 ? 200 : 228, bottom = 72, side = 24;
-    const zoom = clamp(Math.min((this.cssW - side * 2) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
-    this.setViewLive({ zoom, x: this.cssW / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
+    // A phone held sideways puts the card in a left column instead.
+    const short = this.cssH <= 500 && this.cssW >= 640;
+    const top = short ? 24 : this.cssW >= 768 ? 200 : 228, bottom = 72;
+    const left = short ? 324 : 24, right = 24;
+    const zoom = clamp(Math.min((this.cssW - left - right) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
+    this.setViewLive({ zoom, x: left + (this.cssW - left - right) / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
     this.committedView = { ...this.view };
     this.repaintPaper();
   }

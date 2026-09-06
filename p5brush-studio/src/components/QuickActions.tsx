@@ -15,7 +15,7 @@ async function copyText(text: string, label: string) {
 }
 
 /** Top-left: main menu + undo / redo / new sketch. */
-export function QuickActions({ onPractice }: { onPractice?: () => void }) {
+export function QuickActions({ onPractice, onHelp }: { onPractice?: () => void; onHelp?: () => void }) {
   const studio = useStudio();
   const canUndo = useStudioState((s) => s.canUndo);
   const canRedo = useStudioState((s) => s.canRedo);
@@ -39,6 +39,7 @@ export function QuickActions({ onPractice }: { onPractice?: () => void }) {
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={studio.drawSampleStroke}>Draw sample stroke<DropdownMenuShortcut>T</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuItem onSelect={() => onPractice?.()}>Practice lessons…<DropdownMenuShortcut>L</DropdownMenuShortcut></DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => onHelp?.()}>Help &amp; gestures<DropdownMenuShortcut>?</DropdownMenuShortcut></DropdownMenuItem>
           <DropdownMenuItem onSelect={() => studio.resetDefaults()}>Reset brush to myBrush defaults</DropdownMenuItem>
           <DropdownMenuItem onSelect={() => { void studio.copyDiagnostics(); }}>Copy diagnostics</DropdownMenuItem>
           <DropdownMenuSeparator />

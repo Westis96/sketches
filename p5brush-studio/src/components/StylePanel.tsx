@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 import { Check, ChevronRight, Plus } from 'lucide-react';
 import { toast } from 'sonner';
 import { Input } from '@/components/ui/input';
@@ -18,6 +18,8 @@ import { setTipDegrees, tipUsesDegrees } from '@/engine/tipShim';
 import { BRUSH_TEMPLATES, matchTemplate } from '@/engine/templates';
 import { PencilTab } from '@/components/PencilTab';
 import { cn } from '@/lib/utils';
+import { useMediaQuery, PHONE_QUERY } from '@/hooks/useMediaQuery';
+import { useSheetDrag } from '@/hooks/useSheetDrag';
 
 const swatches = [
   { name: 'Sumi ink', hex: '#1a1c23' },
@@ -92,7 +94,7 @@ function NumberField({ label, value, onCommit }: { label: string; value: number;
 type Tab = 'style' | 'brush' | 'pencil' | 'code';
 const TAB_KEY = 'p5brush-studio:tab';
 
-export function StylePanel({ open, instant }: { open: boolean; instant?: boolean }) {
+export function StylePanel({ open, instant, onOpenChange }: { open: boolean; instant?: boolean; onOpenChange?: (open: boolean) => void }) {
   const studio = useStudio();
   const s = useStudioState((st) => st.settings);
   const tipError = useStudioState((st) => st.tipError);
@@ -125,18 +127,36 @@ export function StylePanel({ open, instant }: { open: boolean; instant?: boolean
   const activeSize = sizes.find((z) => Math.abs(z.value - s.size) < 1e-6)?.id ?? '';
   const isCustomColor = !swatches.some((sw) => sw.hex === s.color.toLowerCase());
   const tipBad = !!tipError || tipPreviewBad;
+  // Phones get a bottom sheet (drawer curve, drag handle) instead of the floating column.
+  const phone = useMediaQuery(PHONE_QUERY);
+  const { sheetRef, handleProps } = useSheetDrag(() => onOpenChange?.(false), phone);
 
   return (
     <aside
+      ref={sheetRef as RefObject<HTMLElement>}
       data-instant={instant || undefined}
+      data-state={open ? 'open' : 'closed'}
       className={cn(
-        // Slides in from its edge of the screen; leaves a touch faster than it arrives.
-        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(var(--tl-vh)-5.25rem)] flex-col overflow-hidden transition-[opacity,transform] duration-200 ease-out sm:max-h-[calc(var(--tl-vh)-4.25rem)]',
-        !open && 'pointer-events-none translate-x-4 opacity-0 duration-150 motion-reduce:translate-x-0',
+        phone
+          ? cn(
+            'tl-panel pointer-events-auto flex max-h-[calc(var(--tl-vh)*0.62)] w-full flex-col overflow-hidden rounded-b-none rounded-t-[20px] transition-transform duration-400 ease-drawer',
+            !open && 'pointer-events-none translate-y-full duration-250',
+          )
+          : cn(
+            // Slides in from its edge of the screen; leaves a touch faster than it arrives.
+            'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(var(--tl-vh)-4.25rem)] flex-col overflow-hidden transition-[opacity,transform] duration-200 ease-out',
+            !open && 'pointer-events-none translate-x-4 opacity-0 duration-150 motion-reduce:translate-x-0',
+          ),
       )}
+      aria-hidden={!open}
     >
+      {phone && (
+        <div className="cursor-grab touch-none px-4 pb-1 pt-2.5 active:cursor-grabbing" aria-hidden {...handleProps}>
+          <div className="sheet-grip" />
+        </div>
+      )}
       <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-col">
-        <TabsList className="m-1.5 mb-0 grid h-8 grid-cols-4 rounded-[9px] bg-[var(--low)] p-0.5">
+        <TabsList className={cn('m-1.5 mb-0 grid h-8 grid-cols-4 rounded-[9px] bg-[var(--low)] p-0.5', phone && 'mx-3 h-9')}>
           {(['style', 'brush', 'pencil', 'code'] as const).map((t) => (
             <TabsTrigger key={t} value={t} className="h-7 rounded-[7px] text-[11.5px] font-medium capitalize text-[var(--text-2)] data-[active]:text-[var(--text-1)] data-[active]:shadow-[var(--shadow-sm)]">
               {t}
@@ -144,7 +164,7 @@ export function StylePanel({ open, instant }: { open: boolean; instant?: boolean
           ))}
         </TabsList>
 
-        <div className="tl-scroll tl-scroll-fade min-h-0 overflow-y-auto overflow-x-hidden">
+        <div className={cn('tl-scroll tl-scroll-fade min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain', phone && 'sheet-pad')}>
           {/* ------------------------------------------------------------ Style */}
           <TabsContent value="style" className="m-0 space-y-4 p-3">
             {/* Brush templates: previews are strokes rendered by the engine itself */}

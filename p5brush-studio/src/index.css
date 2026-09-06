@@ -127,6 +127,26 @@
     @apply press relative inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-1 text-[12px] font-medium outline-none;
     color: var(--text-2);
   }
+  /* Touch: every option is at least 36px tall (44px is the ideal; the panel is dense). */
+  @media (pointer: coarse) {
+    .tl-opt { min-height: 2.25rem; min-width: 2.25rem; }
+  }
+
+  /* Fixed chrome hugs the safe area (notch, home indicator) instead of the raw edge. */
+  .safe-t { top: max(0.5rem, env(safe-area-inset-top, 0px)); }
+  .safe-b { bottom: max(0.5rem, env(safe-area-inset-bottom, 0px)); }
+  .safe-l { left: max(0.5rem, env(safe-area-inset-left, 0px)); }
+  .safe-r { right: max(0.5rem, env(safe-area-inset-right, 0px)); }
+  /* Sheet content ends above the floating dock and the home indicator. */
+  .sheet-pad { padding-bottom: calc(4.5rem + env(safe-area-inset-bottom, 0px)); }
+  /* The grab handle of a bottom sheet. */
+  .sheet-grip { @apply mx-auto h-1 w-9 rounded-full; background: var(--hint-strong); }
+
+  /* Practice step card: below the quick actions on phones, top-centre on tablets
+     and up, a left column when the phone is held sideways. */
+  .practice-slot { position: fixed; z-index: 30; left: 0.5rem; right: 0.5rem; top: 3.5rem; }
+  @media (min-width: 768px) { .practice-slot { left: 50%; right: auto; top: 0.5rem; width: 420px; transform: translateX(-50%); } }
+  @media (max-height: 500px) and (min-width: 640px) { .practice-slot { left: 0.5rem; right: auto; top: 3.5rem; width: 300px; transform: none; } }
   @media (hover: hover) and (pointer: fine) {
     .tl-opt:hover { background: var(--low); color: var(--text-1); }
   }

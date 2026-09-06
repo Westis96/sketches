@@ -63,6 +63,13 @@ Eleven brush presets ship: chisel marker, fine liner, graphite pencil, watercolo
 calligraphy nib, dry bristle, brush pen, flat shader, ballpoint, charcoal stick and spray
 stipple.
 
+On a phone the same interface rearranges itself: the style panel becomes a bottom sheet
+that slides up under the dock (drag the handle down, or flick it, to close), the practice
+picker and help open as sheets too, the help button moves into the main menu, and fixed
+chrome keeps clear of the notch and the home indicator. Touch targets grow on touch-first
+devices and hover styles apply only where a pointer can hover. Held sideways, the lesson
+card moves to a left column so the drawing keeps the height.
+
 Motion follows one small set of rules: keyboard shortcuts (`P`, `L`, `?`, `Esc`) change
 the interface with no animation, popovers and tooltips scale out of the control that opened
 them and open instantly once one is showing, presses squeeze the button by 3%, and only the

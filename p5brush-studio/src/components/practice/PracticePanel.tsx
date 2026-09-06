@@ -29,7 +29,7 @@ export function PracticePanel() {
   const fb = practice.feedback;
 
   return (
-    <Card className="enter-up pointer-events-auto relative w-full p-3 text-[12px] md:w-[420px]" data-testid="practice-panel">
+    <Card className="enter-up pointer-events-auto relative w-full p-3 text-[12px] short:p-2.5" data-testid="practice-panel">
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13.5px] font-semibold text-[var(--text-1)]">{lesson.title}</div>
@@ -49,15 +49,15 @@ export function PracticePanel() {
         ))}
       </div>
 
-      <div className="mt-2.5 flex items-start gap-2.5">
-        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)]" style={{ background: st.color }} />
+      <div className="mt-2.5 flex items-start gap-2.5 short:mt-2">
+        <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,0.08)] short:h-5 short:w-5" style={{ background: st.color }} />
         <div className="min-w-0 flex-1">
           <div className="text-[12px] font-medium text-[var(--text-1)]">{template?.name ?? st.template} <span className="text-[var(--text-3)]">· size {st.size}</span></div>
-          <div className="text-[11.5px] leading-snug text-[var(--text-2)]">{stepHint(steps, practice.step)}</div>
+          <div className="text-[11.5px] leading-snug text-[var(--text-2)] short:line-clamp-2">{stepHint(steps, practice.step)}</div>
         </div>
       </div>
 
-      <div className="mt-2.5 flex items-center gap-1">
+      <div className="mt-2.5 flex items-center gap-1 short:mt-1.5">
         <TlTip label="Undo the last traced stroke" kbd="⌘Z" side="bottom">
           <Button variant="ghost" size="sm" disabled={practice.step === 0} onClick={studio.undo}><Undo2 />Undo</Button>
         </TlTip>

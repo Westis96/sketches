@@ -146,28 +146,28 @@ function Shell() {
 
       {/* Practice: step card top-centre (below the quick actions on phones), result card above the dock */}
       {practice?.status === 'active' && (
-        <div className="pointer-events-none fixed left-2 right-2 top-[56px] z-30 md:left-1/2 md:right-auto md:top-2 md:w-[420px] md:-translate-x-1/2">
+        <div className="practice-slot pointer-events-none">
           <PracticePanel />
         </div>
       )}
       {!practice && (
-        <div className="pointer-events-none fixed bottom-16 left-1/2 z-30 -translate-x-1/2">
+        <div className="pointer-events-none fixed bottom-[calc(3.5rem+max(0.5rem,env(safe-area-inset-bottom)))] left-1/2 z-30 -translate-x-1/2">
           <WelcomeCard onTryLesson={() => setPracticeOpen(true)} />
         </div>
       )}
       {practice?.status === 'complete' && (
-        <div className="pointer-events-none fixed bottom-16 left-1/2 z-30 -translate-x-1/2">
+        <div className="pointer-events-none fixed bottom-[calc(3.5rem+max(0.5rem,env(safe-area-inset-bottom)))] left-1/2 z-30 -translate-x-1/2">
           <PracticeComplete onChooseLesson={() => setPracticeOpen(true)} />
         </div>
       )}
       <PracticePicker open={practiceOpen} instant={viaKey} onOpenChange={(o, key) => { if (key) setViaKey(true); setPracticeOpen(o); }} />
 
       {/* Chrome: fixed layers that never take pointer events except on their own controls */}
-      <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
-        <QuickActions onPractice={() => setPracticeOpen(true)} />
+      <div className="safe-l safe-t pointer-events-none fixed z-30 flex items-start gap-2">
+        <QuickActions onPractice={() => { setViaKey(false); setPracticeOpen(true); }} onHelp={() => { setViaKey(false); setHelpOpen(true); }} />
       </div>
       {PENCIL_LAB && !practice && (labOpen ? (
-        <div className="pointer-events-none fixed left-2 top-14 z-30 flex max-h-[calc(100%-120px)] flex-col gap-2 overflow-y-auto overscroll-contain pr-1" data-testid="lab-column">
+        <div className="safe-l pointer-events-none fixed top-14 z-30 flex max-h-[calc(100%-120px)] flex-col gap-2 overflow-y-auto overscroll-contain pr-1" data-testid="lab-column">
           <div className="pointer-events-auto flex items-center justify-between px-1 text-[11px] font-medium text-[var(--text-3)]">
             <span>Lab</span>
             <Button variant="ghost" size="icon-xs" aria-label="Hide the lab panels (K)" title="Hide the lab panels (K)" onClick={() => setLabOpen(false)}><PanelLeftClose /></Button>
@@ -176,7 +176,7 @@ function Shell() {
           <PencilLab defaultOpen={false} />
         </div>
       ) : (
-        <div className="pointer-events-none fixed left-2 top-14 z-30">
+        <div className="safe-l pointer-events-none fixed top-14 z-30">
           <Card size="sm" className="pointer-events-auto">
             <Button variant="ghost" size="sm" className="h-9 gap-1.5 px-2.5 text-[11px]" onClick={() => setLabOpen(true)} data-testid="lab-show">
               <FlaskConical className="text-[var(--accent-strong)]" />Lab<Kbd>K</Kbd>
@@ -184,18 +184,19 @@ function Shell() {
           </Card>
         </div>
       ))}
-      <div className="pointer-events-none fixed right-2 top-2 z-30">
-        <StylePanel open={panelOpen} instant={viaKey} />
+      {/* Style panel: a floating column top-right; on phones a bottom sheet under the dock */}
+      <div className="pointer-events-none fixed z-20 max-sm:inset-x-0 max-sm:bottom-0 sm:safe-r sm:safe-t sm:z-30">
+        <StylePanel open={panelOpen} instant={viaKey} onOpenChange={(o) => { setViaKey(false); setPanelOpen(o); }} />
       </div>
-      <div className="pointer-events-none fixed bottom-2 left-1/2 z-30 -translate-x-1/2">
-        <ToolDock panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} onPractice={() => setPracticeOpen((o) => !o)} />
+      <div className="safe-b pointer-events-none fixed left-1/2 z-30 -translate-x-1/2">
+        <ToolDock panelOpen={panelOpen} onTogglePanel={() => { setViaKey(false); setPanelOpen((o) => !o); }} onPractice={() => { setViaKey(false); setPracticeOpen((o) => !o); }} />
       </div>
-      <div className="pointer-events-none fixed bottom-2 left-2 z-30">
+      <div className="safe-b safe-l pointer-events-none fixed z-30">
         <Hud />
       </div>
-      <div className="pointer-events-none fixed bottom-2 right-2 z-30 flex items-center gap-2">
+      <div className="safe-b safe-r pointer-events-none fixed z-30 flex items-center gap-2">
         <Card size="sm" className="pointer-events-auto hidden sm:block">
-          <Button variant="ghost" size="sm" className="h-9 gap-2 px-3 text-[11px]" onClick={() => setPanelOpen((o) => !o)}>
+          <Button variant="ghost" size="sm" className="h-9 gap-2 px-3 text-[11px]" onClick={() => { setViaKey(false); setPanelOpen((o) => !o); }}>
             {panelOpen ? 'Hide styles' : 'Show styles'}<Kbd>P</Kbd>
           </Button>
         </Card>
