@@ -59,10 +59,10 @@ export function PracticeGuide() {
             </g>
             {/* the centreline: thin, so it never hides the ink; fades while drawing */}
             <g className="guide-layer" style={{ opacity: dim ? 0 : 0.95 }}>
-              <path className="guide-flow" d={d(cur.points)} stroke="var(--tl-selected)" strokeWidth={1.75} strokeDasharray="8 7" vectorEffect="non-scaling-stroke" />
-              {arrow && <path d={arrow} fill="var(--tl-selected)" stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
+              <path className="guide-flow" d={d(cur.points)} stroke="var(--accent)" strokeWidth={1.75} strokeDasharray="8 7" vectorEffect="non-scaling-stroke" />
+              {arrow && <path d={arrow} fill="var(--accent)" stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" />}
             </g>
-            <circle className="guide-start" cx={cur.points[0].x} cy={cur.points[0].y} r={9 / z} fill="var(--tl-selected)" stroke="#fff" strokeWidth={2.5} vectorEffect="non-scaling-stroke" style={{ opacity: dim ? 0 : 1, transition: 'opacity 160ms ease-out' }} />
+            <circle className="guide-start" cx={cur.points[0].x} cy={cur.points[0].y} r={9 / z} fill="var(--accent)" stroke="#fff" strokeWidth={2.5} vectorEffect="non-scaling-stroke" style={{ opacity: dim ? 0 : 1, transition: 'opacity 160ms ease-out' }} />
           </g>
         )}
       </g>

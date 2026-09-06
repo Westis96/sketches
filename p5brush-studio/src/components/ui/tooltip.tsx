@@ -1,30 +1,39 @@
-import * as React from "react"
-import * as TooltipPrimitive from "@radix-ui/react-tooltip"
+import * as React from 'react';
+import { Tooltip as BaseTooltip } from '@base-ui-components/react/tooltip';
+import { cn } from '@/lib/utils';
 
-import { cn } from "@/lib/utils"
+/** Base UI tooltip with the shadcn component names. Triggers accept `asChild` (rendered via Base UI's `render`). */
+const TooltipProvider = ({ delayDuration = 300, skipDelayDuration = 400, children }: { delayDuration?: number; skipDelayDuration?: number; children: React.ReactNode }) => (
+  <BaseTooltip.Provider delay={delayDuration} closeDelay={0} timeout={skipDelayDuration}>{children}</BaseTooltip.Provider>
+);
 
-const TooltipProvider = TooltipPrimitive.Provider
+const Tooltip = BaseTooltip.Root;
 
-const Tooltip = TooltipPrimitive.Root
+function TooltipTrigger({ asChild, children, ...props }: React.ComponentProps<typeof BaseTooltip.Trigger> & { asChild?: boolean }) {
+  if (asChild && React.isValidElement(children)) return <BaseTooltip.Trigger render={children as React.ReactElement<Record<string, unknown>>} {...props} />;
+  return <BaseTooltip.Trigger {...props}>{children}</BaseTooltip.Trigger>;
+}
 
-const TooltipTrigger = TooltipPrimitive.Trigger
+interface TooltipContentProps extends React.ComponentProps<typeof BaseTooltip.Popup> {
+  side?: 'top' | 'bottom' | 'left' | 'right';
+  align?: 'start' | 'center' | 'end';
+  sideOffset?: number;
+}
+const TooltipContent = React.forwardRef<HTMLDivElement, TooltipContentProps>(({ side = 'top', align = 'center', sideOffset = 6, className, ...props }, ref) => (
+  <BaseTooltip.Portal>
+    <BaseTooltip.Positioner side={side} align={align} sideOffset={sideOffset} className="z-50 outline-none">
+      <BaseTooltip.Popup
+        ref={ref}
+        className={cn(
+          'ui-tooltip rounded-[8px] bg-[var(--ink)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ink-fg)] shadow-md',
+          'transition-[opacity,transform] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0',
+          className,
+        )}
+        {...props}
+      />
+    </BaseTooltip.Positioner>
+  </BaseTooltip.Portal>
+));
+TooltipContent.displayName = 'TooltipContent';
 
-const TooltipContent = React.forwardRef<
-  React.ElementRef<typeof TooltipPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof TooltipPrimitive.Content>
->(({ className, sideOffset = 4, ...props }, ref) => (
-  <TooltipPrimitive.Portal>
-    <TooltipPrimitive.Content
-      ref={ref}
-      sideOffset={sideOffset}
-      className={cn(
-        "z-50 overflow-hidden rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground animate-in fade-in-0 zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2",
-        className
-      )}
-      {...props}
-    />
-  </TooltipPrimitive.Portal>
-))
-TooltipContent.displayName = TooltipPrimitive.Content.displayName
-
-export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider }
+export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };

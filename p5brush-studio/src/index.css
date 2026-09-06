@@ -4,40 +4,66 @@
 
 @layer base {
   :root {
-    /* shadcn tokens, tuned to a tldraw-like palette */
-    --background: 210 20% 98%;
-    --foreground: 0 0% 18%;
-    --card: 0 0% 100%;
-    --card-foreground: 0 0% 18%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 0 0% 18%;
-    --primary: 214 84% 56%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 0 0% 95%;
-    --secondary-foreground: 0 0% 18%;
-    --muted: 0 0% 95%;
-    --muted-foreground: 0 0% 55%;
-    --accent: 0 0% 94%;
-    --accent-foreground: 0 0% 18%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 0 0% 100%;
-    --border: 0 0% 0% / 0.08;
-    --input: 0 0% 0% / 0.1;
-    --ring: 214 84% 56%;
-    --radius: 0.5rem;
+    /* ---- Ink & Paper theme ------------------------------------------------
+       Warm paper neutrals, ink-dark text, a sienna accent (the studio's red
+       chalk). Every component reads these tokens; the legacy --tl-* names are
+       aliases kept for the classes below. */
+    --paper: #efece6;
+    --surface: rgba(253, 251, 247, 0.9);
+    --surface-solid: #fdfbf7;
+    --text-1: #1c1a17;
+    --text-2: #4b463f;
+    --text-3: #8a847a;
+    --low: rgba(28, 24, 18, 0.05);
+    --hint: rgba(28, 24, 18, 0.08);
+    --hint-strong: rgba(28, 24, 18, 0.13);
+    --accent: #b5451b;
+    --accent-strong: #983712;
+    --accent-soft: rgba(181, 69, 27, 0.11);
+    --accent-soft-strong: rgba(181, 69, 27, 0.18);
+    --ink: #1c1a17;
+    --ink-strong: #000;
+    --ink-fg: #f6f2ea;
+    --success: #2f8f4e;
+    --warning: #d98b1f;
+    --danger: #c9372c;
+    --shadow: 0 0 0 1px rgba(28, 24, 18, 0.07), 0 2px 6px -2px rgba(28, 24, 18, 0.1), 0 16px 40px -16px rgba(28, 24, 18, 0.28);
+    --shadow-sm: 0 0 0 1px rgba(28, 24, 18, 0.07), 0 1px 3px rgba(28, 24, 18, 0.1);
 
-    /* tldraw-flavoured design tokens */
-    --tl-panel: #fdfdfd;
-    --tl-text-1: #2d2d2d;
-    --tl-text-2: #4d4d4d;
-    --tl-text-3: #9a9a9a;
-    --tl-low: #f2f2f2;
-    --tl-hint: rgba(0, 0, 0, 0.055);
-    --tl-hint-strong: rgba(0, 0, 0, 0.1);
-    --tl-selected: #2f80ed;
-    --tl-danger: #e03131;
-    --tl-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 2px 4px rgba(0, 0, 0, 0.07), 0 6px 16px rgba(0, 0, 0, 0.08);
-    --tl-shadow-sm: 0 0 0 1px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.1);
+    /* shadcn tokens, expressed in the same palette */
+    --background: 40 21% 92%;
+    --foreground: 36 10% 10%;
+    --card: 40 43% 98%;
+    --card-foreground: 36 10% 10%;
+    --popover: 40 43% 98%;
+    --popover-foreground: 36 10% 10%;
+    --primary: 17 74% 41%;
+    --primary-foreground: 40 43% 98%;
+    --secondary: 36 10% 93%;
+    --secondary-foreground: 36 10% 10%;
+    --muted: 36 10% 93%;
+    --muted-foreground: 36 6% 51%;
+    --accent-hsl: 17 74% 41%;
+    --accent-foreground: 40 43% 98%;
+    --destructive: 3 64% 48%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 36 20% 5% / 0.08;
+    --input: 36 20% 5% / 0.1;
+    --ring: 17 74% 41%;
+    --radius: 0.625rem;
+
+    /* legacy aliases */
+    --tl-panel: var(--surface);
+    --tl-text-1: var(--text-1);
+    --tl-text-2: var(--text-2);
+    --tl-text-3: var(--text-3);
+    --tl-low: var(--low);
+    --tl-hint: var(--hint);
+    --tl-hint-strong: var(--hint-strong);
+    --tl-selected: var(--accent);
+    --tl-danger: var(--danger);
+    --tl-shadow: var(--shadow);
+    --tl-shadow-sm: var(--shadow-sm);
     /* Viewport height for floating panels: dynamic units where supported (iOS toolbars), plain vh otherwise */
     --tl-vh: 100vh;
   }
@@ -59,8 +85,10 @@
     touch-action: none;
   }
   body {
-    @apply bg-background font-sans text-[12px] antialiased;
-    color: var(--tl-text-1);
+    @apply font-sans text-[12.5px] antialiased;
+    background: var(--paper);
+    color: var(--text-1);
+    font-feature-settings: 'cv11', 'ss01', 'tnum' 0;
     -webkit-user-select: none;
     user-select: none;
   }
@@ -71,51 +99,31 @@
 }
 
 @layer components {
-  /* Floating UI surfaces */
-  .tl-panel {
-    background: var(--tl-panel);
-    border-radius: 13px;
-    box-shadow: var(--tl-shadow);
+  /* Floating UI surface: translucent paper, hairline, soft shadow */
+  .ui-surface {
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    -webkit-backdrop-filter: blur(18px) saturate(1.15);
+    backdrop-filter: blur(18px) saturate(1.15);
   }
-  .tl-panel-sm {
-    background: var(--tl-panel);
-    border-radius: 9px;
-    box-shadow: var(--tl-shadow-sm);
-  }
+  .tl-panel { @apply ui-surface rounded-[16px]; }
+  .tl-panel-sm { @apply ui-surface rounded-[10px]; box-shadow: var(--shadow-sm); }
 
-  /* 40px icon button, the tldraw toolbar unit */
-  .tl-btn {
-    @apply relative inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[9px] outline-none transition-colors duration-100;
-    color: var(--tl-text-1);
-  }
-  .tl-btn:hover:not(:disabled) { background: var(--tl-low); }
-  .tl-btn:active:not(:disabled) { background: var(--tl-hint-strong); }
-  .tl-btn:focus-visible { box-shadow: inset 0 0 0 2px var(--tl-selected); }
-  .tl-btn:disabled { color: var(--tl-text-3); cursor: default; }
-  .tl-btn[data-active='true'] { background: var(--tl-selected); color: #fff; }
-  .tl-btn[data-active='true']:hover { background: #2a74d8; }
-  .tl-btn > svg { width: 18px; height: 18px; stroke-width: 1.75; }
-
-  /* Style-panel option button (selection is quiet gray, like tldraw's style panel) */
+  /* Style-panel option button (quiet selection) */
   .tl-opt {
-    @apply relative inline-flex h-8 min-w-8 items-center justify-center rounded-[7px] px-1 text-[12px] font-medium outline-none transition-colors duration-100;
-    color: var(--tl-text-2);
+    @apply relative inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-1 text-[12px] font-medium outline-none transition-colors duration-100;
+    color: var(--text-2);
   }
-  .tl-opt:hover { background: var(--tl-low); }
-  .tl-opt:focus-visible { box-shadow: inset 0 0 0 2px var(--tl-selected); }
-  .tl-opt[data-state='on'], .tl-opt[data-active='true'] { background: var(--tl-hint-strong); color: var(--tl-text-1); }
+  .tl-opt:hover { background: var(--low); color: var(--text-1); }
+  .tl-opt:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
+  .tl-opt[data-pressed], .tl-opt[data-active='true'] { background: var(--accent-soft); color: var(--accent-strong); }
 
   .tl-label {
-    @apply mb-1.5 text-[11px] font-medium;
-    color: var(--tl-text-3);
+    @apply mb-1.5 text-[10.5px] font-semibold uppercase tracking-[0.07em];
+    color: var(--text-3);
   }
-  .tl-divider { width: 1px; height: 24px; background: var(--tl-hint-strong); margin: 0 4px; }
-  .tl-hdivider { height: 1px; background: var(--tl-hint); margin: 8px -12px; }
-
-  .tl-kbd {
-    @apply ml-2 inline-flex h-[18px] min-w-[18px] items-center justify-center rounded px-1 font-mono text-[10px];
-    background: rgba(255, 255, 255, 0.16);
-  }
+  .tl-divider { width: 1px; height: 22px; background: var(--hint-strong); margin: 0 5px; }
+  .tl-hdivider { height: 1px; background: var(--hint); margin: 8px -12px; }
 
   .tl-scroll::-webkit-scrollbar { width: 6px; }
   /* Soft edge where a scrolling panel is cut off. The content adds matching bottom
@@ -125,16 +133,16 @@
     mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
   }
   .tl-scroll-fade > * { padding-bottom: 1.75rem; }
-  .tl-scroll::-webkit-scrollbar-thumb { background: rgba(0, 0, 0, 0.14); border-radius: 9999px; border: 1px solid transparent; }
+  .tl-scroll::-webkit-scrollbar-thumb { background: rgba(28, 24, 18, 0.16); border-radius: 9999px; border: 1px solid transparent; }
 
   .code-area {
-    @apply w-full whitespace-pre overflow-auto rounded-lg p-2 font-mono text-[10.5px] leading-[1.5];
-    background: var(--tl-low);
-    color: var(--tl-text-1);
+    @apply w-full whitespace-pre overflow-auto rounded-[10px] p-2 font-mono text-[10.5px] leading-[1.5];
+    background: var(--low);
+    color: var(--text-1);
     border: 1px solid transparent;
   }
-  .code-area:focus { outline: none; border-color: var(--tl-selected); background: #fff; }
-  .code-area[data-invalid='true'] { border-color: var(--tl-danger); background: #fff5f5; }
+  .code-area:focus { outline: none; border-color: var(--accent); background: var(--surface-solid); }
+  .code-area[data-invalid='true'] { border-color: var(--danger); background: #fff5f3; }
 }
 
 /* Practice mode */
@@ -161,7 +169,7 @@
 }
 
 /* Touch devices: keyboard hints only add noise */
-@media (pointer: coarse) { .tl-kbd, .tl-kbd-hint { display: none; } }
+@media (pointer: coarse) { .tl-kbd-hint:not(.tl-kbd-static) { display: none; } }
 
 @keyframes welcome-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 .welcome-in { animation: welcome-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: 0.4s; }

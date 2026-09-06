@@ -7,6 +7,7 @@ import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
+import { Button } from '@/components/ui/button';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { TipPreview } from '@/components/TipPreview';
 import { TlTip } from '@/components/TlButton';
@@ -65,8 +66,8 @@ function Param({ label, value, display, min, max, step, onChange }: {
   return (
     <div>
       <div className="mb-1.5 flex items-center justify-between text-[11px]">
-        <span className="font-medium text-[var(--tl-text-3)]">{label}</span>
-        <span className="font-mono tabular-nums text-[var(--tl-text-2)]">{display}</span>
+        <span className="font-medium text-[var(--text-3)]">{label}</span>
+        <span className="font-mono tabular-nums text-[var(--text-2)]">{display}</span>
       </div>
       <Slider value={[value]} min={min} max={max} step={step} onValueChange={([v]) => onChange(v)} />
     </div>
@@ -77,12 +78,12 @@ function NumberField({ label, value, onCommit }: { label: string; value: number;
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);
   return (
-    <label className="block font-mono text-[10px] text-[var(--tl-text-3)]">
+    <label className="block font-mono text-[10px] text-[var(--text-3)]">
       <span>{label}</span>
       <Input
         type="number" step="0.01" value={text} onChange={(e) => setText(e.target.value)}
         onBlur={() => { const v = parseFloat(text); if (Number.isFinite(v)) onCommit(v); else setText(String(value)); }}
-        className="mt-0.5 h-7 rounded-[7px] border-0 bg-[var(--tl-low)] px-1.5 font-mono text-[11px] shadow-none focus-visible:ring-1"
+        className="mt-0.5 h-7 rounded-[7px] border-0 bg-[var(--low)] px-1.5 font-mono text-[11px] shadow-none focus-visible:ring-1"
       />
     </label>
   );
@@ -133,9 +134,9 @@ export function StylePanel({ open }: { open: boolean }) {
       )}
     >
       <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-col">
-        <TabsList className="m-1.5 mb-0 grid h-8 grid-cols-4 rounded-[9px] bg-[var(--tl-low)] p-0.5">
+        <TabsList className="m-1.5 mb-0 grid h-8 grid-cols-4 rounded-[9px] bg-[var(--low)] p-0.5">
           {(['style', 'brush', 'pencil', 'code'] as const).map((t) => (
-            <TabsTrigger key={t} value={t} className="h-7 rounded-[7px] text-[11.5px] font-medium capitalize text-[var(--tl-text-2)] data-[state=active]:text-[var(--tl-text-1)] data-[state=active]:shadow-[var(--tl-shadow-sm)]">
+            <TabsTrigger key={t} value={t} className="h-7 rounded-[7px] text-[11.5px] font-medium capitalize text-[var(--text-2)] data-[active]:text-[var(--text-1)] data-[active]:shadow-[var(--shadow-sm)]">
               {t}
             </TabsTrigger>
           ))}
@@ -146,9 +147,9 @@ export function StylePanel({ open }: { open: boolean }) {
           <TabsContent value="style" className="m-0 space-y-4 p-3">
             {/* Brush templates: previews are strokes rendered by the engine itself */}
             <Section label="Brush" trailing={
-              <button type="button" onClick={() => selectTab('brush')} className="group inline-flex items-center gap-0.5 text-[11px] font-medium text-[var(--tl-selected)] hover:underline">
+              <Button variant="link" size="none" className="group gap-0.5 text-[11px]" onClick={() => selectTab('brush')}>
                 {activeTemplate ? 'Customize' : 'Custom · edit'}<ChevronRight className="h-3 w-3 transition group-hover:translate-x-0.5" />
-              </button>
+              </Button>
             }>
               <div className="grid grid-cols-2 gap-1">
                 {BRUSH_TEMPLATES.map((t) => {
@@ -163,10 +164,10 @@ export function StylePanel({ open }: { open: boolean }) {
                         onClick={() => studio.applyTemplate(t.id)}
                         className="tl-opt h-auto min-w-0 flex-col items-stretch gap-1 p-1 text-left"
                       >
-                        <span className="block h-10 w-full overflow-hidden rounded-[6px] bg-[#fffefa] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]">
+                        <span className="block h-10 w-full overflow-hidden rounded-[6px] bg-[var(--surface-solid)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]">
                           {previews?.[t.id]
                             ? <img src={previews[t.id]} alt="" draggable={false} className="h-full w-full object-cover" />
-                            : <span className="block h-full w-full animate-pulse bg-[var(--tl-low)]" />}
+                            : <span className="block h-full w-full animate-pulse bg-[var(--low)]" />}
                         </span>
                         <span className="truncate px-0.5 text-[11px] font-medium leading-tight">{t.name}</span>
                       </button>
@@ -183,9 +184,9 @@ export function StylePanel({ open }: { open: boolean }) {
                     onClick={() => selectTab('brush')}
                     className="tl-opt h-auto min-w-0 flex-col items-stretch gap-1 p-1 text-left"
                   >
-                    <span className="flex h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-[6px] bg-[#fffefa] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]">
-                      <span className="h-8 w-8 shrink-0 overflow-hidden rounded-[5px] bg-white shadow-[var(--tl-shadow-sm)]"><TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} /></span>
-                      <span className="font-mono text-[9.5px] leading-tight text-[var(--tl-text-3)]">{fmt(spec.weight)} px<br />op {fmt(spec.opacity)}</span>
+                    <span className="flex h-10 w-full items-center justify-center gap-1.5 overflow-hidden rounded-[6px] bg-[var(--surface-solid)] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.05)]">
+                      <span className="h-8 w-8 shrink-0 overflow-hidden rounded-[5px] bg-white shadow-[var(--shadow-sm)]"><TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} /></span>
+                      <span className="font-mono text-[9.5px] leading-tight text-[var(--text-3)]">{fmt(spec.weight)} px<br />op {fmt(spec.opacity)}</span>
                     </span>
                     <span className="truncate px-0.5 text-[11px] font-medium leading-tight">{activeTemplate ? 'Custom' : 'Custom (edited)'}{tipBad ? ' ⚠' : ''}</span>
                   </button>
@@ -193,7 +194,7 @@ export function StylePanel({ open }: { open: boolean }) {
               </div>
             </Section>
 
-            <Section label="Color" trailing={<span className="font-mono text-[10px] text-[var(--tl-text-3)]">{s.color.toUpperCase()}</span>}>
+            <Section label="Color" trailing={<span className="font-mono text-[10px] text-[var(--text-3)]">{s.color.toUpperCase()}</span>}>
               <div className="grid grid-cols-6 gap-0.5">
                 {swatches.map((sw) => {
                   const on = s.color.toLowerCase() === sw.hex;
@@ -207,8 +208,8 @@ export function StylePanel({ open }: { open: boolean }) {
                 })}
                 <TlTip label="Custom color">
                   <label data-active={isCustomColor ? 'true' : undefined} className="tl-opt relative h-9 w-9 min-w-0 cursor-pointer px-0">
-                    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-dashed border-[var(--tl-text-3)]" style={isCustomColor ? { backgroundColor: s.color, borderStyle: 'solid', borderColor: 'transparent' } : undefined}>
-                      {!isCustomColor && <Plus className="h-3 w-3 text-[var(--tl-text-3)]" />}
+                    <span className="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-dashed border-[var(--text-3)]" style={isCustomColor ? { backgroundColor: s.color, borderStyle: 'solid', borderColor: 'transparent' } : undefined}>
+                      {!isCustomColor && <Plus className="h-3 w-3 text-[var(--text-3)]" />}
                     </span>
                     <input type="color" value={s.color} onChange={(e) => studio.setColor(e.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" aria-label="Pick a custom color" />
                   </label>
@@ -216,10 +217,10 @@ export function StylePanel({ open }: { open: boolean }) {
               </div>
             </Section>
 
-            <Section label="Size" trailing={<span className="font-mono text-[10px] text-[var(--tl-text-3)]">×{s.size.toFixed(2)}</span>}>
+            <Section label="Size" trailing={<span className="font-mono text-[10px] text-[var(--text-3)]">×{s.size.toFixed(2)}</span>}>
               <ToggleGroup type="single" value={activeSize} onValueChange={(v) => { const z = sizes.find((x) => x.id === v); if (z) studio.setSize(z.value); }} className="grid grid-cols-4 gap-0.5">
                 {sizes.map((z) => (
-                  <ToggleGroupItem key={z.id} value={z.id} aria-label={`Size ${z.label}`} className="tl-opt h-9 rounded-[7px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)] hover:bg-[var(--tl-low)] hover:text-[var(--tl-text-1)]">
+                  <ToggleGroupItem key={z.id} value={z.id} aria-label={`Size ${z.label}`} size="lg">
                     <span className="rounded-full bg-current" style={{ width: 6 + z.value * 5, height: 6 + z.value * 5 }} />
                   </ToggleGroupItem>
                 ))}
@@ -232,7 +233,7 @@ export function StylePanel({ open }: { open: boolean }) {
             <Section label="Paper">
               <ToggleGroup type="single" value={s.paper} onValueChange={(v) => v && studio.setPaper(v as PaperName)} className="grid grid-cols-3 gap-0.5">
                 {(Object.keys(paperPresets) as PaperName[]).map((p) => (
-                  <ToggleGroupItem key={p} value={p} className="tl-opt h-8 gap-1.5 whitespace-nowrap rounded-[7px] px-1 text-[11px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)] hover:bg-[var(--tl-low)]">
+                  <ToggleGroupItem key={p} value={p} className="whitespace-nowrap px-1 text-[11px]">
                     <span className="h-3 w-3 rounded-[3px] border border-black/10" style={{ backgroundColor: `rgb(${paperPresets[p].bg.join(',')})` }} />
                     {paperLabels[p]}
                   </ToggleGroupItem>
@@ -243,30 +244,30 @@ export function StylePanel({ open }: { open: boolean }) {
             <Section label="Pressure">
               <ToggleGroup type="single" value={s.pressureMode} onValueChange={(v) => v && studio.setPressureMode(v as PressureMode)} className="grid grid-cols-3 gap-0.5">
                 {(['gaussian', 'both', 'stylus'] as PressureMode[]).map((m) => (
-                  <ToggleGroupItem key={m} value={m} className="tl-opt h-8 rounded-[7px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)] hover:bg-[var(--tl-low)]">
+                  <ToggleGroupItem key={m} value={m}>
                     {m === 'gaussian' ? 'p5.brush' : m === 'both' ? 'Both' : 'Pen'}
                   </ToggleGroupItem>
                 ))}
               </ToggleGroup>
-              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--tl-text-3)]">{pressureHelp[s.pressureMode]}</p>
+              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--text-3)]">{pressureHelp[s.pressureMode]}</p>
             </Section>
 
             <Param label="Pen force sensitivity" value={s.forceSensitivity} display={`${s.forceSensitivity.toFixed(2)}×`} min={0.5} max={2.5} step={0.05} onChange={(v) => studio.setForceSensitivity(v)} />
             <Param label="Eraser size" value={s.eraserSize} display={`${fmt(s.eraserSize)} px`} min={4} max={120} step={1} onChange={(v) => studio.setEraserSize(v)} />
-            <div className="flex items-center justify-between text-[11.5px] text-[var(--tl-text-2)]">
+            <div className="flex items-center justify-between text-[11.5px] text-[var(--text-2)]">
               <span>Pencil only (ignore fingers)</span>
-              <Switch checked={s.pencilOnly} onCheckedChange={(v) => studio.setPencilOnly(v)} className="data-[state=checked]:bg-[var(--tl-selected)]" />
+              <Switch checked={s.pencilOnly} onCheckedChange={(v) => studio.setPencilOnly(v)} className="data-[checked]:bg-[var(--accent)]" />
             </div>
           </TabsContent>
 
           {/* ------------------------------------------------------------ Brush */}
           <TabsContent value="brush" className="m-0 space-y-4 p-3">
             <div className="flex items-center gap-3">
-              <div className="h-14 w-14 shrink-0 overflow-hidden rounded-[9px] bg-white shadow-[var(--tl-shadow-sm)]">
+              <div className="h-14 w-14 shrink-0 overflow-hidden rounded-[9px] bg-white shadow-[var(--shadow-sm)]">
                 <TipPreview tipSource={s.tipSource} onError={setTipPreviewBad} />
               </div>
-              <div className="min-w-0 text-[11px] leading-snug text-[var(--tl-text-3)]">
-                <div className="text-[12px] font-semibold text-[var(--tl-text-1)]">{activeTemplate ? activeTemplate.name : 'Custom tip'}</div>
+              <div className="min-w-0 text-[11px] leading-snug text-[var(--text-3)]">
+                <div className="text-[12px] font-semibold text-[var(--text-1)]">{activeTemplate ? activeTemplate.name : 'Custom tip'}</div>
                 {activeTemplate ? activeTemplate.description : '100×100 unit space, rasterised at 500 px. Dark = opaque ink.'}
               </div>
             </div>
@@ -282,35 +283,35 @@ export function StylePanel({ open }: { open: boolean }) {
               <div>
                 <div className="tl-label">rotate</div>
                 <Select value={spec.rotate} onValueChange={(v) => studio.setSpec({ rotate: v as typeof spec.rotate })}>
-                  <SelectTrigger className="h-8 rounded-[7px] border-0 bg-[var(--tl-low)] font-mono text-[11px] shadow-none focus:ring-1"><SelectValue /></SelectTrigger>
-                  <SelectContent className="rounded-[9px] border-0 shadow-[var(--tl-shadow)]">
+                  <SelectTrigger className="h-8 rounded-[7px] border-0 bg-[var(--low)] font-mono text-[11px] shadow-none focus:ring-1"><SelectValue /></SelectTrigger>
+                  <SelectContent className="rounded-[9px] border-0 shadow-[var(--shadow)]">
                     <SelectItem value="none">"none"</SelectItem>
                     <SelectItem value="natural">"natural"</SelectItem>
                     <SelectItem value="random">"random"</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <div className="flex h-8 items-center justify-between text-[11.5px] text-[var(--tl-text-2)]">
+              <div className="flex h-8 items-center justify-between text-[11.5px] text-[var(--text-2)]">
                 <span className="font-mono">markerTip</span>
-                <Switch checked={spec.markerTip} onCheckedChange={(v) => studio.setSpec({ markerTip: v })} className="data-[state=checked]:bg-[var(--tl-selected)]" />
+                <Switch checked={spec.markerTip} onCheckedChange={(v) => studio.setSpec({ markerTip: v })} className="data-[checked]:bg-[var(--accent)]" />
               </div>
             </div>
 
             <Section label="pencil">
               <div className="grid grid-cols-2 items-end gap-2">
                 <div>
-                  <div className="mb-1 text-[11px] text-[var(--tl-text-3)]">tip follows</div>
+                  <div className="mb-1 text-[11px] text-[var(--text-3)]">tip follows</div>
                   <ToggleGroup type="single" value={s.pencil.nib} aria-label="Tip follows" onValueChange={(v) => v && studio.setPencil({ nib: v as 'stroke' | 'azimuth' })} className="grid grid-cols-2 gap-0.5">
-                    <ToggleGroupItem value="stroke" className="tl-opt h-8 rounded-[7px] text-[11px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)]">Stroke</ToggleGroupItem>
-                    <ToggleGroupItem value="azimuth" className="tl-opt h-8 rounded-[7px] text-[11px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)]">Lean</ToggleGroupItem>
+                    <ToggleGroupItem value="stroke" className="text-[11px]">Stroke</ToggleGroupItem>
+                    <ToggleGroupItem value="azimuth" className="text-[11px]">Lean</ToggleGroupItem>
                   </ToggleGroup>
                 </div>
-                <div className="flex h-8 items-center justify-between text-[11.5px] text-[var(--tl-text-2)]">
+                <div className="flex h-8 items-center justify-between text-[11.5px] text-[var(--text-2)]">
                   <span>barrel roll</span>
-                  <Switch checked={s.pencil.roll} onCheckedChange={(v) => studio.setPencil({ roll: v })} aria-label="Barrel roll" className="data-[state=checked]:bg-[var(--tl-selected)]" />
+                  <Switch checked={s.pencil.roll} onCheckedChange={(v) => studio.setPencil({ roll: v })} aria-label="Barrel roll" className="data-[checked]:bg-[var(--accent)]" />
                 </div>
               </div>
-              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--tl-text-3)]">"Lean" turns the tip with the pencil's azimuth like a broad nib (flat tips only); roll adds the Pencil Pro barrel twist. Set by the brush choice.</p>
+              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--text-3)]">"Lean" turns the tip with the pencil's azimuth like a broad nib (flat tips only); roll adds the Pencil Pro barrel twist. Set by the brush choice.</p>
             </Section>
 
             <Section label='pressure · mode: "gaussian"'>
@@ -322,7 +323,7 @@ export function StylePanel({ open }: { open: boolean }) {
               </div>
             </Section>
 
-            <Section label="tip: (_m) => { … }" trailing={tipBad ? <span className="font-mono text-[10px] text-[var(--tl-danger)]">syntax error</span> : null}>
+            <Section label="tip: (_m) => { … }" trailing={tipBad ? <span className="font-mono text-[10px] text-[var(--danger)]">syntax error</span> : null}>
               <Textarea
                 value={tipDraft} spellCheck={false} rows={5} data-invalid={tipBad || undefined}
                 onChange={(e) => setTipDraft(e.target.value)}
@@ -330,7 +331,7 @@ export function StylePanel({ open }: { open: boolean }) {
                 onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') (e.target as HTMLTextAreaElement).blur(); }}
                 className="code-area min-h-[92px] resize-y border-0 focus-visible:ring-0"
               />
-              <div className="mt-2 flex items-center justify-between gap-2 text-[11.5px] text-[var(--tl-text-2)]">
+              <div className="mt-2 flex items-center justify-between gap-2 text-[11.5px] text-[var(--text-2)]">
                 <span>rotate() units</span>
                 <Select value={tipUsesDegrees(s.tipSource) ? 'degrees' : 'radians'} onValueChange={(v) => {
                   const degrees = v === 'degrees';
@@ -338,20 +339,20 @@ export function StylePanel({ open }: { open: boolean }) {
                     toast(degrees ? 'Tip angles: degrees (Brush Maker preview look)' : 'Tip angles: radians (actual p5.brush output)');
                   }
                 }}>
-                  <SelectTrigger className="h-7 w-[8.5rem] rounded-[7px] border-0 bg-[var(--tl-low)] font-mono text-[11px] shadow-none focus:ring-1"><SelectValue /></SelectTrigger>
-                  <SelectContent className="rounded-[9px] border-0 shadow-[var(--tl-shadow)]">
+                  <SelectTrigger className="h-7 w-[8.5rem] rounded-[7px] border-0 bg-[var(--low)] font-mono text-[11px] shadow-none focus:ring-1"><SelectValue /></SelectTrigger>
+                  <SelectContent className="rounded-[9px] border-0 shadow-[var(--shadow)]">
                     <SelectItem value="radians">radians</SelectItem>
                     <SelectItem value="degrees">degrees</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--tl-text-3)]">
+              <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--text-3)]">
                 p5-style surface: fill(gray, alpha), rect, circle, ellipse, line, triangle, beginShape… Applied on blur.
                 A p5.Graphics ignores the sketch's angleMode(DEGREES), so <span className="font-mono">rotate(45)</span> is 45 rad in real p5.brush output.
               </p>
             </Section>
 
-            <button type="button" className="text-[11px] font-medium text-[var(--tl-selected)] hover:underline" onClick={() => studio.resetDefaults()}>Reset to myBrush defaults</button>
+            <Button variant="link" size="none" className="text-[11px]" onClick={() => studio.resetDefaults()}>Reset to myBrush defaults</Button>
           </TabsContent>
 
           {/* ----------------------------------------------------------- Pencil */}
@@ -362,9 +363,9 @@ export function StylePanel({ open }: { open: boolean }) {
           {/* ------------------------------------------------------------- Code */}
           <TabsContent value="code" className="m-0 space-y-3 p-3">
             <Section label="brush.add(…) spec" trailing={
-              <div className="flex gap-2 text-[11px] font-medium text-[var(--tl-selected)]">
-                <button type="button" className="hover:underline" onClick={() => copy(studio.specCode(), 'brush.add spec')}>Copy</button>
-                <button type="button" className="hover:underline" onClick={() => copy(studio.sketchCode(), 'p5.js sketch')}>Copy sketch</button>
+              <div className="flex gap-2 text-[11px] font-medium text-[var(--accent-strong)]">
+                <Button variant="link" size="none" className="text-[11px]" onClick={() => copy(studio.specCode(), 'brush.add spec')}>Copy</Button>
+                <Button variant="link" size="none" className="text-[11px]" onClick={() => copy(studio.sketchCode(), 'p5.js sketch')}>Copy sketch</Button>
               </div>
             }>
               <Textarea
@@ -375,10 +376,10 @@ export function StylePanel({ open }: { open: boolean }) {
               />
             </Section>
             <div className="flex items-center justify-between gap-2">
-              <span className="text-[10.5px] leading-snug text-[var(--tl-text-3)]">Paste a <span className="font-mono">brush.add(…)</span> from the Brush Maker and apply.</span>
+              <span className="text-[10.5px] leading-snug text-[var(--text-3)]">Paste a <span className="font-mono">brush.add(…)</span> from the Brush Maker and apply.</span>
               <div className="flex shrink-0 gap-1">
-                {specEditing && <button type="button" className="tl-opt h-7 px-2 text-[11px]" onClick={() => setSpecEditing(false)}>Revert</button>}
-                <button type="button" className="inline-flex h-7 items-center gap-1 rounded-[7px] bg-[var(--tl-selected)] px-2.5 text-[11px] font-medium text-white hover:bg-[#2a74d8]" onClick={() => {
+                {specEditing && <Button variant="ghost" size="sm" className="h-7" onClick={() => setSpecEditing(false)}>Revert</Button>}
+                <Button size="sm" className="h-7" onClick={() => {
                   try {
                     const name = studio.applySpecCode(specDraft);
                     setSpecInvalid(false); setSpecEditing(false);
@@ -387,10 +388,10 @@ export function StylePanel({ open }: { open: boolean }) {
                     setSpecInvalid(true);
                     toast.error('Could not parse: ' + (err as Error).message);
                   }
-                }}><Check className="h-3.5 w-3.5" />Apply</button>
+                }}><Check />Apply</Button>
               </div>
             </div>
-            <p className="text-[10.5px] leading-snug text-[var(--tl-text-3)]">
+            <p className="text-[10.5px] leading-snug text-[var(--text-3)]">
               “Copy sketch” gives a complete p5.js sketch that replays every stroke on this canvas with p5.brush, seeds included.
             </p>
           </TabsContent>

@@ -20,13 +20,12 @@ import { InputFilters } from '@/components/InputFilters';
 import { PENCIL_LAB } from '@/lab';
 import { usePersistedState } from '@/hooks/usePersistedState';
 import { FlaskConical, PanelLeftClose } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { Kbd } from '@/components/ui/kbd';
 
 declare global {
   interface Window { __studio?: ReturnType<Studio['debug']> }
-}
-
-function TlTipButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
-  return <button type="button" aria-label={label} title={label} className="tl-opt h-6 w-6 px-0" onClick={onClick}>{children}</button>;
 }
 
 export default function App() {
@@ -50,7 +49,7 @@ function StudioToaster() {
       offset={firstRun ? 312 : 64}
       mobileOffset={firstRun ? 324 : 76}
       duration={2200}
-      toastOptions={{ className: 'rounded-[11px] border-0 shadow-[var(--tl-shadow)] text-[12px]' }}
+      toastOptions={{ className: 'rounded-[11px] border-0 shadow-[var(--shadow)] text-[12px]' }}
     />
   );
 }
@@ -130,7 +129,7 @@ function Shell() {
     <div className="fixed inset-0 overflow-hidden">
       {/* Single WebGL2 canvas: paper texture + p5.brush strokes. The shell is fixed to the
           viewport rather than sized through the document, so it always fills the frame. */}
-      <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[#f4f4f2]">
+      <div id="studio-desk" className="absolute inset-0 overflow-hidden bg-[var(--paper)]">
         <canvas ref={canvasRef} id="ink-canvas" className="absolute inset-0 block h-full w-full cursor-none touch-none" />
         <PracticeGuide />
       </div>
@@ -160,18 +159,20 @@ function Shell() {
       </div>
       {PENCIL_LAB && !practice && (labOpen ? (
         <div className="pointer-events-none fixed left-2 top-14 z-30 flex max-h-[calc(100%-120px)] flex-col gap-2 overflow-y-auto overscroll-contain pr-1" data-testid="lab-column">
-          <div className="pointer-events-auto flex items-center justify-between px-1 text-[11px] font-medium text-[var(--tl-text-3)]">
+          <div className="pointer-events-auto flex items-center justify-between px-1 text-[11px] font-medium text-[var(--text-3)]">
             <span>Lab</span>
-            <TlTipButton label="Hide the lab panels (K)" onClick={() => setLabOpen(false)}><PanelLeftClose className="h-3.5 w-3.5" /></TlTipButton>
+            <Button variant="ghost" size="icon-xs" aria-label="Hide the lab panels (K)" title="Hide the lab panels (K)" onClick={() => setLabOpen(false)}><PanelLeftClose /></Button>
           </div>
           <InputFilters />
           <PencilLab defaultOpen={false} />
         </div>
       ) : (
         <div className="pointer-events-none fixed left-2 top-14 z-30">
-          <button type="button" className="tl-panel-sm pointer-events-auto flex h-9 items-center gap-1.5 px-2.5 text-[11px] font-medium text-[var(--tl-text-2)] hover:bg-[var(--tl-low)]" onClick={() => setLabOpen(true)} data-testid="lab-show">
-            <FlaskConical className="h-3.5 w-3.5 text-[var(--tl-selected)]" />Lab<kbd className="tl-kbd-hint ml-1 rounded bg-[var(--tl-low)] px-1 font-mono text-[10px]">K</kbd>
-          </button>
+          <Card size="sm" className="pointer-events-auto">
+            <Button variant="ghost" size="sm" className="h-9 gap-1.5 px-2.5 text-[11px]" onClick={() => setLabOpen(true)} data-testid="lab-show">
+              <FlaskConical className="text-[var(--accent-strong)]" />Lab<Kbd>K</Kbd>
+            </Button>
+          </Card>
         </div>
       ))}
       <div className="pointer-events-none fixed right-2 top-2 z-30">
@@ -184,22 +185,20 @@ function Shell() {
         <Hud />
       </div>
       <div className="pointer-events-none fixed bottom-2 right-2 z-30 flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setPanelOpen((o) => !o)}
-          className="tl-panel-sm pointer-events-auto hidden h-9 items-center px-3 text-[11px] font-medium text-[var(--tl-text-2)] hover:bg-[var(--tl-low)] sm:inline-flex"
-        >
-          {panelOpen ? "Hide styles" : "Show styles"}<kbd className="tl-kbd-hint ml-2 rounded bg-[var(--tl-low)] px-1 font-mono text-[10px]">P</kbd>
-        </button>
+        <Card size="sm" className="pointer-events-auto hidden sm:block">
+          <Button variant="ghost" size="sm" className="h-9 gap-2 px-3 text-[11px]" onClick={() => setPanelOpen((o) => !o)}>
+            {panelOpen ? 'Hide styles' : 'Show styles'}<Kbd>P</Kbd>
+          </Button>
+        </Card>
         <HelpButton open={helpOpen} onOpenChange={setHelpOpen} />
       </div>
 
       {fatal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#f4f4f2]/95 p-6">
-          <div className="tl-panel max-w-md space-y-2 p-6 text-[13px]">
-            <div className="font-semibold text-[var(--tl-danger)]">p5.brush could not start</div>
-            <div className="text-[var(--tl-text-2)]">{fatal}</div>
-          </div>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--paper)]/95 p-6">
+          <Card className="max-w-md space-y-2 p-6 text-[13px]">
+            <div className="font-semibold text-[var(--danger)]">p5.brush could not start</div>
+            <div className="text-[var(--text-2)]">{fatal}</div>
+          </Card>
         </div>
       )}
     </div>

@@ -1,44 +1,41 @@
-"use client"
+import * as React from 'react';
+import { Slider as BaseSlider } from '@base-ui-components/react/slider';
+import { cn } from '@/lib/utils';
 
-import * as React from "react"
-import * as SliderPrimitive from "@radix-ui/react-slider"
-import { cva, type VariantProps } from "class-variance-authority"
-import { cn } from "@/lib/utils"
+interface SliderProps {
+  value?: number[];
+  defaultValue?: number[];
+  onValueChange?: (value: number[]) => void;
+  onValueCommitted?: (value: number[]) => void;
+  min?: number; max?: number; step?: number;
+  disabled?: boolean;
+  className?: string;
+  'aria-label'?: string;
+}
 
-const sliderVariants = cva(
-  "relative flex w-full touch-none select-none items-center",
-  {
-    variants: {
-      variant: {
-        default: "group",
-        timetrack: "group [&_.thumb]:opacity-0 [&_.thumb]:group-hover:opacity-100 [&_.thumb]:transition-opacity",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-)
+/** Base UI slider with the shadcn/Radix array-value API. */
+const Slider = React.forwardRef<HTMLDivElement, SliderProps>(({ className, value, defaultValue, onValueChange, onValueCommitted, min = 0, max = 100, step = 1, disabled, ...props }, ref) => {
+  const asArray = (v: number | readonly number[]) => (Array.isArray(v) ? [...v] : [v as number]);
+  return (
+    <BaseSlider.Root
+      ref={ref}
+      value={value}
+      defaultValue={defaultValue}
+      min={min} max={max} step={step} disabled={disabled}
+      onValueChange={(v) => onValueChange?.(asArray(v))}
+      onValueCommitted={(v) => onValueCommitted?.(asArray(v))}
+      className={cn('relative flex w-full touch-none select-none items-center py-1.5', className)}
+      {...props}
+    >
+      <BaseSlider.Control className="flex h-5 w-full items-center">
+        <BaseSlider.Track className="relative h-1.5 w-full grow overflow-visible rounded-full bg-[var(--hint-strong)]">
+          <BaseSlider.Indicator className="absolute h-full rounded-full bg-[var(--accent)]" />
+          <BaseSlider.Thumb className="block h-[18px] w-[18px] rounded-full border border-black/10 bg-white shadow-[0_1px_3px_rgba(28,24,18,0.25)] outline-none transition-transform data-[dragging]:scale-110 focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40" />
+        </BaseSlider.Track>
+      </BaseSlider.Control>
+    </BaseSlider.Root>
+  );
+});
+Slider.displayName = 'Slider';
 
-interface SliderProps
-  extends React.ComponentPropsWithoutRef<typeof SliderPrimitive.Root>,
-    VariantProps<typeof sliderVariants> {}
-
-const Slider = React.forwardRef<
-  React.ElementRef<typeof SliderPrimitive.Root>,
-  SliderProps
->(({ className, variant, ...props }, ref) => (
-  <SliderPrimitive.Root
-    ref={ref}
-    className={cn(sliderVariants({ variant, className }))}
-    {...props}
-  >
-    <SliderPrimitive.Track className="relative h-1 w-full grow overflow-hidden rounded-full bg-[var(--tl-hint-strong)]">
-      <SliderPrimitive.Range className="absolute h-full bg-[#8a8a8a]" />
-    </SliderPrimitive.Track>
-    <SliderPrimitive.Thumb className="thumb block h-4 w-4 rounded-full bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.12),0_1px_3px_rgba(0,0,0,0.2)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50" />
-  </SliderPrimitive.Root>
-))
-Slider.displayName = SliderPrimitive.Root.displayName
-
-export { Slider }
+export { Slider };

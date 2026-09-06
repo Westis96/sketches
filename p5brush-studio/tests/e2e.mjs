@@ -329,6 +329,7 @@ try {
   check('finishing every step completes the lesson with stars and a saved best',
     pr.status === 'complete' && pr.summary?.stars === 3 && pr.summary.newBest && savedProgress?.waves?.best === pr.summary.score, JSON.stringify(pr.summary));
   check('finished lesson shows the whole reference for comparing', (await page.locator('[data-guide=ghost]').count()) === lessonSteps.length);
+  await studio((s) => s.saveNow()); // the autosave is debounced; flush it before reading
   const savedDoc = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).strokes.length, await studio((s) => s.saveKey));
   check('autosave keeps the free drawing while a lesson is open', savedDoc === freeBefore.n, `${savedDoc} vs ${freeBefore.n}`);
 

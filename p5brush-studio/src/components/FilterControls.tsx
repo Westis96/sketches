@@ -1,4 +1,5 @@
 import { Slider } from '@/components/ui/slider';
+import { Toggle } from '@/components/ui/toggle';
 import { ToggleGroupItem } from '@/components/ui/toggle-group';
 import { Kalman1D } from '@/engine/filters';
 import { cn } from '@/lib/utils';
@@ -22,13 +23,9 @@ export const PRESSURE_PRESETS: FilterPreset[] = [
 
 export const presetMatches = (p: QR, current: QR) => Math.abs(p.q - current.q) / p.q < 0.05 && Math.abs(p.r - current.r) / p.r < 0.05;
 
-/** A small option chip with a pressed state (presets, filter modes). */
+/** A small option chip with a pressed state (presets, filter modes). Selecting an already-pressed chip keeps it pressed. */
 export function Chip({ on, title, onClick, children }: { on: boolean; title?: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" title={title} aria-pressed={on} onClick={onClick} className={cn('tl-opt h-7 rounded-[7px] px-2 text-[11px]', on && 'bg-[var(--tl-hint-strong)] text-[var(--tl-text-1)]')}>
-      {children}
-    </button>
-  );
+  return <Toggle size="sm" title={title} pressed={on} onPressedChange={() => onClick()}>{children}</Toggle>;
 }
 
 /** One-tap parameter sets; sliders stay available for fine-tuning. */
@@ -42,20 +39,20 @@ export function Presets({ current, presets, onPick, extra }: { current: QR | nul
 }
 
 export function Mode({ value, children }: { value: string; children: React.ReactNode }) {
-  return <ToggleGroupItem value={value} className="tl-opt h-7 rounded-[7px] px-2 text-[11px] data-[state=on]:bg-[var(--tl-hint-strong)] data-[state=on]:text-[var(--tl-text-1)]">{children}</ToggleGroupItem>;
+  return <ToggleGroupItem value={value} size="sm">{children}</ToggleGroupItem>;
 }
 
 export function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[11px] text-[var(--tl-text-2)]">{label}</div>
+      <div className="mb-1 text-[11px] text-[var(--text-2)]">{label}</div>
       {children}
     </div>
   );
 }
 
 export function Note({ children }: { children: React.ReactNode }) {
-  return <div className="text-[10.5px] leading-snug text-[var(--tl-text-3)]">{children}</div>;
+  return <div className="text-[10.5px] leading-snug text-[var(--text-3)]">{children}</div>;
 }
 
 /** Slider on a log scale between min and max (for noise variances spanning decades). */
@@ -75,7 +72,7 @@ export function KalmanSliders({ q, r, unit, qRange, rRange, onChange }: { q: num
     <>
       <LogSlider label="Process noise q" unit={unit} value={q} min={qRange[0]} max={qRange[1]} onChange={(v) => onChange({ q: v })} />
       <LogSlider label="Measurement noise r" unit={unit} value={r} min={rRange[0]} max={rRange[1]} onChange={(v) => onChange({ r: v })} />
-      <Note>Steady-state gain <span className={cn('font-mono', gain < 0.15 ? 'text-[var(--tl-danger)]' : 'text-[var(--tl-text-2)]')}>{Math.round(gain * 100)}%</span> of each new sample gets through{gain < 0.15 ? ' (heavy lag)' : ''}.</Note>
+      <Note>Steady-state gain <span className={cn('font-mono', gain < 0.15 ? 'text-[var(--danger)]' : 'text-[var(--text-2)]')}>{Math.round(gain * 100)}%</span> of each new sample gets through{gain < 0.15 ? ' (heavy lag)' : ''}.</Note>
     </>
   );
 }
