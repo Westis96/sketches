@@ -306,5 +306,23 @@ choice is remembered.
 | Lesson: compare stroke lands | a ding for the right way, a low buzz for the wrong way |
 | Lesson: keyboard slide change | a page tick (buttons already click) |
 
+| Session starts | two rising notes |
+| Perform: third try | two low ticks after the miss |
+| First finish of a mission | three rising notes after the chime |
+| A whole level finished | a six-note fanfare instead of the chime |
+| Studio: undo / redo | a short downward / upward slide |
+| Studio: clear | a falling whoosh |
+| Studio: export | a shutter click |
+| Studio: tool change | a tick |
+
+**The brush itself.** While a pen (or a lesson demo) draws, a filtered noise bed plays
+under it: its loudness follows speed and pressure, its colour follows the brush. Fine
+liners, the nib and the ballpoint scratch high and thin; graphite and charcoal are
+grainy and lower; the bristle, flat, chisel and brush pen swish; the wash is a soft,
+low wet sound; the spray hisses steadily while it is down; the eraser rubs. The bed is
+quiet (peaks around a tenth of the master) and falls silent within a tenth of a second
+of the pen stopping, so a held pen makes no sound. Off with everything else when sound
+is off.
+
 Perform stays neutral: every counted stroke is the same tap, so the sound never grades
 a run before the results do.

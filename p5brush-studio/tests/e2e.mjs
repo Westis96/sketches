@@ -366,7 +366,9 @@ try {
   pr = await studio((s) => s.state.practice);
   const taught = await studio((s) => s.practice.progress().missions['1.1']?.taught);
   const teachSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name));
+  check('a lesson demo makes the brush sound while it draws', teachSounds.includes('brush') && (await page.evaluate(() => window.__sfx.log.filter((e) => e.name === 'brush').every((e) => e.kind))), teachSounds.join(','));
   check('the lesson cues the pen landing and the verdict of a compare stroke', teachSounds.includes('penDown') && teachSounds.includes('good') && teachSounds.includes('bad'), teachSounds.join(','));
+  check('a session start plays its cue', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'start', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
   check('finishing the slides marks the mission taught and opens the trainer', taught === true && pr?.part === 'trainer' && (await page.evaluate(() => location.hash)) === '#/learn/1.1/trainer' && (await page.locator('[data-testid=practice-cue]').count()) === 1, JSON.stringify({ taught, part: pr?.part }));
 
   // Trainer: generated reps, every stroke accepted, feedback words.
@@ -382,7 +384,7 @@ try {
   check('a stroke with an instruction plays the tip cue', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'tip', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
   for (let i = 1; i < 12; i++) pr = await traceStep(i);
   check('finishing the drill summarises clean reps and records it', pr.status === 'complete' && pr.summary.clean >= 10 && (await studio((s) => s.practice.progress())).missions['1.1'].trainer.plays === 1, JSON.stringify(pr.summary));
-  check('the results play the completion chime', (await page.evaluate(() => window.__sfx.log.some((e) => e.name === 'complete'))) === true);
+  check('the results play the completion chime', (await page.evaluate(() => window.__sfx.log.some((e) => e.name === 'complete'))) === true, await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-4))));
   await page.evaluate(() => window.__sfx.setEnabled(false));
   await studio((s) => s.practice.mission('1.1', 'trainer'));
   pr = await traceStep(0);
@@ -437,17 +439,22 @@ try {
   await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
   pr = await studio((s) => s.state.practice);
   check('perform rejects a bad stroke twice without loops or tier changes', pr.step === 0 && pr.misses === 2 && !pr.loopOffer && pr.tier === 'dots');
+  check('the second miss in a perform warns that the next try counts', (await page.evaluate(() => window.__sfx.log.slice(-2).map((e) => e.name).join(','))) === 'miss,lastTry', await page.evaluate(() => JSON.stringify(window.__sfx.log.slice(-3))));
   await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
   pr = await studio((s) => s.state.practice);
   check('the third try counts even when it is poor', pr.step === 1 && pr.results[0] !== null && pr.results[0] < 50);
   for (let i = 1; i < nSteps; i++) pr = await traceStep(i, { jitter: 5, speedMul: 0.6 });
   const first = pr.summary;
+  const firstPerformSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name).slice(-6));
+  check('finishing a mission for the first time chimes and unlocks', firstPerformSounds.includes('complete') && firstPerformSounds.includes('unlock'), firstPerformSounds.join(','));
   check('a rough perform ends with a critique: costly strokes and the worst dimension', pr.status === 'complete' && first.costly.length === 3 && first.costly[0].step === 0 && first.newBest && (await page.locator('[data-guide=costly]').count()) === 3, JSON.stringify(first));
   await studio((s) => s.practice.restart());
   for (let i = 0; i < nSteps; i++) pr = await traceStep(i);
   await page.waitForTimeout(600);
   pr = await studio((s) => s.state.practice);
   const prog = await studio((s) => s.practice.progress());
+  const cleanSounds = await page.evaluate(() => window.__sfx.log.map((e) => e.name).slice(-8));
+  check('three stars play three notes and a new best sparkles', cleanSounds.filter((n) => n === 'star').length === 3 && cleanSounds.includes('best') && !cleanSounds.includes('unlock'), cleanSounds.join(','));
   check('a clean perform earns three stars and shows then vs now',
     pr.summary.stars === 3 && pr.summary.newBest && pr.summary.firstScore === first.score && !!pr.summary.firstThumb && !!pr.summary.todayThumb && prog.missions['1.1'].perform.stars === 3 && prog.missions['1.1'].perform.byTier.dots === pr.summary.score && prog.missions['1.1'].first.score === first.score,
     JSON.stringify({ s: pr.summary.score, stars: pr.summary.stars, first: pr.summary.firstScore, thumbs: !!pr.summary.firstThumb }));
@@ -459,6 +466,23 @@ try {
   check('leaving a session restores the drawing, brush and view',
     freeAfter.practice === null && freeAfter.n === freeBefore.n && freeAfter.size === freeBefore.size && freeAfter.tip === freeBefore.tip && Math.abs(freeAfter.zoom - freeBefore.zoom) < 1e-9,
     JSON.stringify({ freeBefore, freeAfter: { ...freeAfter, practice: undefined } }));
+  // The brush sound: a mouse stroke in the studio is a pen scratching while it moves, silent when it lifts.
+  await page.goto(page.url().split('#')[0] + '#/sketch');
+  await page.waitForFunction(() => !window.__studio.state.practice);
+  await studio((s) => s.applyTemplate('liner'));
+  await page.mouse.move(500, 400); await page.mouse.down();
+  await page.mouse.move(560, 410, { steps: 6 });
+  const midStroke = await page.evaluate(() => window.__sfx.brushState());
+  await page.mouse.move(640, 430, { steps: 6 }); await page.mouse.up();
+  await page.waitForTimeout(50);
+  const afterStroke = await page.evaluate(() => window.__sfx.brushState());
+  check('the brush scratches while the pen moves and stops when it lifts', midStroke?.kind === 'pen' && midStroke.level > 0 && afterStroke === null, JSON.stringify({ midStroke, afterStroke }));
+  await page.keyboard.press('Control+z');
+  await page.waitForTimeout(50);
+  check('undo in the studio ticks', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'undo');
+  await page.keyboard.press('e'); await page.waitForTimeout(30);
+  check('switching tools ticks', (await page.evaluate(() => window.__sfx.log.at(-1)?.name)) === 'tool');
+  await page.keyboard.press('b');
 
   // Legacy entry and v1 migration.
   await page.evaluate(() => { localStorage.setItem('p5brush-studio:practice:v1', JSON.stringify({ leaf: { best: 77, stars: 2, plays: 3 } })); localStorage.removeItem('p5brush-studio:practice:v2'); });

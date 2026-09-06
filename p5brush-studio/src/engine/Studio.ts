@@ -117,6 +117,19 @@ export interface PracticeSummary {
   todayThumb?: string | null;
 }
 export type PracticePart = Part | 'warmup';
+
+/** One reading from a stroke in progress (a pen or a lesson demo), for the brush sound. */
+export interface StrokeSample {
+  phase: 'down' | 'move' | 'up';
+  /** Screen pixels per millisecond. */
+  speed: number;
+  pressure: number;
+  /** Template id of the brush in hand, when known. */
+  brush: string | null;
+  tool: Tool;
+}
+/** Discrete things the studio did that the UI may want to sound or show. */
+export type StudioEvent = 'undo' | 'redo' | 'clear' | 'export' | 'tool';
 export interface PracticeState {
   /** Mission being played, or null for the warm-up. */
   missionId: string | null;
@@ -360,6 +373,10 @@ export class Studio {
 
   private live: Live | null = null;
   private previewQueued = false;
+  private strokeListeners = new Set<(s: StrokeSample) => void>();
+  private eventListeners = new Set<(e: StudioEvent) => void>();
+  /** Template last applied by name (lesson specs differ from the template, so exact matching fails). */
+  private brushId: string | null = null;
   private hudQueued = false;
   private pendingHud: Partial<Hud> = {};
   private resizeTimer = 0;
@@ -411,6 +428,24 @@ export class Studio {
   // ---------------------------------------------------------------------------
   subscribe = (fn: () => void) => { this.listeners.add(fn); return () => { this.listeners.delete(fn); }; };
   getState = () => this.state;
+
+  /** Stroke readings while a pen or a demo draws: down, moves with speed and pressure, up. */
+  onStroke = (fn: (s: StrokeSample) => void) => { this.strokeListeners.add(fn); return () => { this.strokeListeners.delete(fn); }; };
+  /** Discrete studio events (undo, redo, clear, export, tool change). */
+  onEvent = (fn: (e: StudioEvent) => void) => { this.eventListeners.add(fn); return () => { this.eventListeners.delete(fn); }; };
+  private sample(phase: StrokeSample['phase'], speed: number, pressure: number, tool: Tool) {
+    if (!this.strokeListeners.size) return;
+    const brush = tool === 'eraser' ? null : this.activeTemplate()?.id ?? this.brushId;
+    for (const l of this.strokeListeners) l({ phase, speed, pressure, brush, tool });
+  }
+  private signal(e: StudioEvent) { for (const l of this.eventListeners) l(e); }
+  /** Speed of the last recorded segment in screen px per ms. */
+  private lastSpeed(pts: Point[]): number {
+    const n = pts.length;
+    if (n < 2) return 0;
+    const a = pts[n - 2], b = pts[n - 1];
+    return (Math.hypot(b.x - a.x, b.y - a.y) * this.view.zoom) / Math.max(1, (b.t ?? 0) - (a.t ?? 0));
+  }
 
   private emit(patch: Partial<StudioState>) {
     this.state = { ...this.state, ...patch };
@@ -728,6 +763,7 @@ export class Studio {
   applyTemplate(id: string) {
     const t = BRUSH_TEMPLATES.find((x) => x.id === id);
     if (!t) return;
+    this.brushId = t.id;
     this.set({ spec: clone(t.spec), tipSource: t.tipSource, size: 1, tool: 'brush', ...this.brushInput(t) });
     this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
     this.toast(`Brush: ${t.name}`, { duration: 1200 });
@@ -1000,6 +1036,7 @@ export class Studio {
     if (!st) return;
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template);
     if (!t) return;
+    this.brushId = t.id;
     this.set({ spec: lessonSpec(t), tipSource: t.tipSource, size: st.size, color: st.color, tool: 'brush', ...this.brushInput(t) });
     this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
   }
@@ -1024,6 +1061,7 @@ export class Studio {
     if (this.live) this.cancelStroke(true);
     this.flushPaint();
     const t = BRUSH_TEMPLATES.find((x) => x.id === d.template) ?? BRUSH_TEMPLATES[0];
+    this.brushId = t.id;
     this.set({ spec: lessonSpec(t), tipSource: t.tipSource, size: d.size, color: d.color, tool: 'brush', ...this.brushInput(t) });
     this.emit({ tipError: null, tipExtent: this.extentFor(t.tipSource) });
     const src = d.points[0].t !== undefined ? d.points : demoTimeline(d.points, d.speed ?? DEFAULT_SPEED);
@@ -1034,14 +1072,18 @@ export class Studio {
     this.frameLog.length = 0; this.lastPreviewAt = 0;
     this.emit({ drawing: true, demo: true });
     const start = performance.now() + (d.delay ?? 0);
-    let next = 1;
+    let next = 1, landed = false;
     return new Promise<boolean>((resolve) => {
       const tick = () => {
         if (this.live !== live) { this.demo = null; this.emit({ demo: false }); resolve(false); return; } // a finger turned it into a gesture
         const el = performance.now() - start;
+        if (el >= 0 && !landed) { landed = true; this.sample('down', 0, src[0].p, 'brush'); }
+        const before = next;
         while (next < src.length && (src[next].t ?? 0) <= el) { rec.points.push({ ...src[next] }); next++; }
+        if (next > before) this.sample('move', this.lastSpeed(src.slice(0, next)), src[next - 1].p, 'brush');
         if (next < src.length) { if (el >= 0) this.schedulePreview(); this.demo!.raf = requestAnimationFrame(tick); return; }
         // Lift: the same finish as a pen leaving the paper.
+        this.sample('up', 0, 0, 'brush');
         this.live = null;
         this.previewQueued = false;
         this.stampNextChunk(live, rec.points.length, true);
@@ -1471,6 +1513,7 @@ export class Studio {
       this.rebuild();
     }
     this.syncHistory();
+    this.signal('undo');
   };
 
   redo = () => {
@@ -1487,9 +1530,11 @@ export class Studio {
       sgl.blit(sgl.committedTex);
       this.strokes.push(rec);
       this.syncHistory();
+      this.signal('redo');
       return;
     }
     this.commitRecord(rec, false);
+    this.signal('redo');
   };
 
   dismissWelcome() {
@@ -1518,6 +1563,7 @@ export class Studio {
     this.dropSnaps(this.redoSnaps);
     this.paint(this.sgl!.paperTex, []);
     this.syncHistory();
+    this.signal('clear');
     this.toast('New sketch', { action: { label: 'Undo', onClick: this.restoreCleared }, duration: 6000 });
   };
 
@@ -1545,6 +1591,7 @@ export class Studio {
     this.endLiveMask(live);
     this.sgl!.blit(this.sgl!.committedTex);
     this.queueHud({ pressure: 0 });
+    this.sample('up', 0, 0, live.rec.tool);
     if (!quiet) this.toast('Stroke cancelled');
   };
 
@@ -1925,6 +1972,7 @@ export class Studio {
     this.frameLog.length = 0; this.lastPreviewAt = 0;
     this.emit({ drawing: true });
     this.updateHud(e);
+    this.sample('down', 0, first.p, rec.tool);
     this.schedulePreview();
   }
   private activeTouches = new Map<number, { x: number; y: number }>();
@@ -1983,6 +2031,7 @@ export class Studio {
     }
     // The overlay (raw path, predicted tail) is drawn once per frame, in the preview.
     if (this.settings.filters.showRaw || (this.settings.pencil.predict && live.pointerType === 'pen')) this.overlayEvent = e;
+    this.sample('move', this.lastSpeed(pts), pts[pts.length - 1].p, live.rec.tool);
     this.schedulePreview();
   }
 
@@ -2119,6 +2168,7 @@ export class Studio {
     } else if (live.rec.points.length > live.erasedUpTo) {
       this.sgl!.eraseDabs(this.eraserDabs(live.rec, live.erasedUpTo));
     }
+    this.sample('up', 0, 0, live.rec.tool);
     this.pushRecord(live.rec);
     if (this.state.practice?.status === 'active') this.practiceEvaluate(live.rec);
   }
@@ -2306,6 +2356,7 @@ export class Studio {
     sgl.blit(sgl.committedTex); // a stale preview could be up
     const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/png'));
     if (!blob) { this.toast('Export failed'); return; }
+    this.signal('export');
     const name = `p5brush-studio-${new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-')}.png`;
     const file = new File([blob], name, { type: 'image/png' });
     const coarse = window.matchMedia?.('(pointer: coarse)').matches;
@@ -2337,7 +2388,7 @@ export class Studio {
     this.set({ pencilOnly, pencilAuto: false });
     this.toast(pencilOnly ? 'Pencil only: fingers pan and zoom, the Pencil draws' : 'Fingers draw too (two fingers still pan and zoom)');
   }
-  setTool(tool: Tool) { this.set({ tool }); }
+  setTool(tool: Tool) { if (tool === this.settings.tool) return; this.set({ tool }); this.signal('tool'); }
   setPaper(paper: PaperName) {
     this.set({ paper });
     if (this.sgl) this.repaintPaper();
