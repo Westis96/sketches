@@ -18,9 +18,15 @@ import { WelcomeCard } from '@/components/WelcomeCard';
 import { PencilLab } from '@/components/PencilLab';
 import { InputFilters } from '@/components/InputFilters';
 import { PENCIL_LAB } from '@/lab';
+import { usePersistedState } from '@/hooks/usePersistedState';
+import { FlaskConical, PanelLeftClose } from 'lucide-react';
 
 declare global {
   interface Window { __studio?: ReturnType<Studio['debug']> }
+}
+
+function TlTipButton({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
+  return <button type="button" aria-label={label} title={label} className="tl-opt h-6 w-6 px-0" onClick={onClick}>{children}</button>;
 }
 
 export default function App() {
@@ -59,6 +65,7 @@ function Shell() {
   const fatal = useStudioState((s) => s.fatal);
   const practice = useStudioState((s) => s.practice);
   const firstRun = useStudioState((s) => s.firstRun);
+  const [labOpen, setLabOpen] = usePersistedState('p5brush-studio:lab:open', true);
 
   // Attach the engine to the canvas once it is mounted.
   useEffect(() => {
@@ -104,6 +111,7 @@ function Shell() {
       else if (k === 's') studio.exportPNG();
       else if (k === 'p') setPanelOpen((o) => !o);
       else if (k === 'l') setPracticeOpen((o) => !o);
+      else if (k === 'k' && PENCIL_LAB) setLabOpen((o) => !o);
       else if (k === 'n') studio.skipStep();
       else if (e.key === '?') setHelpOpen((o) => !o);
       else if (k === '[') studio.nudgeWeight(-1);
@@ -150,12 +158,22 @@ function Shell() {
       <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
         <QuickActions onPractice={() => setPracticeOpen(true)} />
       </div>
-      {PENCIL_LAB && !practice && (
-        <div className="pointer-events-none fixed left-2 top-14 z-30 flex max-h-[calc(100%-120px)] flex-col gap-2 overflow-y-auto pr-1">
+      {PENCIL_LAB && !practice && (labOpen ? (
+        <div className="pointer-events-none fixed left-2 top-14 z-30 flex max-h-[calc(100%-120px)] flex-col gap-2 overflow-y-auto overscroll-contain pr-1" data-testid="lab-column">
+          <div className="pointer-events-auto flex items-center justify-between px-1 text-[11px] font-medium text-[var(--tl-text-3)]">
+            <span>Lab</span>
+            <TlTipButton label="Hide the lab panels (K)" onClick={() => setLabOpen(false)}><PanelLeftClose className="h-3.5 w-3.5" /></TlTipButton>
+          </div>
           <InputFilters />
           <PencilLab defaultOpen={false} />
         </div>
-      )}
+      ) : (
+        <div className="pointer-events-none fixed left-2 top-14 z-30">
+          <button type="button" className="tl-panel-sm pointer-events-auto flex h-9 items-center gap-1.5 px-2.5 text-[11px] font-medium text-[var(--tl-text-2)] hover:bg-[var(--tl-low)]" onClick={() => setLabOpen(true)} data-testid="lab-show">
+            <FlaskConical className="h-3.5 w-3.5 text-[var(--tl-selected)]" />Lab<kbd className="tl-kbd-hint ml-1 rounded bg-[var(--tl-low)] px-1 font-mono text-[10px]">K</kbd>
+          </button>
+        </div>
+      ))}
       <div className="pointer-events-none fixed right-2 top-2 z-30">
         <StylePanel open={panelOpen} />
       </div>

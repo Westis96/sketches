@@ -1,9 +1,9 @@
-import { useState } from 'react';
 import { ChevronDown, ChevronUp, RotateCcw, Waves } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
+import { usePersistedState } from '@/hooks/usePersistedState';
 import { DEFAULT_FILTERS, Kalman1D, type FilterPatch, type FilterSettings } from '@/engine/filters';
 import { cn } from '@/lib/utils';
 
@@ -17,7 +17,7 @@ export function InputFilters({ defaultOpen = true }: { defaultOpen?: boolean }) 
   const studio = useStudio();
   const f = useStudioState((s) => s.settings.filters);
   const hud = useStudioState((s) => s.hud);
-  const [open, setOpen] = useState(defaultOpen);
+  const [open, setOpen] = usePersistedState('p5brush-studio:lab:filters', defaultOpen);
   const changed = JSON.stringify(f) !== JSON.stringify(DEFAULT_FILTERS);
   const set = (patch: FilterPatch) => studio.setFilters(patch);
 
@@ -48,6 +48,7 @@ export function InputFilters({ defaultOpen = true }: { defaultOpen?: boolean }) 
             </ToggleGroup>
             {f.position.mode === 'kalman' && (
               <>
+                <Presets current={{ q: f.position.q, r: f.position.r }} presets={POSITION_PRESETS} onPick={(p) => set({ position: p })} />
                 <LogSlider label="Process noise q" unit="px²" value={f.position.q} min={0.001} max={10} onChange={(q) => set({ position: { q } })} />
                 <LogSlider label="Measurement noise r" unit="px²" value={f.position.r} min={0.1} max={200} onChange={(r) => set({ position: { r } })} />
                 <Note>Lower q or higher r smooths more and lags more. r ≈ the jitter you see, in px².</Note>
@@ -62,7 +63,12 @@ export function InputFilters({ defaultOpen = true }: { defaultOpen?: boolean }) 
             <ToggleGroup type="single" value={f.pressure.mode} aria-label="Pressure filter" onValueChange={(v) => v && set({ pressure: { mode: v as FilterSettings['pressure']['mode'] } })} className="justify-start gap-1">
               <Mode value="kalman">Kalman</Mode><Mode value="average">Average</Mode><Mode value="off">Off</Mode>
             </ToggleGroup>
-            {f.pressure.mode === 'kalman' && <KalmanSliders q={f.pressure.q} r={f.pressure.r} qRange={[0.00001, 0.05]} rRange={[0.0005, 0.5]} onChange={(p) => set({ pressure: p })} />}
+            {f.pressure.mode === 'kalman' && (
+              <>
+                <Presets current={{ q: f.pressure.q, r: f.pressure.r }} presets={PRESSURE_PRESETS} onPick={(p) => set({ pressure: p })} />
+                <KalmanSliders q={f.pressure.q} r={f.pressure.r} qRange={[0.00001, 0.05]} rRange={[0.0005, 0.5]} onChange={(p) => set({ pressure: p })} />
+              </>
+            )}
           </Channel>
 
           <Channel title="Tilt (altitude + azimuth)" hint="Random-walk Kalman on both angles; azimuth is unwrapped across 360° first.">
@@ -93,6 +99,36 @@ export function InputFilters({ defaultOpen = true }: { defaultOpen?: boolean }) 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+type QR = { q: number; r: number };
+const POSITION_PRESETS: Array<{ name: string; hint: string } & QR> = [
+  { name: 'Responsive', hint: 'follows quick changes of direction', q: 0.2, r: 2 },
+  { name: 'Balanced', hint: 'jitter gone, little lag', q: 0.02, r: 4 },
+  { name: 'Smooth', hint: 'long, even curves', q: 0.005, r: 12 },
+  { name: 'Heavy', hint: 'ruler-like, noticeable lag', q: 0.002, r: 30 },
+];
+const PRESSURE_PRESETS: Array<{ name: string; hint: string } & QR> = [
+  { name: 'Light', hint: 'keeps quick force changes', q: 0.002, r: 0.005 },
+  { name: 'Medium', hint: 'takes the flicker out', q: 0.0005, r: 0.01 },
+  { name: 'Heavy', hint: 'slow, even pressure', q: 0.0001, r: 0.03 },
+];
+
+/** One-tap parameter sets; the sliders below stay available for fine-tuning. */
+function Presets({ current, presets, onPick }: { current: QR; presets: Array<{ name: string; hint: string } & QR>; onPick: (p: QR) => void }) {
+  return (
+    <div className="flex flex-wrap gap-1" role="group" aria-label="Presets">
+      {presets.map((p) => {
+        const active = Math.abs(p.q - current.q) / p.q < 0.05 && Math.abs(p.r - current.r) / p.r < 0.05;
+        return (
+          <button key={p.name} type="button" title={p.hint} aria-pressed={active} onClick={() => onPick({ q: p.q, r: p.r })}
+            className={cn('tl-opt h-7 rounded-[7px] px-2 text-[11px]', active && 'bg-[var(--tl-hint-strong)] text-[var(--tl-text-1)]')}>
+            {p.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

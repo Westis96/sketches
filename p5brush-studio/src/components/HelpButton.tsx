@@ -1,4 +1,5 @@
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { PENCIL_LAB } from '@/lab';
 
 const shortcuts: Array<[string, string]> = [
   ['Brush', 'D'], ['Paper eraser', 'E'], ['Sample stroke', 'T'], ['Pencil only', 'Q'],
@@ -6,6 +7,7 @@ const shortcuts: Array<[string, string]> = [
   ['Export PNG', 'S'], ['Toggle style panel', 'P'], ['Cancel current stroke', 'Esc'],
   ['Practice lessons', 'L'], ['Skip lesson step', 'N'],
   ['Zoom in / out', '+ −'], ['Zoom 100%', '0'], ['Zoom to fit', 'F'], ['Pan', 'Space+drag'], ['Shortcuts', '?'],
+  ...(PENCIL_LAB ? [['Lab panels', 'K'] as [string, string]] : []),
 ];
 
 const gestures: Array<[string, string]> = [

@@ -115,6 +115,8 @@ export interface StudioState {
   firstRun: boolean;
   /** A pencil pressure calibration is collecting samples. */
   calibrating: boolean;
+  /** When the calibration window closes (performance.now() ms) and how long it was, for the progress bar. */
+  calibration: { until: number; seconds: number } | null;
 }
 
 export interface ToastOptions { action?: { label: string; onClick: () => void }; duration?: number }
@@ -134,6 +136,8 @@ const PROGRESSIVE_BUDGET_MS = 9;
 const POOL = 8;
 const SAVE_KEY = `p5brush-studio:v${SAVE_VERSION}`;
 const SAVE_DEBOUNCE_MS = 700;
+/** HUD state reaches React at most this often; the panels do not need every frame. */
+const HUD_MIN_INTERVAL_MS = 50;
 const WELCOME_KEY = 'p5brush-studio:welcomed';
 
 const DEFAULT_SETTINGS: Settings = {
@@ -228,6 +232,7 @@ export class Studio {
     progress: loadProgress(),
     firstRun: false,
     calibrating: false,
+    calibration: null,
   };
   private listeners = new Set<() => void>();
 
@@ -365,8 +370,10 @@ export class Studio {
     this.saveTimer = window.setTimeout(() => this.saveNow(), SAVE_DEBOUNCE_MS);
   }
 
-  private saveNow() {
+  /** Serialises the whole drawing; while a stroke is in progress it waits (unless forced, on hide/dispose). */
+  private saveNow(force = false) {
     clearTimeout(this.saveTimer);
+    if (this.live && !force) { this.scheduleSave(); return; }
     try {
       // A lesson never overwrites the user's drawing: while one is open the backup is what gets saved.
       const b = this.practiceBackup;
@@ -405,7 +412,7 @@ export class Studio {
     const prevent = (e: Event) => e.preventDefault();
     const onResize = () => this.onResize();
     const onLost = (e: Event) => { e.preventDefault(); this.emit({ fatal: 'WebGL context lost. Reload the page to continue.' }); };
-    const onHide = () => { if (document.visibilityState === 'hidden') this.saveNow(); };
+    const onHide = () => { if (document.visibilityState === 'hidden') this.saveNow(true); };
     const onWheel = (e: WheelEvent) => this.onWheel(e);
     const onKey = (e: KeyboardEvent) => {
       if (e.code !== 'Space') return;
@@ -471,7 +478,7 @@ export class Studio {
     this.detach?.();
     this.detach = null;
     clearTimeout(this.resizeTimer);
-    this.saveNow();
+    this.saveNow(true);
   }
 
   // ---------------------------------------------------------------------------
@@ -1152,6 +1159,7 @@ export class Studio {
     const live = this.live;
     this.live = null;
     this.previewQueued = false;
+    this.overlayEvent = null;
     this.clearPredicted();
     this.endLiveMask(live);
     this.sgl!.blit(this.sgl!.committedTex);
@@ -1587,12 +1595,15 @@ export class Studio {
       pts.push(pt);
       live.lastRecorded = { ...pt };
     }
-    if (this.settings.filters.showRaw || (this.settings.pencil.predict && live.pointerType === 'pen')) this.drawLiveOverlay(e, live);
+    // The overlay (raw path, predicted tail) is drawn once per frame, in the preview.
+    if (this.settings.filters.showRaw || (this.settings.pencil.predict && live.pointerType === 'pen')) this.overlayEvent = e;
     this.schedulePreview();
   }
 
   // -- Pencil lab: predicted tail, calibration --------------------------------
   private predictCanvas: HTMLCanvasElement | null = null;
+  /** Latest move of the stroke in progress whose overlay has not been drawn yet. */
+  private overlayEvent: PointerEvent | null = null;
   private calib: { samples: number[]; until: number } | null = null;
 
   /** 2D overlay above the ink canvas for the predicted tail; created on first use, sized to the ink canvas. */
@@ -1662,7 +1673,7 @@ export class Studio {
   /** Collects pen pressures for a few seconds; the 5th–95th percentiles become the mapped range. */
   startCalibration = (seconds = 8) => {
     this.calib = { samples: [], until: performance.now() + seconds * 1000 };
-    this.emit({ calibrating: true });
+    this.emit({ calibrating: true, calibration: { until: this.calib.until, seconds } });
     this.toast(`Calibrating: draw for ${seconds} seconds, light strokes and hard ones`, { duration: 3500 });
   };
 
@@ -1670,7 +1681,7 @@ export class Studio {
     const c = this.calib;
     if (!c || performance.now() < c.until) return;
     this.calib = null;
-    this.emit({ calibrating: false });
+    this.emit({ calibrating: false, calibration: null });
     const r = calibrationFrom(c.samples);
     if (!r) { this.toast('Calibration needs more variety: draw light and hard strokes, then try again', { duration: 4000 }); return; }
     this.setPencil({ calib: r });
@@ -1693,6 +1704,7 @@ export class Studio {
     this.live = null;
     this.previewQueued = false;
     this.queueHud({ pressure: 0, predicted: 0 });
+    this.overlayEvent = null;
     if (this.settings.filters.showRaw) this.drawLiveOverlay(null, live); else this.clearPredicted();
     if (live.pointerType === 'pen') this.maybeFinishCalibration();
     if (live.rec.tool === 'brush') {
@@ -1732,6 +1744,7 @@ export class Studio {
     this.previewQueued = false;
     const live = this.live;
     if (!live) return;
+    if (this.overlayEvent) { const e = this.overlayEvent; this.overlayEvent = null; this.drawLiveOverlay(e, live); }
     const { rec } = live;
     if (rec.tool === 'eraser') {
       if (rec.points.length > live.erasedUpTo) {
@@ -1818,15 +1831,20 @@ export class Studio {
     return stamps;
   }
 
+  private lastHudAt = 0;
   private queueHud(patch: Partial<Hud>) {
     Object.assign(this.pendingHud, patch);
     if (this.hudQueued) return;
     this.hudQueued = true;
-    requestAnimationFrame(() => {
+    const fire = () => {
+      const wait = HUD_MIN_INTERVAL_MS - (performance.now() - this.lastHudAt);
+      if (wait > 0) { window.setTimeout(fire, wait); return; }
       this.hudQueued = false;
+      this.lastHudAt = performance.now();
       this.emit({ hud: { ...this.state.hud, ...this.pendingHud } });
       this.pendingHud = {};
-    });
+    };
+    requestAnimationFrame(fire);
   }
 
   private updateHud(e: PointerEvent, hovering = false) {

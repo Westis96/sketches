@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronDown, ChevronUp, FlaskConical, RotateCcw } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
+import { usePersistedState } from '@/hooks/usePersistedState';
 import { DEFAULT_PENCIL, tiltFlat } from '@/engine/pencil';
 import { cn } from '@/lib/utils';
 
@@ -16,7 +17,16 @@ export function PencilLab({ defaultOpen = true }: { defaultOpen?: boolean }) {
   const pencil = useStudioState((s) => s.settings.pencil);
   const hud = useStudioState((s) => s.hud);
   const calibrating = useStudioState((s) => s.calibrating);
-  const [open, setOpen] = useState(defaultOpen);
+  const calibration = useStudioState((s) => s.calibration);
+  const [open, setOpen] = usePersistedState('p5brush-studio:lab:pencil', defaultOpen);
+  // Countdown for the calibration window.
+  const [now, setNow] = useState(() => performance.now());
+  useEffect(() => {
+    if (!calibration) return;
+    const id = window.setInterval(() => setNow(performance.now()), 100);
+    return () => window.clearInterval(id);
+  }, [calibration]);
+  const remaining = calibration ? Math.max(0, (calibration.until - now) / 1000) : 0;
   const isPen = hud.pointerType === 'pen';
   const flat = tiltFlat(hud.altitude);
   const changed = JSON.stringify(pencil) !== JSON.stringify(DEFAULT_PENCIL);
@@ -77,8 +87,13 @@ export function PencilLab({ defaultOpen = true }: { defaultOpen?: boolean }) {
               onClick={() => studio.startCalibration()}
               data-testid="calibrate"
             >
-              {calibrating ? 'Draw light and hard strokes…' : pencil.calib ? 'Calibrate again' : 'Calibrate (8 s)'}
+              {calibrating ? (remaining > 0 ? `Draw light and hard strokes… ${Math.ceil(remaining)} s` : 'Lift the pencil to finish') : pencil.calib ? 'Calibrate again' : 'Calibrate (8 s)'}
             </button>
+            {calibration && (
+              <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-[var(--tl-hint-strong)]" aria-hidden>
+                <div className="h-full bg-[var(--tl-selected)] transition-[width] duration-100" style={{ width: `${Math.round((1 - remaining / calibration.seconds) * 100)}%` }} />
+              </div>
+            )}
           </div>
 
           <div className="flex items-center justify-between border-t border-[var(--tl-hint)] pt-2 text-[10.5px] text-[var(--tl-text-3)]">
