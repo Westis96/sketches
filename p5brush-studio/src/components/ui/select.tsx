@@ -17,7 +17,7 @@ const SelectTrigger = React.forwardRef<HTMLButtonElement, React.ComponentProps<t
   <BaseSelect.Trigger
     ref={ref}
     className={cn(
-      'flex h-8 w-full items-center justify-between gap-2 rounded-[9px] bg-[var(--low)] px-2.5 text-[12px] text-[var(--text-1)] outline-none',
+      'press flex h-8 w-full items-center justify-between gap-2 rounded-[9px] bg-[var(--low)] px-2.5 text-[12px] text-[var(--text-1)] outline-none',
       'hover:bg-[var(--hint)] focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 data-[popup-open]:bg-[var(--hint)] disabled:opacity-50',
       className,
     )}
@@ -40,7 +40,7 @@ const SelectContent = React.forwardRef<HTMLDivElement, React.ComponentProps<type
         ref={ref}
         className={cn(
           'ui-surface min-w-[var(--anchor-width)] rounded-[12px] p-1 text-[12px] text-[var(--text-1)] outline-none',
-          'transition-[opacity,transform] duration-150 data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0',
+          'origin-[var(--transform-origin)] transition-[opacity,transform] ease-out data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:data-[starting-style]:scale-100 motion-reduce:data-[ending-style]:scale-100 duration-180 data-[ending-style]:duration-150',
           className,
         )}
         {...props}

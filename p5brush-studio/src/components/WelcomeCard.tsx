@@ -13,7 +13,7 @@ export function WelcomeCard({ onTryLesson }: { onTryLesson: () => void }) {
   if (!firstRun) return null;
   const coarse = typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
   return (
-    <Card className="welcome-in pointer-events-auto w-[min(380px,calc(100vw-16px))] p-4 text-[12px]" role="dialog" aria-label="Welcome" data-testid="welcome">
+    <Card className="enter-up welcome-in pointer-events-auto w-[min(380px,calc(100vw-16px))] p-4 text-[12px]" role="dialog" aria-label="Welcome" data-testid="welcome">
       <div className="flex items-start gap-2">
         <div className="flex-1">
           <CardTitle>p5.brush Realtime Studio</CardTitle>

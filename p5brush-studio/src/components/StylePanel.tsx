@@ -92,7 +92,7 @@ function NumberField({ label, value, onCommit }: { label: string; value: number;
 type Tab = 'style' | 'brush' | 'pencil' | 'code';
 const TAB_KEY = 'p5brush-studio:tab';
 
-export function StylePanel({ open }: { open: boolean }) {
+export function StylePanel({ open, instant }: { open: boolean; instant?: boolean }) {
   const studio = useStudio();
   const s = useStudioState((st) => st.settings);
   const tipError = useStudioState((st) => st.tipError);
@@ -128,9 +128,11 @@ export function StylePanel({ open }: { open: boolean }) {
 
   return (
     <aside
+      data-instant={instant || undefined}
       className={cn(
-        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(var(--tl-vh)-5.25rem)] flex-col overflow-hidden transition-all duration-200 sm:max-h-[calc(var(--tl-vh)-4.25rem)]',
-        !open && 'pointer-events-none translate-x-4 opacity-0',
+        // Slides in from its edge of the screen; leaves a touch faster than it arrives.
+        'tl-panel pointer-events-auto flex w-[min(16.5rem,calc(100vw-1rem))] max-h-[calc(var(--tl-vh)-5.25rem)] flex-col overflow-hidden transition-[opacity,transform] duration-200 ease-out sm:max-h-[calc(var(--tl-vh)-4.25rem)]',
+        !open && 'pointer-events-none translate-x-4 opacity-0 duration-150 motion-reduce:translate-x-0',
       )}
     >
       <Tabs value={tab} onValueChange={selectTab} className="flex min-h-0 flex-col">
@@ -148,7 +150,7 @@ export function StylePanel({ open }: { open: boolean }) {
             {/* Brush templates: previews are strokes rendered by the engine itself */}
             <Section label="Brush" trailing={
               <Button variant="link" size="none" className="group gap-0.5 text-[11px]" onClick={() => selectTab('brush')}>
-                {activeTemplate ? 'Customize' : 'Custom · edit'}<ChevronRight className="h-3 w-3 transition group-hover:translate-x-0.5" />
+                {activeTemplate ? 'Customize' : 'Custom · edit'}<ChevronRight className="h-3 w-3 transition-transform duration-150 ease-out group-hover:translate-x-0.5" />
               </Button>
             }>
               <div className="grid grid-cols-2 gap-1">

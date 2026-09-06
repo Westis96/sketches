@@ -19,13 +19,13 @@ const gestures: Array<[string, string]> = [
 ];
 
 /** Bottom-right "?" button with keyboard shortcuts and touch gestures. */
-export function HelpButton({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export function HelpButton({ open, instant, onOpenChange }: { open: boolean; instant?: boolean; onOpenChange: (o: boolean, viaKeyboard?: boolean) => void }) {
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={(o, details) => onOpenChange(o, details.reason === 'escape-key')}>
       <PopoverTrigger render={<Button variant="outline" aria-label="Keyboard shortcuts" className="ui-surface pointer-events-auto h-9 w-9 rounded-full p-0 text-[14px] font-semibold text-[var(--text-2)] ring-0 data-[popup-open]:bg-[var(--low)]" />}>
         ?
       </PopoverTrigger>
-      <PopoverContent side="top" align="end" sideOffset={8} className="tl-scroll max-h-[calc(var(--tl-vh)-5rem)] w-[min(30rem,calc(100vw-1rem))] overflow-y-auto">
+      <PopoverContent side="top" align="end" sideOffset={8} data-instant={instant || undefined} className="tl-scroll max-h-[calc(var(--tl-vh)-5rem)] w-[min(30rem,calc(100vw-1rem))] overflow-y-auto">
         <div className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
           <div className="order-2 sm:order-1">
             <div className="mb-2 font-semibold text-[var(--text-1)]">Keyboard shortcuts</div>

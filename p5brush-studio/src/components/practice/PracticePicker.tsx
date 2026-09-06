@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
+import { useEffect, type CSSProperties } from 'react';
 import { Star, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Card, CardDescription, CardTitle } from '@/components/ui/card';
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { LESSONS, lessonSteps } from '@/practice/lessons';
 import { cn } from '@/lib/utils';
@@ -13,7 +13,7 @@ export function Stars({ n, size = 'h-3.5 w-3.5', animate = false }: { n: number;
         <Star
           key={i}
           className={cn(size, i < n ? 'fill-[var(--warning)] text-[var(--warning)]' : 'text-[var(--hint-strong)]', animate && i < n && 'star-pop')}
-          style={animate ? { animationDelay: `${0.15 + i * 0.18}s` } : undefined}
+          style={animate ? { animationDelay: `${120 + i * 70}ms` } : undefined}
         />
       ))}
     </span>
@@ -21,29 +21,28 @@ export function Stars({ n, size = 'h-3.5 w-3.5', animate = false }: { n: number;
 }
 
 /** Centre modal listing the lessons with engine-rendered thumbnails and personal bests. */
-export function PracticePicker({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+export function PracticePicker({ open, instant, onOpenChange }: { open: boolean; instant?: boolean; onOpenChange: (o: boolean, viaKeyboard?: boolean) => void }) {
   const studio = useStudio();
   const previews = useStudioState((s) => s.lessonPreviews);
   const progress = useStudioState((s) => s.progress);
   const active = useStudioState((s) => s.practice?.lessonId ?? null);
 
   useEffect(() => { if (open) studio.ensureLessonPreviews(); }, [open, studio]);
-  if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(28,24,18,0.28)] p-3" onPointerDown={(e) => { if (e.target === e.currentTarget) onOpenChange(false); }}>
-      <Card role="dialog" aria-label="Practice lessons" className="tl-scroll max-h-[88vh] w-[min(760px,100%)] overflow-y-auto p-4" data-testid="practice-picker">
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent aria-label="Practice lessons" instant={instant} className="tl-scroll max-h-[88vh] w-[min(760px,calc(100vw-24px))] overflow-y-auto p-4" data-testid="practice-picker">
         <div className="flex items-start gap-3">
           <div className="flex-1">
-            <CardTitle className="text-[15px]">Practice</CardTitle>
-            <CardDescription className="mt-0.5">
+            <DialogTitle>Practice</DialogTitle>
+            <DialogDescription className="mt-0.5">
               Trace a sample drawing stroke by stroke. Each step sets the brush for you; every stroke is scored on shape, size and direction.
-            </CardDescription>
+            </DialogDescription>
           </div>
           <Button variant="ghost" size="icon" aria-label="Close" onClick={() => onOpenChange(false)}><X /></Button>
         </div>
         <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
-          {LESSONS.map((l) => {
+          {LESSONS.map((l, i) => {
             const best = progress[l.id];
             const n = lessonSteps(l).length;
             return (
@@ -52,7 +51,8 @@ export function PracticePicker({ open, onOpenChange }: { open: boolean; onOpenCh
                 type="button"
                 data-testid={`lesson-${l.id}`}
                 onClick={() => { studio.startPractice(l.id); onOpenChange(false); }}
-                className={cn('group flex flex-col overflow-hidden rounded-[12px] text-left outline-none ring-1 ring-inset ring-[var(--hint)] transition-shadow hover:ring-2 hover:ring-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)]',
+                style={{ '--enter-delay': `${i * 40}ms` } as CSSProperties}
+                className={cn('press enter-up group flex flex-col overflow-hidden rounded-[12px] text-left outline-none ring-1 ring-inset ring-[var(--hint)] hover:ring-2 hover:ring-[var(--accent)] focus-visible:ring-2 focus-visible:ring-[var(--accent)]',
                   active === l.id && 'ring-2 ring-[var(--accent)]')}
               >
                 <span className="block aspect-[4/3] w-full bg-[var(--surface-solid)]">
@@ -80,7 +80,7 @@ export function PracticePicker({ open, onOpenChange }: { open: boolean; onOpenCh
         <div className="mt-3 text-[11px] text-[var(--text-3)]">
           Your current drawing is kept safe and comes back when you leave the lesson. Undo reopens a step; Skip counts it as zero.
         </div>
-      </Card>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

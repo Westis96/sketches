@@ -57,7 +57,7 @@ export function PencilTab({ onBrushTab }: { onBrushTab: () => void }) {
 
         <Collapsible open={advanced} onOpenChange={setAdvanced}>
           <CollapsibleTrigger render={<Button variant="link" size="none" className="group mt-2 gap-1 text-[11px]" />}>
-            <ChevronRight className="h-3 w-3 transition-transform group-data-[panel-open]:rotate-90" />Advanced (q, r)
+            <ChevronRight className="h-3 w-3 transition-transform duration-200 ease-out group-data-[panel-open]:rotate-90" />Advanced (q, r)
           </CollapsibleTrigger>
           <CollapsibleContent>
             <div className="mt-2 space-y-2 rounded-[10px] bg-[var(--low)] p-2">

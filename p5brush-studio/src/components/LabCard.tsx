@@ -16,7 +16,7 @@ export function LabCard({ id, icon: Icon, title, badge, defaultOpen = true, test
           <Icon className="h-4 w-4 text-[var(--accent-strong)]" />
           <span className="flex-1 text-[13px] font-semibold text-[var(--text-1)]">{title}</span>
           {badge && <Badge variant="accent">{badge}</Badge>}
-          <ChevronDown className="h-4 w-4 text-[var(--text-3)] transition-transform group-data-[panel-open]:rotate-180" />
+          <ChevronDown className="h-4 w-4 text-[var(--text-3)] transition-transform duration-200 ease-out group-data-[panel-open]:rotate-180" />
         </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="space-y-3 border-t border-[var(--hint)] px-3 pb-3 pt-2.5">{children}</div>

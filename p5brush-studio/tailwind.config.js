@@ -1,6 +1,8 @@
 /** @type {import('tailwindcss').Config} */
 export default {
   darkMode: ['class'],
+  // `hover:` only where a pointer can hover: touch would otherwise leave a stuck hover after every tap.
+  future: { hoverOnlyWhenSupported: true },
   content: ['./index.html', './src/**/*.{js,ts,jsx,tsx}'],
   theme: {
     extend: {
@@ -8,6 +10,14 @@ export default {
         sans: ['Inter', 'system-ui', '-apple-system', 'sans-serif'],
         mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
+      // The built-in curves are too weak to read; `ease-out` / `ease-in-out` resolve to the tokens in index.css.
+      transitionTimingFunction: {
+        out: 'var(--ease-out)',
+        'in-out': 'var(--ease-in-out)',
+        drawer: 'var(--ease-drawer)',
+      },
+      // Duration scale: press 100–160, tooltips 125, menus 180–200, modals 250. UI stays under 300ms.
+      transitionDuration: { 125: '125ms', 180: '180ms', 250: '250ms' },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',
@@ -30,5 +40,5 @@ export default {
       },
     },
   },
-  plugins: [require('tailwindcss-animate')],
+  plugins: [],
 };

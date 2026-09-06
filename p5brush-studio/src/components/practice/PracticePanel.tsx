@@ -29,7 +29,7 @@ export function PracticePanel() {
   const fb = practice.feedback;
 
   return (
-    <Card className="pointer-events-auto relative w-full p-3 text-[12px] md:w-[420px]" data-testid="practice-panel">
+    <Card className="enter-up pointer-events-auto relative w-full p-3 text-[12px] md:w-[420px]" data-testid="practice-panel">
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1">
           <div className="truncate text-[13.5px] font-semibold text-[var(--text-1)]">{lesson.title}</div>

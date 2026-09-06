@@ -30,6 +30,12 @@
     --shadow: 0 0 0 1px rgba(28, 24, 18, 0.07), 0 2px 6px -2px rgba(28, 24, 18, 0.1), 0 16px 40px -16px rgba(28, 24, 18, 0.28);
     --shadow-sm: 0 0 0 1px rgba(28, 24, 18, 0.07), 0 1px 3px rgba(28, 24, 18, 0.1);
 
+    /* Motion tokens: strong curves (the built-in ones are too weak to read).
+       Enter/exit → --ease-out, moving on screen → --ease-in-out, sheets → --ease-drawer. */
+    --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+    --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+    --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+
     /* shadcn tokens, expressed in the same palette */
     --background: 40 21% 92%;
     --foreground: 36 10% 10%;
@@ -109,12 +115,21 @@
   .tl-panel { @apply ui-surface rounded-[16px]; }
   .tl-panel-sm { @apply ui-surface rounded-[10px]; box-shadow: var(--shadow-sm); }
 
+  /* Pressable: colours settle quickly, the press itself is a 3% squeeze (scale
+     carries the icon and label with it, which is what reads as a physical press). */
+  .press {
+    transition: color 100ms ease, background-color 100ms ease, box-shadow 100ms ease, transform 160ms var(--ease-out);
+  }
+  .press:active:not(:disabled) { transform: scale(0.97); }
+
   /* Style-panel option button (quiet selection) */
   .tl-opt {
-    @apply relative inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-1 text-[12px] font-medium outline-none transition-colors duration-100;
+    @apply press relative inline-flex h-8 min-w-8 items-center justify-center rounded-[8px] px-1 text-[12px] font-medium outline-none;
     color: var(--text-2);
   }
-  .tl-opt:hover { background: var(--low); color: var(--text-1); }
+  @media (hover: hover) and (pointer: fine) {
+    .tl-opt:hover { background: var(--low); color: var(--text-1); }
+  }
   .tl-opt:focus-visible { box-shadow: inset 0 0 0 2px var(--accent); }
   .tl-opt[data-pressed], .tl-opt[data-active='true'] { background: var(--accent-soft); color: var(--accent-strong); }
 
@@ -148,28 +163,47 @@
 /* Practice mode */
 @keyframes guide-flow { to { stroke-dashoffset: -36; } }
 .guide-flow { animation: guide-flow 0.9s linear infinite; }
-.guide-layer { transition: opacity 160ms ease-out; }
+/* The guide steps aside the moment the pen lands (fast) and comes back gently (slower). */
+.guide-layer, .guide-start { transition: opacity 220ms var(--ease-out); }
+[data-dim] .guide-layer, [data-dim] .guide-start { transition-duration: 100ms; }
 @keyframes guide-start { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
 .guide-start { animation: guide-start 1.2s ease-in-out infinite; }
 @keyframes guide-pulse-bar { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 .guide-pulse-bar { animation: guide-pulse-bar 1.2s ease-in-out infinite; }
+/* Score badge after each traced stroke: a new element per stroke, so the keyframe
+   restarting is the point. Pops in, holds, fades out on its own. */
 @keyframes feedback-pop {
-  0% { opacity: 0; transform: translateY(4px) scale(0.9); }
-  12% { opacity: 1; transform: translateY(0) scale(1.04); }
-  20% { transform: scale(1); }
+  0% { opacity: 0; transform: translateY(4px) scale(0.92); }
+  12% { opacity: 1; transform: translateY(0) scale(1.03); }
+  22% { transform: scale(1); }
   80% { opacity: 1; }
   100% { opacity: 0; }
 }
-.feedback-pop { animation: feedback-pop 2.4s ease-out forwards; }
-@keyframes star-pop { 0% { transform: scale(0.3); opacity: 0; } 60% { transform: scale(1.25); opacity: 1; } 100% { transform: scale(1); } }
-.star-pop { animation: star-pop 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+.feedback-pop { animation: feedback-pop 2.4s var(--ease-out) forwards; }
+/* Lesson-complete stars: the delight budget lives here (rare, first-time tier). */
+@keyframes star-pop { 0% { transform: scale(0.8); opacity: 0; } 60% { transform: scale(1.18); opacity: 1; } 100% { transform: scale(1); } }
+.star-pop { animation: star-pop 0.4s var(--ease-out) both; }
+
+/* Cards that appear occasionally (a lesson step card, the result, the welcome
+   card): rise 6px into place. `--enter-delay` staggers a group. */
+@keyframes enter-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.enter-up { animation: enter-up 260ms var(--ease-out) both; animation-delay: var(--enter-delay, 0ms); }
+.welcome-in { --enter-delay: 320ms; }
+
+/* Anything toggled from the keyboard changes instantly: no motion on actions
+   that repeat hundreds of times a day. */
+[data-instant], [data-instant] * { transition-duration: 0ms !important; animation-duration: 0ms !important; animation-delay: 0ms !important; }
+
 @media (prefers-reduced-motion: reduce) {
-  .guide-flow, .guide-start, .guide-pulse-bar, .star-pop, .welcome-in { animation: none; }
-  .feedback-pop { animation-duration: 0.01s; animation-delay: 2.4s; opacity: 1; }
+  /* Fewer and gentler, not none: opacity stays (it carries meaning), movement goes. */
+  .guide-flow { animation: none; }
+  .star-pop, .enter-up { animation-name: fade-in; }
+  .feedback-pop { animation-name: fade-hold; }
+  .press:active:not(:disabled) { transform: none; }
 }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes fade-hold { 0% { opacity: 0; } 10% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
 
 /* Touch devices: keyboard hints only add noise */
 @media (pointer: coarse) { .tl-kbd-hint:not(.tl-kbd-static) { display: none; } }
 
-@keyframes welcome-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
-.welcome-in { animation: welcome-in 0.35s cubic-bezier(0.2, 0.8, 0.2, 1) both; animation-delay: 0.4s; }

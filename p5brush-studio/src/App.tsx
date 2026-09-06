@@ -65,6 +65,15 @@ function Shell() {
   const practice = useStudioState((s) => s.practice);
   const firstRun = useStudioState((s) => s.firstRun);
   const [labOpen, setLabOpen] = usePersistedState('p5brush-studio:lab:open', true);
+  // Panels toggled from the keyboard (P, L, ?, Esc) change with no motion: those
+  // actions repeat hundreds of times a day. The flag clears itself once the
+  // transition would have ended, so the next pointer-driven toggle animates again.
+  const [viaKey, setViaKey] = useState(false);
+  useEffect(() => {
+    if (!viaKey) return;
+    const t = window.setTimeout(() => setViaKey(false), 350);
+    return () => window.clearTimeout(t);
+  }, [viaKey]);
 
   // Attach the engine to the canvas once it is mounted.
   useEffect(() => {
@@ -108,18 +117,18 @@ function Shell() {
       else if (k === 'q') studio.setPencilOnly(!studio.settings.pencilOnly);
       else if (k === 'c') studio.clear();
       else if (k === 's') studio.exportPNG();
-      else if (k === 'p') setPanelOpen((o) => !o);
-      else if (k === 'l') setPracticeOpen((o) => !o);
+      else if (k === 'p') { setViaKey(true); setPanelOpen((o) => !o); }
+      else if (k === 'l') { setViaKey(true); setPracticeOpen((o) => !o); }
       else if (k === 'k' && PENCIL_LAB) setLabOpen((o) => !o);
       else if (k === 'n') studio.skipStep();
-      else if (e.key === '?') setHelpOpen((o) => !o);
+      else if (e.key === '?') { setViaKey(true); setHelpOpen((o) => !o); }
       else if (k === '[') studio.nudgeWeight(-1);
       else if (k === ']') studio.nudgeWeight(1);
       else if (k === '0') studio.resetView();
       else if (k === 'f') studio.zoomToFit();
       else if (e.key === '+' || e.key === '=') studio.zoomBy(1.25);
       else if (e.key === '-' || e.key === '_') studio.zoomBy(1 / 1.25);
-      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else { setHelpOpen(false); setPracticeOpen(false); studio.dismissWelcome(); } }
+      else if (k === 'escape') { if (studio.isDrawing()) studio.cancelStroke(); else { setViaKey(true); setHelpOpen(false); setPracticeOpen(false); studio.dismissWelcome(); } }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -151,7 +160,7 @@ function Shell() {
           <PracticeComplete onChooseLesson={() => setPracticeOpen(true)} />
         </div>
       )}
-      <PracticePicker open={practiceOpen} onOpenChange={setPracticeOpen} />
+      <PracticePicker open={practiceOpen} instant={viaKey} onOpenChange={(o, key) => { if (key) setViaKey(true); setPracticeOpen(o); }} />
 
       {/* Chrome: fixed layers that never take pointer events except on their own controls */}
       <div className="pointer-events-none fixed left-2 top-2 z-30 flex items-start gap-2">
@@ -176,7 +185,7 @@ function Shell() {
         </div>
       ))}
       <div className="pointer-events-none fixed right-2 top-2 z-30">
-        <StylePanel open={panelOpen} />
+        <StylePanel open={panelOpen} instant={viaKey} />
       </div>
       <div className="pointer-events-none fixed bottom-2 left-1/2 z-30 -translate-x-1/2">
         <ToolDock panelOpen={panelOpen} onTogglePanel={() => setPanelOpen((o) => !o)} onPractice={() => setPracticeOpen((o) => !o)} />
@@ -190,7 +199,7 @@ function Shell() {
             {panelOpen ? 'Hide styles' : 'Show styles'}<Kbd>P</Kbd>
           </Button>
         </Card>
-        <HelpButton open={helpOpen} onOpenChange={setHelpOpen} />
+        <HelpButton open={helpOpen} instant={viaKey} onOpenChange={(o, key) => { if (key) setViaKey(true); setHelpOpen(o); }} />
       </div>
 
       {fatal && (

@@ -11,7 +11,7 @@ const Tabs = ({ onValueChange, ...props }: TabsProps) => <BaseTabs.Root onValueC
 const TabsList = React.forwardRef<HTMLDivElement, React.ComponentProps<typeof BaseTabs.List>>(({ className, children, ...props }, ref) => (
   <BaseTabs.List ref={ref} className={cn('relative z-0 inline-flex items-center justify-center rounded-[10px] bg-[var(--low)] p-0.5 text-[var(--text-2)]', className)} {...props}>
     {children}
-    <BaseTabs.Indicator className="absolute left-0 top-1/2 z-[-1] h-[calc(100%-4px)] w-[var(--active-tab-width)] -translate-y-1/2 translate-x-[var(--active-tab-left)] rounded-[8px] bg-[var(--surface)] shadow-[var(--shadow-sm)] transition-[translate,width] duration-200 ease-out" />
+    <BaseTabs.Indicator className="absolute left-0 top-1/2 z-[-1] h-[calc(100%-4px)] w-[var(--active-tab-width)] -translate-y-1/2 translate-x-[var(--active-tab-left)] rounded-[8px] bg-[var(--surface)] shadow-[var(--shadow-sm)] transition-[translate,width] duration-200 ease-in-out motion-reduce:transition-none" />
   </BaseTabs.List>
 ));
 TabsList.displayName = 'TabsList';

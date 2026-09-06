@@ -63,6 +63,13 @@ Eleven brush presets ship: chisel marker, fine liner, graphite pencil, watercolo
 calligraphy nib, dry bristle, brush pen, flat shader, ballpoint, charcoal stick and spray
 stipple.
 
+Motion follows one small set of rules: keyboard shortcuts (`P`, `L`, `?`, `Esc`) change
+the interface with no animation, popovers and tooltips scale out of the control that opened
+them and open instantly once one is showing, presses squeeze the button by 3%, and only the
+rare moments (a lesson card appearing, the stars at the end) spend any motion beyond that.
+Reduced-motion settings keep the fades and drop the movement; hover styles only apply where
+a pointer can actually hover, so a tap on the iPad never leaves a stuck highlight.
+
 ### Pencil lab
 
 Experimental features stay behind switches in the Pencil lab: tilt shading (a flat pencil

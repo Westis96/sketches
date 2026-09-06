@@ -24,7 +24,7 @@ export function PracticeComplete({ onChooseLesson }: { onChooseLesson: () => voi
   const line = stars === 3 ? 'Beautiful control.' : stars === 2 ? 'Solid. A few strokes drifted.' : stars === 1 ? 'Finished. Try it again with the guide on.' : 'Rough one. Slow down and start each stroke at the dot.';
 
   return (
-    <Card className="pointer-events-auto w-[min(400px,calc(100vw-16px))] p-4 text-[12px]" data-testid="practice-complete">
+    <Card className="enter-up pointer-events-auto w-[min(400px,calc(100vw-16px))] p-4 text-[12px]" data-testid="practice-complete">
       <div className="flex items-start gap-3">
         <div className="flex-1">
           <div className="tl-label mb-0">Lesson complete</div>

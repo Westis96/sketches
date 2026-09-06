@@ -22,7 +22,7 @@ const DropdownMenuContent = React.forwardRef<HTMLDivElement, DropdownMenuContent
         ref={ref}
         className={cn(
           'ui-surface min-w-[12rem] rounded-[14px] p-1.5 text-[12.5px] text-[var(--text-1)] outline-none',
-          'transition-[opacity,transform] duration-150 data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0 data-[ending-style]:opacity-0',
+          'origin-[var(--transform-origin)] transition-[opacity,transform] ease-out data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:scale-95 data-[ending-style]:opacity-0 motion-reduce:data-[starting-style]:scale-100 motion-reduce:data-[ending-style]:scale-100 duration-180 data-[ending-style]:duration-150',
           className,
         )}
         {...props}

@@ -26,7 +26,9 @@ const TooltipContent = React.forwardRef<HTMLDivElement, TooltipContentProps>(({ 
         ref={ref}
         className={cn(
           'ui-tooltip rounded-[8px] bg-[var(--ink)] px-2.5 py-1.5 text-[12px] font-medium text-[var(--ink-fg)] shadow-md',
-          'transition-[opacity,transform] duration-150 data-[starting-style]:scale-95 data-[starting-style]:opacity-0 data-[ending-style]:opacity-0',
+          // Scales out of its trigger; once one tooltip is open its neighbours open with no delay and no motion (Base UI sets data-instant).
+          'origin-[var(--transform-origin)] transition-[opacity,transform] duration-125 ease-out data-[ending-style]:duration-100 data-[instant]:duration-0',
+          'data-[starting-style]:scale-[0.97] data-[starting-style]:opacity-0 data-[ending-style]:scale-[0.97] data-[ending-style]:opacity-0 motion-reduce:data-[starting-style]:scale-100 motion-reduce:data-[ending-style]:scale-100',
           className,
         )}
         {...props}
