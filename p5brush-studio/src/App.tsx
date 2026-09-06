@@ -16,6 +16,7 @@ import { PracticePicker } from '@/components/practice/PracticePicker';
 import { PracticeComplete } from '@/components/practice/PracticeComplete';
 import { WelcomeCard } from '@/components/WelcomeCard';
 import { PencilLab } from '@/components/PencilLab';
+import { InputFilters } from '@/components/InputFilters';
 import { PENCIL_LAB } from '@/lab';
 
 declare global {
@@ -150,8 +151,9 @@ function Shell() {
         <QuickActions onPractice={() => setPracticeOpen(true)} />
       </div>
       {PENCIL_LAB && !practice && (
-        <div className="pointer-events-none fixed left-2 top-14 z-30 max-h-[calc(100%-120px)] overflow-y-auto">
-          <PencilLab />
+        <div className="pointer-events-none fixed left-2 top-14 z-30 flex max-h-[calc(100%-120px)] flex-col gap-2 overflow-y-auto pr-1">
+          <InputFilters />
+          <PencilLab defaultOpen={false} />
         </div>
       )}
       <div className="pointer-events-none fixed right-2 top-2 z-30">

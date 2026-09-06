@@ -58,6 +58,14 @@ in the URL, or build it in with `VITE_PENCIL_LAB=1`. Pen samples record altitude
 and twist, and every stroke keeps the effects it was drawn with, so replays never depend
 on the current switches.
 
+The lab's second card, Input filters, puts a Kalman filter on every input channel: a
+constant-velocity model per axis for position and random-walk models for pressure,
+altitude, azimuth and twist, each with its process and measurement noise on a log slider
+and a live raw-to-filtered readout. The previous behaviour (streamline on position, a
+running average on pen pressure) stays the default and is selectable per channel, as is
+"off". A stroke stores the parameters it was conditioned with, and a switch draws the raw
+input path over the ink for comparison.
+
 Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
 pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the
 thumbnails are rendered by the engine) and trace it stroke by stroke. Each step sets the

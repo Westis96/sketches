@@ -432,10 +432,46 @@ try {
   check('pressure calibration maps the observed force range', !!calib && calib.min > 0.15 && calib.min < 0.3 && calib.max > 0.5 && calib.max < 0.65, JSON.stringify(calib));
   await studio((s) => s.setPencil({ calib: null }));
 
+  // Input filters: the defaults reproduce the legacy conditioning exactly.
+  const noisy = { tool: 'brush', spec: null, tipSource: '', size: 1, color: '#000', pressureMode: 'both', sensitivity: 1, seed: 1, input: 'pen', points: [] };
+  for (let i = 0; i < 40; i++) noisy.points.push({ x: 100 + i * 4, y: 200 + (i % 2 ? 3 : -3), p: i % 2 ? 0.7 : 0.3, alt: 40 + (i % 2 ? 6 : -6), az: 90 + (i % 2 ? 10 : -10), tw: 0 });
+  const filt = await studio((s, rec) => {
+    const spec = s.history()[0]?.spec ?? { weight: 29, scatter: 0.45, opacity: 6, spacing: 0.4, noise: 1, pressure: { mode: 'gaussian', curve: [0.36, 0.25], min_max: [0.48, 1.06] }, rotate: 'none', markerTip: true, type: 'custom' };
+    rec = { ...rec, spec };
+    const d = s.filters();
+    const defaults = { position: d.position, pressure: d.pressure, tilt: d.tilt, twist: d.twist };
+    const legacy = s.conditioned(rec), withDefaults = s.conditioned({ ...rec, filt: defaults });
+    const dev = (pts) => { const ys = pts.map((p) => p.y); const m = ys.reduce((a, b) => a + b, 0) / ys.length; return Math.sqrt(ys.reduce((a, y) => a + (y - m) ** 2, 0) / ys.length); };
+    const range = (pts, k) => Math.max(...pts.slice(5).map((p) => p[k])) - Math.min(...pts.slice(5).map((p) => p[k]));
+    const kal = s.conditioned({ ...rec, filt: { ...defaults, position: { mode: 'kalman', q: 0.02, r: 4, streamline: 0.575 }, pressure: { mode: 'kalman', q: 0.0005, r: 0.01 }, tilt: { mode: 'kalman', q: 0.5, r: 25 }, twist: { mode: 'kalman', q: 0.5, r: 25 } } });
+    const off = s.conditioned({ ...rec, filt: { ...defaults, position: { ...defaults.position, mode: 'off' }, pressure: { ...defaults.pressure, mode: 'off' } } });
+    return {
+      same: JSON.stringify(legacy) === JSON.stringify(withDefaults) && legacy.length > 10,
+      rawDev: dev(rec.points), kalDev: dev(kal), streamDev: dev(legacy),
+      rawP: range(rec.points, 'p'), kalP: range(kal, 'p'), rawAlt: range(rec.points, 'alt'), kalAlt: range(kal, 'alt'), rawAz: range(rec.points, 'az'), kalAz: range(kal, 'az'),
+      // (the first samples are dropped as pen-down jitter, so compare the tail)
+      offRaw: off.slice(-20).every((p, i) => { const r = rec.points[rec.points.length - 20 + i]; return p.x === r.x && p.y === r.y && p.p === r.p; }),
+    };
+  }, noisy);
+  check('default filters reproduce the legacy conditioning exactly', filt.same, JSON.stringify(filt));
+  check('kalman filters smooth position, pressure and tilt; "off" passes the raw samples', filt.kalDev < filt.rawDev * 0.5 && filt.kalP < filt.rawP * 0.5 && filt.kalAlt < filt.rawAlt * 0.5 && filt.kalAz < filt.rawAz * 0.5 && filt.offRaw, JSON.stringify(filt));
+
+  // Changed filter settings are stored on the stroke and replay identically.
+  await studio((s) => { s.clear(); s.setFilters({ position: { mode: 'kalman' }, pressure: { mode: 'kalman' } }); });
+  await drag([[200, 500], [400, 540], [600, 500]]);
+  await page.waitForTimeout(100);
+  const filtRec = await studio((s) => { const r = s.history()[s.history().length - 1]; return { mode: r.filt?.position?.mode, pm: r.filt?.pressure?.mode }; });
+  const filtDrawn = await checksum();
+  await studio((s) => s.rebuildAll());
+  check('a stroke keeps the filter parameters it was drawn with and rebuilds identically', filtRec.mode === 'kalman' && filtRec.pm === 'kalman' && (await checksum()).h === filtDrawn.h, JSON.stringify(filtRec));
+  await studio((s) => s.setFilters({ position: { mode: 'streamline' }, pressure: { mode: 'average' } }));
+
   // The lab panel opens with a lab flag in the URL; the hover footprint follows a hovering pen.
   await page.goto(base + '?lab=1', { waitUntil: 'load' });
   await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
   const labShown = (await page.locator('[data-testid=pencil-lab]').count()) === 1;
+  const labHeader = page.locator('[data-testid=pencil-lab] button[aria-expanded]');
+  if ((await labHeader.getAttribute('aria-expanded')) === 'false') await labHeader.click();
   await page.locator('[data-testid=pencil-lab] [aria-label="Hover footprint"]').click();
   await page.evaluate(() => {
     const c = document.getElementById('ink-canvas');
@@ -446,6 +482,10 @@ try {
   const hoverOn = await studio((s) => s.pencil().hover);
   check('?lab shows the pencil lab and the hover footprint follows a tilted pen', labShown && hoverOn && !!foot && foot.opacity === '1' && foot.w > 0 && /rotate\(/.test(foot.t), JSON.stringify({ labShown, hoverOn, foot }));
   await studio((s) => s.setPencil({ hover: false }));
+  await page.locator('[data-testid=input-filters] [aria-label="Position filter"]').getByText('Kalman', { exact: true }).click();
+  const posMode = await studio((s) => s.filters().position.mode);
+  check('the input filters card switches the position filter', posMode === 'kalman', posMode);
+  await studio((s) => s.setFilters({ position: { mode: 'streamline' } }));
   await page.goto(base, { waitUntil: 'load' });
   await page.waitForFunction(() => window.__studio && window.__studio.state.templatePreviews, null, { timeout: 20000 });
 

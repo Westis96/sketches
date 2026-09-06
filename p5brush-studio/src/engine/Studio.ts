@@ -15,6 +15,7 @@ import * as brush from 'p5.brush/standalone';
 import type { BrushParams } from 'p5.brush/standalone';
 import { StudioGL, type Dab } from './StudioGL';
 import { DEFAULT_PENCIL, activeFx, calibratePressure, calibrationFrom, eventTilt, type PencilSettings } from './pencil';
+import { DEFAULT_FILTERS, activeFilters, type FilterPatch, type FilterSettings } from './filters';
 import { compileTip, checkTip, tipExtent } from './tipShim';
 import {
   CHUNK_MIN_RAW, DEFAULT_SPEC, DEFAULT_TIP_SOURCE, SAVE_VERSION, boundsIntersect, chunkPoints, chunkSpec, clamp, clone, conditionPoints,
@@ -49,6 +50,8 @@ export interface Settings {
   pencilAuto: boolean;
   /** Pencil lab features (all off by default). */
   pencil: PencilSettings;
+  /** Input filters for every pointer channel (defaults reproduce the legacy conditioning). */
+  filters: FilterSettings;
 }
 
 export interface Hud {
@@ -64,6 +67,8 @@ export interface Hud {
   hovering: boolean;
   /** Predicted samples the browser offered on the last move. */
   predicted: number;
+  /** The last conditioned (filtered) sample of the stroke in progress. */
+  filtered: { p: number; alt: number; az: number; tw: number } | null;
   stamps: number;
 }
 
@@ -144,7 +149,20 @@ const DEFAULT_SETTINGS: Settings = {
   pencilOnly: false,
   pencilAuto: true,
   pencil: DEFAULT_PENCIL,
+  filters: DEFAULT_FILTERS,
 };
+
+/** One level of nested merge for the filter settings (each channel is its own object). */
+function mergeFilters(base: FilterSettings, patch: FilterPatch | undefined): FilterSettings {
+  const p = patch ?? {};
+  return {
+    showRaw: typeof p.showRaw === 'boolean' ? p.showRaw : base.showRaw,
+    position: { ...base.position, ...(p.position ?? {}) },
+    pressure: { ...base.pressure, ...(p.pressure ?? {}) },
+    tilt: { ...base.tilt, ...(p.tilt ?? {}) },
+    twist: { ...base.twist, ...(p.twist ?? {}) },
+  };
+}
 
 /** A previous committed image and the view it was rendered at, shown transformed while a rebuild runs. */
 interface Overlay { tex: WebGLTexture; view: View }
@@ -196,7 +214,7 @@ interface StrokeShape { s0: number; env: (s: number) => number }
 export class Studio {
   private state: StudioState = {
     settings: clone(DEFAULT_SETTINGS),
-    hud: { pointerType: null, pressure: 0, tiltX: 0, tiltY: 0, altitude: 90, azimuth: 0, twist: 0, hovering: false, predicted: 0, stamps: 0 },
+    hud: { pointerType: null, pressure: 0, tiltX: 0, tiltY: 0, altitude: 90, azimuth: 0, twist: 0, hovering: false, predicted: 0, filtered: null, stamps: 0 },
     canUndo: false,
     canRedo: false,
     strokeCount: 0,
@@ -324,6 +342,7 @@ export class Studio {
         ...s,
         spec: { ...clone(DEFAULT_SPEC), ...(s.spec ?? {}) },
         pencil: { ...DEFAULT_PENCIL, ...(s.pencil ?? {}) },
+        filters: mergeFilters(DEFAULT_FILTERS, s.filters),
         tool: 'brush',
       };
       try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
@@ -1391,6 +1410,8 @@ export class Studio {
     };
     const fx = input === 'pen' ? activeFx(s.pencil) : undefined;
     if (fx) rec.fx = fx;
+    const filt = activeFilters(s.filters);
+    if (filt) rec.filt = filt;
     return rec;
   }
 
@@ -1504,6 +1525,8 @@ export class Studio {
     const rect = this.canvas!.getBoundingClientRect();
     const input: InputKind = e.pointerType === 'pen' ? 'pen' : e.pointerType === 'touch' ? 'touch' : 'mouse';
     const first = this.pointFromEvent(e, rect);
+    if (this.predictCanvas) this.clearPredicted();
+    this.queueHud({ filtered: null });
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
     if (rec.tool === 'brush') rec.zoom = this.view.zoom;
@@ -1564,7 +1587,7 @@ export class Studio {
       pts.push(pt);
       live.lastRecorded = { ...pt };
     }
-    if (this.settings.pencil.predict && live.pointerType === 'pen') this.drawPredicted(e, live);
+    if (this.settings.filters.showRaw || (this.settings.pencil.predict && live.pointerType === 'pen')) this.drawLiveOverlay(e, live);
     this.schedulePreview();
   }
 
@@ -1589,22 +1612,32 @@ export class Studio {
   }
 
   /**
-   * Draws the browser's predicted pen samples as a translucent tail from the last
-   * recorded point, so the mark appears to keep up with the pencil. Overwritten
-   * on the next move and cleared on lift; never part of the stroke.
+   * Live overlay above the ink: the raw input path (filter tuning aid) and the
+   * browser's predicted pen samples as a translucent tail from the last recorded
+   * point, so the mark appears to keep up with the pencil. Redrawn on every move;
+   * the tail goes on lift, the raw path stays until the next stroke. Never part
+   * of the stroke.
    */
-  private drawPredicted(e: PointerEvent, live: Live) {
+  private drawLiveOverlay(e: PointerEvent | null, live: Live) {
     const ctx = this.predictCtx();
     if (!ctx) return;
     ctx.clearRect(0, 0, this.glW, this.glH);
     const rec = live.rec;
     if (rec.tool !== 'brush') return;
+    const v = this.view, dpr = this.dpr;
+    const toScreen = (pt: Point) => [(pt.x * v.zoom + v.x) * dpr, (pt.y * v.zoom + v.y) * dpr] as const;
+    if (this.settings.filters.showRaw && rec.points.length > 1) {
+      ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.strokeStyle = '#e0312d'; ctx.globalAlpha = 0.85; ctx.lineWidth = Math.max(1, dpr);
+      ctx.beginPath();
+      rec.points.forEach((pt, i) => { const [x, y] = toScreen(pt); if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y); });
+      ctx.stroke();
+    }
+    if (!e || !this.settings.pencil.predict || live.pointerType !== 'pen') return;
     const ev = e as PointerEvent & { getPredictedEvents?: () => PointerEvent[] };
     const pred = typeof ev.getPredictedEvents === 'function' ? ev.getPredictedEvents() : [];
     this.queueHud({ predicted: pred.length });
     if (!pred.length) return;
-    const v = this.view, dpr = this.dpr;
-    const toScreen = (pt: Point) => [(pt.x * v.zoom + v.x) * dpr, (pt.y * v.zoom + v.y) * dpr] as const;
     const last = rec.points[rec.points.length - 1];
     const width = Math.max(2, rec.spec.weight * rec.size * this.state.tipExtent * rec.spec.pressure.min_max[1] * (rec.pressureMode === 'gaussian' ? 1 : mapStylus(last.p, rec.sensitivity))) * v.zoom * dpr;
     ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -1622,6 +1655,9 @@ export class Studio {
 
   /** Pencil lab settings; effects apply to the next stroke, strokes keep the effects they were drawn with. */
   setPencil = (patch: Partial<PencilSettings>) => { this.set({ pencil: { ...this.settings.pencil, ...patch } }); };
+
+  /** Input filter settings (per channel); strokes keep the parameters they were conditioned with. */
+  setFilters = (patch: FilterPatch) => { this.set({ filters: mergeFilters(this.settings.filters, patch) }); };
 
   /** Collects pen pressures for a few seconds; the 5th–95th percentiles become the mapped range. */
   startCalibration = (seconds = 8) => {
@@ -1657,7 +1693,7 @@ export class Studio {
     this.live = null;
     this.previewQueued = false;
     this.queueHud({ pressure: 0, predicted: 0 });
-    this.clearPredicted();
+    if (this.settings.filters.showRaw) this.drawLiveOverlay(null, live); else this.clearPredicted();
     if (live.pointerType === 'pen') this.maybeFinishCalibration();
     if (live.rec.tool === 'brush') {
       // Stamp whatever is left as the last chunk. Nothing is re-rendered on lift:
@@ -1722,6 +1758,8 @@ export class Studio {
     const rec = live.rec as BrushRecord;
     const g = chunkPoints(rec, upto, live.condLen, final);
     if (!g) return false;
+    const lp = g.pts[g.pts.length - 1];
+    this.queueHud({ filtered: { p: lp.p, alt: lp.alt ?? 90, az: lp.az ?? 0, tw: lp.tw ?? 0 } });
     const len = pathLength(g.pts);
     if (!final && len < rec.spec.spacing * 3) return false;
     const t0 = performance.now();
@@ -2088,6 +2126,7 @@ export class Studio {
       pan: (dx: number, dy: number) => { this.setViewLive({ ...this.view, x: this.view.x + dx, y: this.view.y + dy }); this.commitView(); }, flushPaint: () => this.flushPaint(), isPainting: () => this.pending !== null, saveNow: () => this.saveNow(), saveKey: SAVE_KEY,
       setCulling: (on: boolean) => { this.cullingEnabled = on; },
       pencil: () => this.settings.pencil, setPencil: (p: Partial<PencilSettings>) => this.setPencil(p), startCalibration: (sec?: number) => this.startCalibration(sec),
+      filters: () => this.settings.filters, setFilters: (p: FilterPatch) => this.setFilters(p),
       lastCulled: () => this.lastCulled,
       perf: () => ({ ...this.perf }),
       diagnostics: () => this.diagnostics(),

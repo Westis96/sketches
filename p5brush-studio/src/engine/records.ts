@@ -4,6 +4,7 @@
  */
 import { checkTip } from './tipShim';
 import { lerpAngle, nibAngle, tiltFactors, type PencilFx } from './pencil';
+import { DEFAULT_FILTERS, Kalman1D, KalmanCV, parseFilters, type FilterParams } from './filters';
 
 export interface GaussianPressure {
   mode: 'gaussian';
@@ -79,6 +80,8 @@ export interface BrushRecord {
   fx?: PencilFx;
   /** Barrel twist at pen-down, set on chunk records so the roll baseline is the stroke's, not the chunk's. Not saved. */
   rollFrom?: number;
+  /** Input filter parameters the stroke was conditioned with; absent = the legacy defaults. */
+  filt?: FilterParams;
 }
 
 export interface EraserRecord {
@@ -104,7 +107,7 @@ export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
 export const SAVE_VERSION = 1;
 
 type SavedRecord =
-  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number; tl?: number[]; fx?: PencilFx }
+  | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number; tl?: number[]; fx?: PencilFx; fl?: FilterParams }
   | { t: 'e'; size: number; pts: number[] }
   | { t: 'c' };
 
@@ -133,6 +136,7 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
     const tl = packTilt(r.points);
     if (tl) saved.tl = tl;
     if (r.fx) saved.fx = r.fx;
+    if (r.filt) saved.fl = r.filt;
     return saved;
   });
 }
@@ -152,6 +156,8 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
       if (Array.isArray(r.ch) && r.ch.every((n) => Number.isInteger(n) && n > 0 && n <= points.length)) rec.chunks = r.ch;
       if (typeof r.z === 'number' && r.z > 0) rec.zoom = r.z;
       if (isFx(r.fx)) rec.fx = r.fx;
+      const fl = parseFilters(r.fl);
+      if (fl) rec.filt = fl;
       out.push(rec);
     }
   }
@@ -289,19 +295,46 @@ export const strokeWidthFor = (rec: BrushRecord) => clamp(rec.spec.weight * rec.
 export function conditionPoints(rec: BrushRecord, final = false): Point[] {
   const out = conditionPressure(rec);
   if (!rec.input || out.length < 3) return out;
-  // Causal position smoothing (prefix-stable, so chunk replays match): each point
-  // moves part of the way from the previous smoothed point toward its sample,
-  // which takes the sub-pixel jitter out of the path at the cost of a short lag.
+  const f = (rec.filt ?? DEFAULT_FILTERS).position;
+  if (f.mode === 'off') return out;
+  // Causal position smoothing (prefix-stable, so chunk replays match). Streamline:
+  // each point moves part of the way from the previous smoothed point toward its
+  // sample, which takes the sub-pixel jitter out of the path at the cost of a
+  // short lag. Kalman: a constant-velocity model per axis, which follows a steady
+  // hand with less lag and still averages out the jitter (see filters.ts).
   // On lift the last point is the raw sample, so the stroke ends under the pen.
   const smoothed: Point[] = [out[0]];
-  let sx = out[0].x, sy = out[0].y;
-  for (let i = 1; i < out.length; i++) {
-    sx += (out[i].x - sx) * STREAMLINE;
-    sy += (out[i].y - sy) * STREAMLINE;
-    smoothed.push(at(out[i], Math.round(sx * 100) / 100, Math.round(sy * 100) / 100, out[i].p));
+  if (f.mode === 'kalman') {
+    const kx = new KalmanCV(f.q, f.r), ky = new KalmanCV(f.q, f.r);
+    kx.update(out[0].x); ky.update(out[0].y);
+    for (let i = 1; i < out.length; i++) smoothed.push(at(out[i], Math.round(kx.update(out[i].x) * 100) / 100, Math.round(ky.update(out[i].y) * 100) / 100, out[i].p));
+  } else {
+    let sx = out[0].x, sy = out[0].y;
+    for (let i = 1; i < out.length; i++) {
+      sx += (out[i].x - sx) * f.streamline;
+      sy += (out[i].y - sy) * f.streamline;
+      smoothed.push(at(out[i], Math.round(sx * 100) / 100, Math.round(sy * 100) / 100, out[i].p));
+    }
   }
   if (final) smoothed[smoothed.length - 1] = { ...out[out.length - 1] };
   return smoothed;
+}
+
+/** Kalman filters on altitude, azimuth and twist, in place on freshly built points. */
+function filterTilt(out: Point[], filt: FilterParams | undefined) {
+  if (!filt || out.length < 2 || out[0].alt === undefined) return;
+  if (filt.tilt.mode === 'kalman') {
+    const ka = new Kalman1D(filt.tilt.q, filt.tilt.r), kz = new Kalman1D(filt.tilt.q, filt.tilt.r);
+    for (const p of out) {
+      if (p.alt === undefined) continue;
+      p.alt = clamp(Math.round(ka.update(p.alt)), 0, 90);
+      p.az = Math.round(kz.updateAngle(p.az ?? 0)) % 360;
+    }
+  }
+  if (filt.twist.mode === 'kalman') {
+    const kt = new Kalman1D(filt.twist.q, filt.twist.r);
+    for (const p of out) if (p.alt !== undefined) p.tw = Math.round(kt.updateAngle(p.tw ?? 0)) % 360;
+  }
 }
 
 function conditionPressure(rec: BrushRecord): Point[] {
@@ -323,16 +356,22 @@ function conditionPressure(rec: BrushRecord): Point[] {
   if (pts.length < 2) return pts;
 
   const out: Point[] = new Array(pts.length);
+  const pf = (rec.filt ?? DEFAULT_FILTERS).pressure;
   if (!simulate) {
     // Pen: the device pressure is the truth. A pen-down sample often carries no
-    // pressure yet, so the first point borrows from the next; after that a
-    // half-weight running average removes single-sample spikes without lag.
+    // pressure yet, so the first point borrows from the next; after that either a
+    // half-weight running average removes single-sample spikes without lag, or a
+    // random-walk Kalman filter does (its gain is set by q and r), or nothing.
     let prev = pts[0].p < 0.1 ? pts[1].p * 0.6 : (pts[0].p + pts[1].p) / 2;
+    const k = pf.mode === 'kalman' ? new Kalman1D(pf.q, pf.r) : null;
+    if (k) k.update(prev);
     for (let i = 0; i < pts.length; i++) {
-      const p = i === 0 ? prev : prev + (pts[i].p - prev) * 0.5;
+      const z = pts[i].p;
+      const p = i === 0 ? prev : k ? k.update(z) : pf.mode === 'off' ? z : prev + (z - prev) * 0.5;
       prev = p;
       out[i] = at(pts[i], pts[i].x, pts[i].y, Math.round(p * 1000) / 1000);
     }
+    filterTilt(out, rec.filt);
     return out;
   }
 
@@ -350,7 +389,9 @@ function conditionPressure(rec: BrushRecord): Point[] {
     running += dists[i];
   }
 
-  // Pass 3: simulated pressure per point, slow = heavy, fast = light.
+  // Pass 3: simulated pressure per point, slow = heavy, fast = light. A Kalman
+  // pressure filter smooths the simulated value too.
+  const k = pf.mode === 'kalman' ? new Kalman1D(pf.q, pf.r) : null;
   for (let i = 0; i < pts.length; i++) {
     const sp = Math.min(1, dists[i] / size);
     const target = Math.min(1, 1 - sp);
@@ -358,16 +399,16 @@ function conditionPressure(rec: BrushRecord): Point[] {
     prev = p;
     // Tempered to tldraw's effective range so it maps to a moderate size swing
     // through mapStylus (0.5 → ×1).
-    out[i] = at(pts[i], pts[i].x, pts[i].y, 0.25 + 0.5 * p);
+    const v = 0.25 + 0.5 * p;
+    out[i] = at(pts[i], pts[i].x, pts[i].y, k ? Math.round(k.update(v) * 1000) / 1000 : v);
   }
+  filterTilt(out, rec.filt);
   return out;
 }
 
 // ---------------------------------------------------------------------------
 // Live chunks: strokes drawn by hand are stamped piece by piece as they arrive
 // ---------------------------------------------------------------------------
-/** Position streamline: how far each conditioned point moves toward the raw sample (tldraw's default). */
-const STREAMLINE = 0.575;
 
 /** Raw samples needed before the first chunk: conditioning's early decisions are final by then. */
 export const CHUNK_MIN_RAW = 6;

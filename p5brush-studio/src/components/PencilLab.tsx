@@ -11,12 +11,12 @@ import { cn } from '@/lib/utils';
  * live telemetry so it is obvious what the device reports. Effects apply to the
  * next stroke; each stroke keeps the effects it was drawn with.
  */
-export function PencilLab() {
+export function PencilLab({ defaultOpen = true }: { defaultOpen?: boolean }) {
   const studio = useStudio();
   const pencil = useStudioState((s) => s.settings.pencil);
   const hud = useStudioState((s) => s.hud);
   const calibrating = useStudioState((s) => s.calibrating);
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen);
   const isPen = hud.pointerType === 'pen';
   const flat = tiltFlat(hud.altitude);
   const changed = JSON.stringify(pencil) !== JSON.stringify(DEFAULT_PENCIL);
