@@ -131,9 +131,37 @@ interface Live {
   erasedUpTo: number;
   /** World position at which a point was last *recorded* (not merged), for pen/finger thinning. */
   lastRecorded: Point;
+  /** Incremental brush preview: conditioned points already stamped, their path length, chunk count. */
+  stampedFrom: number;
+  stampedLen: number;
+  chunk: number;
 }
 
 const round = (v: number, d: number) => Math.round(v * d) / d;
+
+/** Extra shaping applied to plot pressures while stamping: `env(s)` at path length `s` from `s0`. */
+interface StrokeShape { s0: number; env: (s: number) => number }
+
+/**
+ * Stand-in for p5.brush's gaussian pressure envelope during the live preview.
+ * The engine's envelope is relative to the finished stroke's length (peak near
+ * the middle, tapers at both ends), which cannot be known mid-stroke. This uses
+ * the same curve with its expected random parameters and a length that grows
+ * with the stroke, so the mark rises over its first stretch and then holds full
+ * weight at the tip; the end taper appears with the exact render on lift.
+ */
+function previewEnvelope(pressure: BrushSpec['pressure']): (s: number) => number {
+  const [min, max] = pressure.min_max;
+  if (min === max) return () => min;
+  const a = 0.5, b = 1 - pressure.curve[1] * 1.25, c = 3.25, REF = 300;
+  return (s: number) => {
+    const L = Math.max(REF, s * 2);
+    const peak = a * L;
+    const hw = (s < peak ? b * 1.2 : b * 0.8) * (L / 2);
+    const g = 1 / (1 + Math.pow(Math.abs((s - peak) / hw), 2 * c));
+    return min + (max - min) * g;
+  };
+}
 
 export class Studio {
   private state: StudioState = {
@@ -452,17 +480,21 @@ export class Studio {
    * Geometry is resampled in world space (zoom-independent), then mapped to
    * screen space; the brush itself is scaled by zoom in ensureRegistered().
    */
-  private stampRecord(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View): number {
+  private stampRecord(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View, shape?: StrokeShape): number {
     this.primeEngine(glW, glH, dpr);
-    return this.stampRaw(rec, glW, glH, dpr, view);
+    return this.stampRaw(rec, glW, glH, dpr, view, shape);
   }
 
-  private stampRaw(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View): number {
+  private stampRaw(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View, shape?: StrokeShape): number {
     const name = this.ensureRegistered(rec, view.zoom);
     const { origin, segs, endA, endP, stamps } = strokeSegments(rec);
     const plot = new brush.Plot('curve');
-    for (const s of segs) plot.addSegment(s.a, s.len * view.zoom, s.p, true);
-    plot.endPlot(endA, endP, true);
+    let s0 = shape?.s0 ?? 0;
+    for (const s of segs) {
+      plot.addSegment(s.a, s.len * view.zoom, shape ? s.p * shape.env(s0) : s.p, true);
+      s0 += s.len;
+    }
+    plot.endPlot(endA, shape ? endP * shape.env(s0) : endP, true);
     brush.seed(rec.seed);
     brush.push();
     brush.translate(-glW / 2, -glH / 2); // p5.brush origin is the canvas centre
@@ -1166,7 +1198,7 @@ export class Studio {
     const first = this.pointFromEvent(e, rect);
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first } };
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, stampedFrom: 0, stampedLen: 0, chunk: 0 };
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -1226,11 +1258,17 @@ export class Studio {
     const live = this.live;
     if (!live || e.pointerId !== live.id) return;
     e.preventDefault();
-    // Points that arrived after the last preview frame are not on screen yet;
-    // once the preview is current the framebuffer *is* the committed result.
-    if (this.previewQueued) this.renderPreview();
     this.live = null;
+    this.previewQueued = false;
     this.queueHud({ pressure: 0 });
+    if (live.rec.tool === 'brush') {
+      // The live preview is an approximation stamped chunk by chunk; the stroke
+      // that gets committed is one exact render, identical to every later replay.
+      this.sgl!.blit(this.sgl!.committedTex);
+      this.queueHud({ stamps: this.renderBrushStroke(live.rec) });
+    } else if (live.rec.points.length > live.erasedUpTo) {
+      this.sgl!.eraseDabs(this.eraserDabs(live.rec, live.erasedUpTo));
+    }
     this.pushRecord(live.rec);
     if (this.state.practice?.status === 'active') this.practiceEvaluate(live.rec);
   }
@@ -1241,8 +1279,16 @@ export class Studio {
     requestAnimationFrame(() => this.renderPreview());
   }
 
-  /** Live view: brush strokes are re-stamped from the committed image (seeded, so
-   *  stable); eraser dabs are applied incrementally since they are cumulative. */
+  /**
+   * Live view. Eraser dabs are cumulative and applied as they arrive. Brush
+   * strokes are stamped incrementally too: each frame only the segment since the
+   * last frame is rendered, so the cost per frame stays constant however long
+   * the stroke gets (re-stamping the whole stroke made the ink trail further
+   * behind the pencil the longer one drew). Per-stroke effects that would leave
+   * seams between chunks are disabled (marker tips, the per-stroke alpha noise,
+   * the engine's length-relative pressure envelope); a fixed-length start rise
+   * stands in for the envelope until the exact render on lift.
+   */
   private renderPreview() {
     this.previewQueued = false;
     const live = this.live;
@@ -1255,9 +1301,29 @@ export class Studio {
       }
       return;
     }
-    this.sgl!.blit(this.sgl!.committedTex);
-    const stamps = this.renderBrushStroke(rec);
-    if (stamps !== this.state.hud.stamps) this.queueHud({ stamps });
+    // Conditioning's early-jitter decisions are final once 5 raw samples exist;
+    // before that the chunk boundary could shift. A tap is rendered exactly on lift.
+    if (rec.points.length < 5) return;
+    const cond = conditionPoints(rec);
+    const start = live.stampedFrom === 0 ? 0 : live.stampedFrom - 1;
+    if (cond.length - start < 2) return;
+    const pts = cond.slice(start);
+    let len = 0;
+    for (let i = 1; i < pts.length; i++) len += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    // The engine places round(length / spacing) stamps per plot, so a chunk much
+    // shorter than a few stamp steps loses density to rounding; wait for more.
+    if (len < rec.spec.spacing * 3) return;
+    const chunk: BrushRecord = {
+      ...rec, points: pts, input: undefined, seed: rec.seed + 1 + live.chunk,
+      spec: { ...rec.spec, noise: 0, markerTip: false, pressure: { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] } },
+    };
+    const env = previewEnvelope(rec.spec.pressure);
+    // No priming stroke here: it only matters for marker tips (off) and cold
+    // framebuffers (warmed by the first chunk), and it would double the fixed cost per frame.
+    this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0: live.stampedLen, env });
+    live.stampedLen += len;
+    live.stampedFrom = cond.length;
+    live.chunk++;
   }
 
   private queueHud(patch: Partial<Hud>) {
