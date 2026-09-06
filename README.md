@@ -61,8 +61,9 @@ WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are
 rendered by the engine itself), edit the `brush.add(...)` parameters live, paste a spec from
 the Brush Maker, and copy the drawing back out as a p5.js sketch. The drawing and settings
-autosave in the browser (localStorage) and are restored on the next visit; Clear is
-undoable, Escape cancels the stroke in progress, and a size cursor shows the brush or
+autosave in the browser (localStorage) and are restored on the next visit; Clear resets
+the drawing and its history (Undo right after brings it back, until the next stroke),
+Escape cancels the stroke in progress, and a size cursor shows the brush or
 eraser footprint.
 
 Layout: `src/engine/` holds the framework-free engine (`Studio.ts` drives p5.brush,

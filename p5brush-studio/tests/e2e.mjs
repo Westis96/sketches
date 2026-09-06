@@ -102,11 +102,20 @@ try {
   const drawnZoom = await studio((s) => s.history()[s.history().length - 1].zoom);
   check('a hand-drawn stroke remembers the zoom it was drawn at', drawnZoom === 1);
 
-  // Clear is undoable.
+  // Clear resets the drawing and its history; Undo right after brings it back.
   await studio((s) => s.clear());
-  check('clear empties the visible drawing', (await studio((s) => s.strokes().length)) === 0);
+  const cleared = await studio((s) => ({ visible: s.strokes().length, history: s.history().length, canUndo: s.state.canUndo, canRedo: s.state.canRedo }));
+  await studio((s) => s.saveNow());
+  const savedAfterClear = await page.evaluate((key) => JSON.parse(localStorage.getItem(key)).strokes.length, await studio((s) => s.saveKey));
+  check('clear empties the drawing, the history and the autosave', cleared.visible === 0 && cleared.history === 0 && !cleared.canRedo && savedAfterClear === 0, JSON.stringify(cleared));
   await studio((s) => s.undo());
-  check('undo restores strokes after clear', (await studio((s) => s.strokes().length)) === 2);
+  check('undo restores strokes after clear', (await studio((s) => s.strokes().length)) === 2 && (await checksum()).h === drawn.h);
+  await studio((s) => s.clear());
+  await studio((s) => s.commit([{ x: 100, y: 100, p: 0.5 }, { x: 200, y: 120, p: 0.5 }], { seed: 5 }));
+  await studio((s) => s.undo());
+  check('a new stroke after clear forfeits the restore', (await studio((s) => s.history().length)) === 0);
+  await studio((s) => s.commit([{ x: 200, y: 600, p: 0.5 }, { x: 400, y: 560, p: 0.6 }, { x: 600, y: 620, p: 0.5 }, { x: 800, y: 580, p: 0.5 }], { seed: 6 }));
+  await studio((s) => s.commit([{ x: 100, y: 200, p: 0.5 }, { x: 300, y: 220, p: 0.5 }], { seed: 7 }));
 
   // Escape cancels a live stroke.
   const before = await studio((s) => s.history().length);

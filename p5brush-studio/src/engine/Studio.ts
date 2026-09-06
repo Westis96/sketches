@@ -189,6 +189,8 @@ export class Studio {
   /** Canvas after an undone stroke, so redo of it is a swap too. */
   private redoSnaps: Array<{ count: number; tex: WebGLTexture }> = [];
   private texPool: WebGLTexture[] = [];
+  /** The drawing removed by the last Clear, restorable until the next stroke. */
+  private clearedBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[] } | null = null;
   /** Progressive rebuild in flight (large drawings after a view or paper change). */
   private pending: { records: StrokeRecord[]; index: number; scratch: WebGLTexture; raf: number; overlay: Overlay | null } | null = null;
 
@@ -264,7 +266,7 @@ export class Studio {
   private syncHistory() {
     const pr = this.state.practice;
     this.emit({
-      canUndo: pr ? pr.status === 'active' && pr.step > 0 : this.strokes.length > 0,
+      canUndo: pr ? pr.status === 'active' && pr.step > 0 : this.strokes.length > 0 || this.clearedBackup !== null,
       canRedo: pr ? false : this.redoStack.length > 0,
       strokeCount: visibleRecords(this.strokes).length,
     });
@@ -955,6 +957,7 @@ export class Studio {
     sgl.committedTex = this.takeTexture();
     sgl.snapshot(sgl.committedTex);
     this.strokes.push(rec);
+    this.clearedBackup = null; // a new stroke forfeits the restore of a cleared drawing
     if (clearRedo) { this.redoStack = []; this.dropSnaps(this.redoSnaps); }
     const n = this.strokes.length;
     if (n % CHECKPOINT_EVERY === 0) {
@@ -976,7 +979,11 @@ export class Studio {
   undo = () => {
     if (this.live) this.cancelStroke();
     if (this.state.practice) { this.practiceBack(); return; }
-    if (!this.strokes.length) { this.toast('Nothing to undo'); return; }
+    if (!this.strokes.length) {
+      if (this.clearedBackup) { this.restoreCleared(); return; }
+      this.toast('Nothing to undo');
+      return;
+    }
     this.flushPaint();
     this.redoStack.push(this.strokes.pop()!);
     const n = this.strokes.length, sgl = this.sgl!;
@@ -1021,12 +1028,38 @@ export class Studio {
   }
 
   /** Clears the paper as an undoable history entry. */
+  /**
+   * Clears the drawing and its history: strokes, redo, checkpoints and undo
+   * snapshots all go, and the autosave shrinks to an empty drawing. The old
+   * drawing is held in memory until the next stroke, so Undo (or the toast)
+   * can bring it back if the clear was a slip.
+   */
   clear = () => {
     if (this.live) this.cancelStroke();
     if (this.state.practice) { this.restartPractice(); return; }
-    if (visibleRecords(this.strokes).length === 0) { this.toast('The paper is already blank'); return; }
-    this.commitRecord({ tool: 'clear' });
-    this.toast('Canvas cleared', { action: { label: 'Undo', onClick: this.undo } });
+    if (!this.strokes.length) { this.toast('The paper is already blank'); return; }
+    this.flushPaint();
+    this.clearedBackup = { strokes: this.strokes, redo: this.redoStack };
+    this.strokes = [];
+    this.redoStack = [];
+    this.truncateCheckpoints(-1);
+    this.dropSnaps(this.undoSnaps);
+    this.dropSnaps(this.redoSnaps);
+    this.paint(this.sgl!.paperTex, []);
+    this.syncHistory();
+    this.toast('Canvas cleared', { action: { label: 'Undo', onClick: this.restoreCleared }, duration: 6000 });
+  };
+
+  /** Brings back the drawing removed by the last Clear, if nothing has been drawn since. */
+  restoreCleared = () => {
+    const b = this.clearedBackup;
+    if (!b || this.strokes.length) return;
+    this.clearedBackup = null;
+    this.strokes = b.strokes;
+    this.redoStack = b.redo;
+    this.repaintPaper();
+    this.syncHistory();
+    this.toast('Drawing restored');
   };
 
   /** Discards the stroke in progress (Escape, or a second finger turning it into a gesture). */
