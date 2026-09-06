@@ -311,8 +311,28 @@ try {
   await drag([[200, 300], [400, 330], [600, 300]]);
   const diag = await studio((s) => s.diagnostics());
   const t = diag.tests;
-  const agree = Math.max(t.oneShot, t.chunked, t.livePath, t.engineReadback) - Math.min(t.oneShot, t.chunked, t.livePath, t.engineReadback) < 20;
-  check('render self-test: one-shot, chunked, live-path and engine-readback agree', agree && t.oneShot < t.paper - 20, JSON.stringify(t));
+  check('render self-test: one-shot and chunked agree', Math.abs(t.oneShot - t.chunked) < 20 && t.oneShot < t.paper - 20, JSON.stringify(t));
+
+  // WebKit delivers each coalesced pen batch twice; repeats must not enter the path.
+  await page.evaluate(() => { PointerEvent.prototype.getCoalescedEvents = function () { return this.__coalesced || []; }; });
+  const dupRec = await page.evaluate(async () => {
+    const c = document.getElementById('ink-canvas');
+    const mk = (type, x, y, p) => new PointerEvent(type, { pointerType: 'pen', pointerId: 9, isPrimary: true, bubbles: true, cancelable: true, clientX: x, clientY: y, pressure: p, buttons: 1 });
+    c.dispatchEvent(mk('pointerdown', 300, 500, 0.3));
+    let x = 300;
+    for (let batch = 0; batch < 20; batch++) {
+      const group = []; for (let i = 0; i < 4; i++) { x += 3; group.push(mk('pointermove', x, 500 + Math.sin(x / 20) * 10, 0.3 + batch * 0.01)); }
+      for (let rep = 0; rep < 2; rep++) { const ev = mk('pointermove', x, 500 + Math.sin(x / 20) * 10, 0.3 + batch * 0.01); ev.__coalesced = group; window.dispatchEvent(ev); }
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    window.dispatchEvent(mk('pointerup', x, 500, 0.3));
+    await new Promise((r) => setTimeout(r, 100));
+    const r = window.__studio.history()[window.__studio.history().length - 1];
+    let back = 0; for (let i = 1; i < r.points.length; i++) if (r.points[i].x < r.points[i - 1].x) back++;
+    return { n: r.points.length, back };
+  });
+  check('duplicate coalesced pen batches are dropped, the path never doubles back', dupRec.back === 0 && dupRec.n > 60 && dupRec.n <= 81, JSON.stringify(dupRec));
+  await studio((s) => s.undo());
   check('diagnostics describe the last hand-drawn stroke', diag.stroke && diag.stroke.input === 'mouse' && diag.stroke.chunks >= 1, diag.summary);
 
   check('no page errors', pageErrors.length === 0, pageErrors.join(' | '));

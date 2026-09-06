@@ -108,6 +108,8 @@ const MAX_CHECKPOINTS = 2;
 const MAX_STEP_SNAPS = 2;
 /** Live chunks are stamped at most this often; fewer chunks make replays cheaper. */
 const MIN_CHUNK_INTERVAL_MS = 15;
+/** Raw samples remembered for duplicate detection (a coalesced batch is at most a few samples). */
+const RECENT_SAMPLES = 24;
 /** Rebuilds with more strokes than this are spread over frames so the UI never freezes. */
 const PROGRESSIVE_MIN_STROKES = 12;
 const PROGRESSIVE_BUDGET_MS = 9;
@@ -138,6 +140,8 @@ interface Live {
   erasedUpTo: number;
   /** World position at which a point was last *recorded* (not merged), for pen/finger thinning. */
   lastRecorded: Point;
+  /** Keys of the most recent raw samples: WebKit delivers each batch of coalesced pen samples twice. */
+  recent: string[];
   /** Chunked brush stroke: conditioned length reached, path length stamped, chunk count, last chunk time. */
   condLen: number;
   stampedLen: number;
@@ -196,44 +200,8 @@ export class Studio {
   private sampleQueued = false;
   private detach: (() => void) | null = null;
   private extentCache = new Map<string, number>();
-  /**
-   * Exact mirror of the canvas, kept current whenever the engine renders on it.
-   * p5.brush composites each stroke against a copy of the canvas region under
-   * it, which it takes from the default framebuffer with blitFramebuffer; on
-   * WebKit that copy came back blank for small regions and hand-drawn strokes
-   * rendered solid black on iPad. The engine's source copy is therefore served
-   * from this texture instead (see the build-time transform in vite.config.ts),
-   * and the live preview restores chunk regions from it too.
-   */
-  private mirrorTex: WebGLTexture | null = null;
-  private mirrorReady = false;
-
-  /**
-   * Whole-canvas refresh of the mirror; call after any write to the canvas the
-   * engine may read. Always a full copy: partial readbacks of the drawing buffer
-   * (copyTexSubImage2D of a sub-rectangle, like the engine's own blitFramebuffer
-   * of its dirty rect) come back wrong on WebKit, and a mirror that lags one
-   * chunk erases the tail of the previous chunk on every frame, which showed as
-   * dashed and beaded strokes on iPad, worst when drawing fast. A full
-   * copyTexImage2D is the one readback that has always worked there.
-   */
-  private refreshMirror() {
-    const sgl = this.sgl!;
-    this.mirrorTex ??= sgl.createTexture();
-    sgl.snapshot(this.mirrorTex);
-    this.mirrorReady = true;
-  }
-  private refreshMirrorRegion(_r: { x: number; y: number; w: number; h: number }) {
-    this.refreshMirror();
-  }
-  /** Engine hook: draws the mirror into the engine's bound source framebuffer instead of a canvas readback. */
-  private blitSource = (gl: WebGL2RenderingContext, x0: number, y0: number, x1: number, y1: number): boolean => {
-    if (!this.sgl || gl !== this.sgl.gl || !this.mirrorReady || !this.mirrorTex) return false;
-    this.sgl.drawIntoBound(this.mirrorTex, x0, y0, x1, y1);
-    return true;
-  };
   /** Rolling cost counters (ms), read through the debug hook. */
-  private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, restoreMs: 0, stampMs: 0, snapMs: 0, plotMs: 0, compositeMs: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0 };
+  private perf = { previewMs: 0, previewFrames: 0, chunkMs: 0, chunks: 0, stampMs: 0, plotMs: 0, compositeMs: 0, rebuildMs: 0, rebuilds: 0, paintStrokes: 0 };
   /** The user's drawing while a lesson occupies the canvas. */
   private practiceBackup: { strokes: StrokeRecord[]; redo: StrokeRecord[]; settings: Settings; view: View } | null = null;
   private lessonPreviewsQueued = false;
@@ -370,7 +338,6 @@ export class Studio {
       }
     }
 
-    (globalThis as unknown as { __p5brushBlitSource?: unknown }).__p5brushBlitSource = this.blitSource;
     const onDown = (e: PointerEvent) => this.onPointerDown(e);
     const onMove = (e: PointerEvent) => this.onPointerMove(e);
     const onUp = (e: PointerEvent) => this.onPointerUp(e);
@@ -404,8 +371,6 @@ export class Studio {
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKey);
     this.detach = () => {
-      const g = globalThis as unknown as { __p5brushBlitSource?: unknown };
-      if (g.__p5brushBlitSource === this.blitSource) delete g.__p5brushBlitSource;
       canvas.removeEventListener('wheel', onWheel);
       document.removeEventListener('gesturestart', prevent);
       window.removeEventListener('keydown', onKey);
@@ -489,9 +454,7 @@ export class Studio {
   /** Stamps a brush record on top of whatever is in the framebuffer. Returns stamp count. */
   private renderBrushStroke(rec: BrushRecord): number {
     if (rec.chunks) return this.renderChunked(rec);
-    const stamps = this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
-    this.refreshMirrorRegion(this.chunkRegion(rec, rec.points));
-    return stamps;
+    return this.stampRecord(rec, this.glW, this.glH, this.dpr, this.committedView);
   }
 
   /**
@@ -838,8 +801,8 @@ export class Studio {
   }
 
   private renderRecord(rec: StrokeRecord) {
-    if (rec.tool === 'clear') { this.sgl!.blit(this.sgl!.paperTex); this.refreshMirror(); }
-    else if (rec.tool === 'eraser') { this.sgl!.eraseDabs(this.eraserDabs(rec, 0)); this.refreshMirror(); }
+    if (rec.tool === 'clear') this.sgl!.blit(this.sgl!.paperTex);
+    else if (rec.tool === 'eraser') this.sgl!.eraseDabs(this.eraserDabs(rec, 0));
     else this.renderBrushStroke(rec);
   }
 
@@ -871,7 +834,6 @@ export class Studio {
     if (!p) return;
     cancelAnimationFrame(p.raf);
     this.sgl!.blit(p.scratch);
-    this.refreshMirror();
     while (p.index < p.records.length) this.paintOne(p.records[p.index++]);
     this.finishProgressive(p);
   }
@@ -916,7 +878,6 @@ export class Studio {
       if (this.pending !== p) return;
       const t0 = performance.now();
       sgl.blit(scratch);
-      this.refreshMirror();
       while (p.index < p.records.length && performance.now() - t0 < PROGRESSIVE_BUDGET_MS) this.paintOne(p.records[p.index++]);
       sgl.snapshot(scratch);
       this.perf.rebuildMs += performance.now() - t0;
@@ -935,7 +896,6 @@ export class Studio {
     this.cancelPaint();
     const sgl = this.sgl!;
     sgl.blit(baseTex);
-    this.refreshMirror();
     this.lastCulled = 0;
     for (const rec of records) this.paintOne(rec);
     sgl.snapshot(sgl.committedTex);
@@ -984,7 +944,6 @@ export class Studio {
   private commitRecord(rec: StrokeRecord, clearRedo = true) {
     this.flushPaint();
     this.sgl!.blit(this.sgl!.committedTex);
-    this.refreshMirror();
     this.renderRecord(rec);
     this.pushRecord(rec, clearRedo);
   }
@@ -1350,7 +1309,7 @@ export class Studio {
     if (this.state.firstRun) this.dismissWelcome(); // drawing is the best dismissal
     const rec = this.newRecord(this.settings.tool, first, input);
     if (rec.tool === 'brush') rec.zoom = this.view.zoom;
-    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
+    this.live = { id: e.pointerId, pointerType: e.pointerType, rect, rec, erasedUpTo: 0, lastRecorded: { ...first }, recent: [`${first.x},${first.y},${first.p}`], condLen: 0, stampedLen: 0, chunk: 0, lastChunkAt: 0 };
     this.updateHud(e);
     this.schedulePreview();
   }
@@ -1383,6 +1342,13 @@ export class Studio {
     const minDist = live.pointerType === 'mouse' ? 0.15 : 1 / this.view.zoom;
     for (const ev of list) {
       const pt = this.pointFromEvent(ev, live.rect);
+      // WebKit hands out overlapping coalesced batches: every group of pen samples
+      // arrives twice in a row, which would make the path double back on itself and
+      // pile stamps into beads. A sample identical to one of the last few is a repeat.
+      const key = `${pt.x},${pt.y},${pt.p}`;
+      if (live.recent.includes(key)) continue;
+      live.recent.push(key);
+      if (live.recent.length > RECENT_SAMPLES) live.recent.shift();
       const last = pts[pts.length - 1];
       if (Math.hypot(pt.x - live.lastRecorded.x, pt.y - live.lastRecorded.y) < minDist) {
         // Fold into the last point: it follows the pointer, but the reference for the
@@ -1477,23 +1443,12 @@ export class Studio {
     if (!g) return false;
     const len = pathLength(g.pts);
     if (!final && len < rec.spec.spacing * 3) return false;
-    const sgl = this.sgl!;
     const t0 = performance.now();
-    if (live.chunk === 0) {
-      // First chunk: start from the committed image, whole canvas once per stroke.
-      sgl.blit(sgl.committedTex);
-      this.refreshMirror();
-      this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
-    } else {
-      // Later chunks: restore only the region the chunk can touch from the mirror
-      // (guards the canvas against stale content between frames) and stamp.
-      const r = this.chunkRegion(rec, g.pts);
-      const a = performance.now();
-      sgl.blitRegion(this.mirrorTex!, r.x, r.y, r.w, r.h);
-      const b = performance.now();
-      this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
-      this.perf.restoreMs += b - a; this.perf.stampMs += performance.now() - b;
-    }
+    // First chunk starts from the committed image; later chunks stamp straight onto
+    // the canvas, which already holds the earlier ones.
+    if (live.chunk === 0) this.sgl!.blit(this.sgl!.committedTex);
+    this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
+    this.perf.stampMs += performance.now() - t0;
     live.lastChunkAt = performance.now();
     this.perf.chunkMs += performance.now() - t0; this.perf.chunks++;
     (rec.chunks ??= []).push(upto);
@@ -1503,34 +1458,11 @@ export class Studio {
     return true;
   }
 
-  /**
-   * Device-pixel rectangle a chunk's stamps and the engine's composite of them can
-   * reach: the chunk's points padded by the full tip footprint, scatter and the
-   * engine's own dirty-rect padding. Must cover the engine's readback region.
-   */
-  private chunkRegion(rec: BrushRecord, pts: Point[]) {
-    const v = this.committedView, dpr = this.dpr;
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-    for (const p of pts) {
-      const sx = p.x * v.zoom + v.x, sy = p.y * v.zoom + v.y;
-      if (sx < minX) minX = sx; if (sx > maxX) maxX = sx;
-      if (sy < minY) minY = sy; if (sy > maxY) maxY = sy;
-    }
-    const maxP = Math.max(1, rec.spec.pressure.min_max[0], rec.spec.pressure.min_max[1]);
-    const pad = (rec.spec.weight * rec.size * maxP * 1.5 + rec.spec.scatter * rec.size * 3 + 12) * v.zoom + 8;
-    return { x: (minX - pad) * dpr, y: (minY - pad) * dpr, w: (maxX - minX + 2 * pad) * dpr, h: (maxY - minY + 2 * pad) * dpr };
-  }
-
   /** One chunk of a hand-drawn stroke: seeded per chunk, per-stroke effects off, envelope folded into the plot. */
   private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number): number {
     if (index === 0) this.primeEngine(this.glW, this.glH, this.dpr);
     const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec) };
-    const stamps = this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
-    // The next chunk (or stroke) composites against the mirror: keep it current.
-    const t = performance.now();
-    this.refreshMirrorRegion(this.chunkRegion(rec, pts));
-    this.perf.snapMs += performance.now() - t;
-    return stamps;
+    return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
   }
 
   /**
@@ -1810,17 +1742,15 @@ export class Studio {
       points: last.points.slice(0, 600), chunkEnds: last.chunks!.slice(0, 600),
     } : null;
     const tests = this.renderSelfTest();
-    const summary = `render: paper ${tests.paper} · one-shot ${tests.oneShot} · chunked ${tests.chunked} · live-path ${tests.livePath} · engine-readback ${tests.engineReadback}`
+    const summary = `render: paper ${tests.paper} · one-shot ${tests.oneShot} · chunked ${tests.chunked}`
       + (stroke ? ` | last stroke: ${stroke.input} ${stroke.n} pts, ${stroke.chunks} chunks, p ${stroke.p.min}–${stroke.p.max}, ${stroke.pressureMode}` : ' | no hand-drawn stroke');
     return { env, stroke, tests, summary };
   }
 
   /**
-   * Renders the same short chisel line four ways in the middle of the viewport and
-   * measures its darkness (mean red, paper ≈ 250): as one engine stroke, as
-   * replayed chunks, along the live drawing path (region restores between chunks),
-   * and as chunks with the engine's own canvas readback instead of the mirror.
-   * On a healthy device all four agree. The canvas is restored afterwards.
+   * Renders the same short chisel line in the middle of the viewport as one engine
+   * stroke and as replayed chunks, and measures its darkness (mean red, paper ≈ 250).
+   * On a healthy device both agree. The canvas is restored afterwards.
    */
   private renderSelfTest() {
     const sgl = this.sgl!, v = this.committedView, dpr = this.dpr;
@@ -1832,7 +1762,7 @@ export class Studio {
       const y = (c.y * v.zoom + v.y) * dpr, x0 = ((c.x - half) * v.zoom + v.x + 20) * dpr;
       return sgl.meanRed(Math.round(x0), Math.round(y - 3 * dpr), Math.round((2 * half * v.zoom - 40) * dpr), Math.round(6 * dpr));
     };
-    const restore = () => { sgl.blit(sgl.committedTex); this.refreshMirror(); };
+    const restore = () => sgl.blit(sgl.committedTex);
     restore();
     const paper = measure();
     this.stampRecord(base, this.glW, this.glH, dpr, v);
@@ -1843,20 +1773,7 @@ export class Studio {
     const rec: BrushRecord = { ...base, chunks };
     this.renderChunked(rec);
     const chunked = measure(); restore();
-    let condLen = 0, s0 = 0;
-    chunks.forEach((upto, i) => {
-      const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
-      if (!g) return;
-      if (i > 0) { const r = this.chunkRegion(rec, g.pts); sgl.blitRegion(this.mirrorTex!, r.x, r.y, r.w, r.h); }
-      this.stampChunk(rec, g.pts, i, s0);
-      condLen = g.condLen; s0 += pathLength(g.pts);
-    });
-    const livePath = measure(); restore();
-    this.mirrorReady = false;
-    this.renderChunked(rec);
-    this.mirrorReady = true;
-    const engineReadback = measure(); restore();
-    return { paper, oneShot, chunked, livePath, engineReadback };
+    return { paper, oneShot, chunked };
   }
 
   /** Exposed for the headless test harness. */
