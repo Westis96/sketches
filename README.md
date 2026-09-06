@@ -43,7 +43,9 @@ Conditioning runs at render time from the stored input kind, so old drawings are
 When the canvas is rebuilt (undo, zoom, reload) strokes outside the viewport are skipped.
 Hand-drawn strokes are stamped chunk by chunk as they arrive and committed exactly as
 previewed: the chunk boundaries are stored with the stroke, so undo, zoom, reload and the
-sketch export replay the identical stamps and nothing changes when the pen lifts.
+sketch export replay the identical stamps and nothing changes when the pen lifts. All
+chunks of a stroke share one engine mask and are mixed with the image from before the
+stroke, so a chunk boundary leaves no mark in the ink.
 
 Practice mode (`L`, or the graduation-cap button) is a gamified way to learn the brushes:
 pick one of the sample drawings (warm-up waves, leaf, bamboo, hills at dusk, bloom; the

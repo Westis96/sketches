@@ -34,14 +34,31 @@ function p5brushInfiniteCanvas(): Plugin {
       const m = clearRe.exec(out);
       if (!m) throw new Error('p5brush-infinite-canvas: mask clear not found; check the p5.brush version');
       const [, isFb, tgt, gl] = m;
+      // globalThis.__p5brushKeepMask keeps the mask pixels across renders (the
+      // studio composites a hand-drawn stroke chunk by chunk from one accumulated
+      // mask); the rectangles skipped while it was set are cleared together the
+      // first time the mask is cleared with it unset.
       const scissored =
-        `if(${isFb}(${tgt})){if(!${tgt}.dirtyRect&&${tgt}.isDrawn===false)return;` +
+        `if(${isFb}(${tgt})){const d0=${tgt}.dirtyRect,U=${tgt}.__keptRect,un=(a,b)=>({minX:Math.min(a.minX,b.minX),minY:Math.min(a.minY,b.minY),maxX:Math.max(a.maxX,b.maxX),maxY:Math.max(a.maxY,b.maxY)});` +
+        `if(globalThis.__p5brushKeepMask){if(d0)${tgt}.__keptRect=U?un(U,d0):{...d0};else if(${tgt}.isDrawn!==false)${tgt}.__keptFull=!0;return}` +
+        `const full=!!${tgt}.__keptFull,d=full?null:U?d0?un(U,d0):U:d0;${tgt}.__keptRect=null;${tgt}.__keptFull=!1;` +
+        `if(!d&&!full&&${tgt}.isDrawn===false)return;` +
         `const ${gl}=${m[4]}.drawingContext,${m[5]}=${gl}.getParameter(${gl}.FRAMEBUFFER_BINDING),${m[6]}=${gl}.getParameter(${gl}.VIEWPORT);` +
-        `const W=${tgt}.width*${tgt}.density,H=${tgt}.height*${tgt}.density,d=${tgt}.dirtyRect;` +
+        `const W=${tgt}.width*${tgt}.density,H=${tgt}.height*${tgt}.density;` +
         `return ${gl}.bindFramebuffer(${gl}.FRAMEBUFFER,${tgt}.framebuffer),${gl}.viewport(0,0,W,H),${gl}.clearColor(0,0,0,0),` +
         `(d?(()=>{const x0=Math.max(0,Math.floor(d.minX-4)),x1=Math.min(W,Math.ceil(d.maxX+4)),y0=Math.max(0,Math.floor(d.minY-4)),y1=Math.min(H,Math.ceil(d.maxY+4));` +
         `if(x1>x0&&y1>y0){${gl}.enable(${gl}.SCISSOR_TEST);${gl}.scissor(x0,y0,x1-x0,y1-y0);${gl}.clear(${gl}.COLOR_BUFFER_BIT);${gl}.disable(${gl}.SCISSOR_TEST)}})():${gl}.clear(${gl}.COLOR_BUFFER_BIT)),`;
       out = out.replace(clearRe, scissored);
+
+      // Composite source: the blend shader mixes the mask with what the canvas
+      // holds under it. While a stroke is composited chunk by chunk from one
+      // accumulated mask, every chunk must mix with the image from before the
+      // stroke, so globalThis.__p5brushBlitSource (a framebuffer holding that
+      // image) replaces the canvas as the source of the pre-composite copy.
+      const srcRe = /(\w)\.bindFramebuffer\(\1\.READ_FRAMEBUFFER,null\)/g;
+      const srcMatches = out.match(srcRe);
+      if (srcMatches?.length !== 1) throw new Error('p5brush-infinite-canvas: composite source blit not found; check the p5.brush version');
+      out = out.replace(srcRe, '$1.bindFramebuffer($1.READ_FRAMEBUFFER,globalThis.__p5brushBlitSource??null)');
 
       // Composite clip: when the studio re-renders only a newly exposed strip after a
       // pan, the engine's composite into the canvas must stay inside that strip

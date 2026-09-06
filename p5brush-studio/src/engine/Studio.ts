@@ -492,7 +492,8 @@ export class Studio {
     return this.stampRaw(rec, glW, glH, dpr, view, shape);
   }
 
-  private stampRaw(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View, shape?: StrokeShape): number {
+  /** `flush` = false leaves the stamps in the engine's mask for a later brush.render(). */
+  private stampRaw(rec: BrushRecord, glW: number, glH: number, dpr: number, view: View, shape?: StrokeShape, flush = true): number {
     const name = this.ensureRegistered(rec, view.zoom);
     const { origin, segs, endA, endP, stamps } = strokeSegments(rec);
     const plot = new brush.Plot('curve');
@@ -511,9 +512,32 @@ export class Studio {
     plot.draw(origin.x * view.zoom + view.x, origin.y * view.zoom + view.y, 1);
     brush.pop();
     const t1 = performance.now();
-    brush.render();
+    if (flush) brush.render();
     this.perf.plotMs += t1 - t0; this.perf.compositeMs += performance.now() - t1;
     return stamps;
+  }
+
+  /**
+   * Chunked strokes share one engine mask. The engine mixes the mask with the
+   * canvas under it and clears the mask on every brush.render(), so a stroke
+   * rendered chunk by chunk used to mix each chunk with the previous ones where
+   * their stamps overlap (a darker plate at every chunk boundary). With the mask
+   * kept (see vite.config.ts) and the composite reading from the image the stroke
+   * started on, every render mixes the whole stroke so far with the untouched
+   * base in the newest chunk's rectangle, which is exactly what one render of the
+   * whole stroke would produce there.
+   */
+  private setSharedMask(on: boolean, source: WebGLFramebuffer | null) {
+    const g = globalThis as unknown as { __p5brushKeepMask?: boolean; __p5brushBlitSource?: WebGLFramebuffer | null };
+    if (on) { g.__p5brushKeepMask = true; g.__p5brushBlitSource = source; }
+    else { delete g.__p5brushKeepMask; delete g.__p5brushBlitSource; }
+  }
+
+  /** Ends a live stroke's shared mask: the priming render clears what the chunks left in it. */
+  private endLiveMask(live: Live) {
+    if (live.chunk === 0) return;
+    this.setSharedMask(false, null);
+    this.primeEngine(this.glW, this.glH, this.dpr);
   }
 
   // ---------------------------------------------------------------------------
@@ -1065,8 +1089,10 @@ export class Studio {
   /** Discards the stroke in progress (Escape, or a second finger turning it into a gesture). */
   cancelStroke = (quiet = false) => {
     if (!this.live) return;
+    const live = this.live;
     this.live = null;
     this.previewQueued = false;
+    this.endLiveMask(live);
     this.sgl!.blit(this.sgl!.committedTex);
     this.queueHud({ pressure: 0 });
     if (!quiet) this.toast('Stroke cancelled');
@@ -1503,6 +1529,7 @@ export class Studio {
       // Stamp whatever is left as the last chunk. Nothing is re-rendered on lift:
       // the chunk boundaries are recorded, so every replay repeats exactly this.
       this.stampNextChunk(live, live.rec.points.length, true);
+      this.endLiveMask(live);
     } else if (live.rec.points.length > live.erasedUpTo) {
       this.sgl!.eraseDabs(this.eraserDabs(live.rec, live.erasedUpTo));
     }
@@ -1564,10 +1591,14 @@ export class Studio {
     const len = pathLength(g.pts);
     if (!final && len < rec.spec.spacing * 3) return false;
     const t0 = performance.now();
-    // First chunk starts from the committed image; later chunks stamp straight onto
-    // the canvas, which already holds the earlier ones.
-    if (live.chunk === 0) this.sgl!.blit(this.sgl!.committedTex);
-    this.stampChunk(rec, g.pts, live.chunk, live.stampedLen);
+    // The first chunk starts from the committed image and opens the stroke's shared
+    // mask; every chunk is composited against that image (see setSharedMask).
+    if (live.chunk === 0) {
+      this.sgl!.blit(this.sgl!.committedTex);
+      this.primeEngine(this.glW, this.glH, this.dpr);
+      this.setSharedMask(true, this.sgl!.committedFramebuffer());
+    }
+    this.stampChunk(rec, g.pts, live.chunk, live.stampedLen, true);
     this.perf.stampMs += performance.now() - t0;
     live.lastChunkAt = performance.now();
     this.perf.chunkMs += performance.now() - t0; this.perf.chunks++;
@@ -1579,10 +1610,9 @@ export class Studio {
   }
 
   /** One chunk of a hand-drawn stroke: seeded per chunk, per-stroke effects off, envelope folded into the plot. */
-  private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number): number {
-    if (index === 0) this.primeEngine(this.glW, this.glH, this.dpr);
+  private stampChunk(rec: BrushRecord, pts: Point[], index: number, s0: number, flush: boolean): number {
     const chunk: BrushRecord = { ...rec, points: pts, input: undefined, chunks: undefined, seed: rec.seed + 1 + index, spec: chunkSpec(rec.spec) };
-    return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) });
+    return this.stampRaw(chunk, this.glW, this.glH, this.dpr, this.committedView, { s0, env: liveEnvelope(rec.spec.pressure) }, flush);
   }
 
   /**
@@ -1591,18 +1621,28 @@ export class Studio {
    * lift; at other zooms the engine scales weight, spacing and scatter with the
    * view, so the same chunk sequence gives the same stroke rescaled. (Merging the
    * chunks into one pass at other zooms was tried for speed and reshuffled the
-   * texture visibly.)
+   * texture visibly.) All chunks go into one mask and are composited by a single
+   * render, which per pixel is what the live chunk-by-chunk composite produced.
    */
   private renderChunked(rec: BrushRecord): number {
     let condLen = 0, s0 = 0, stamps = 0;
     const chunks = rec.chunks!;
-    chunks.forEach((upto, i) => {
-      const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
-      if (!g) return;
-      stamps += this.stampChunk(rec, g.pts, i, s0);
-      condLen = g.condLen;
-      s0 += pathLength(g.pts);
-    });
+    this.primeEngine(this.glW, this.glH, this.dpr);
+    this.setSharedMask(true, null);
+    try {
+      chunks.forEach((upto, i) => {
+        const g = chunkPoints(rec, upto, condLen, i === chunks.length - 1);
+        if (!g) return;
+        stamps += this.stampChunk(rec, g.pts, i, s0, false);
+        condLen = g.condLen;
+        s0 += pathLength(g.pts);
+      });
+    } finally {
+      this.setSharedMask(false, null);
+    }
+    const t1 = performance.now();
+    brush.render();
+    this.perf.compositeMs += performance.now() - t1;
     return stamps;
   }
 
@@ -1929,6 +1969,8 @@ export class Studio {
         snapshotCommitted: () => this.sgl!.snapshot(this.sgl!.committedTex),
         render: (rec: BrushRecord) => this.renderBrushStroke(rec),
         prime: () => this.primeEngine(this.glW, this.glH, this.dpr),
+        meanRed: (x: number, y: number, w: number, h: number) => this.sgl!.meanRed(x, y, w, h),
+        size: () => ({ w: this.glW, h: this.glH, dpr: this.dpr }),
       },
       view: () => this.view, zoomBy: (f: number, cx?: number, cy?: number) => this.zoomBy(f, cx, cy), resetView: () => this.resetView(), zoomToFit: () => this.zoomToFit(),
       toWorld: (x: number, y: number) => this.toWorld(x, y),

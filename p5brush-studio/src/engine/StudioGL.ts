@@ -41,6 +41,7 @@ export class StudioGL {
   private readonly blitProg: WebGLProgram;
   private readonly eraseProg: WebGLProgram;
   private readonly vao: WebGLVertexArrayObject;
+  private readonly fbo: WebGLFramebuffer;
   private readonly u: Record<string, WebGLUniformLocation | null>;
 
   constructor(gl: WebGL2RenderingContext) {
@@ -71,6 +72,7 @@ export class StudioGL {
     gl.bindBuffer(gl.ARRAY_BUFFER, null);
     this.paperTex = this.createTexture();
     this.committedTex = this.createTexture();
+    this.fbo = gl.createFramebuffer()!;
   }
 
   private program(vs: string, fs: string): WebGLProgram {
@@ -180,6 +182,15 @@ export class StudioGL {
     let sum = 0;
     for (let i = 0; i < px.length; i += 4) sum += px[i];
     return Math.round(sum / (px.length / 4));
+  }
+
+  /** A framebuffer reading the committed image; handed to the engine as the composite source of a live stroke. */
+  committedFramebuffer(): WebGLFramebuffer {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.committedTex, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return this.fbo;
   }
 
   /** Copies the current canvas into `tex`. */

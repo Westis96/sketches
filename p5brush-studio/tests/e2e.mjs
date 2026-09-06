@@ -345,10 +345,28 @@ try {
   check('keeping the traced drawing replaces the document', kept.practice === null && kept.n === 1);
 
   // Render self-test: all four ways of drawing the same line agree on this renderer.
-  await drag([[200, 300], [400, 330], [600, 300]]);
+  // (The self-test measures the middle of the viewport, so this stroke stays clear of it.)
+  await drag([[200, 440], [400, 470], [600, 440]]);
   const diag = await studio((s) => s.diagnostics());
   const t = diag.tests;
   check('render self-test: one-shot and chunked agree', Math.abs(t.oneShot - t.chunked) < 20 && t.oneShot < t.paper - 20, JSON.stringify(t));
+
+  // Chunks of a hand-drawn stroke share one engine mask, so the darkness along a
+  // straight line replayed in many chunks is flat: no lighter plate at any boundary.
+  // (The first columns are the start rise of the live pressure envelope.)
+  const seam = await studio((s) => {
+    const y = 400, x0 = 300, x1 = 900, pts = [];
+    for (let i = 0; i <= 120; i++) pts.push({ ...s.toWorld(x0 + (x1 - x0) * i / 120, y), p: 0.6 });
+    s.clear(); s.applyTemplate('chisel'); s.commit(pts);
+    const rec = s.history()[0]; s.undo();
+    const chunks = []; for (let i = 10; i < pts.length; i += 7) chunks.push(i); chunks.push(pts.length);
+    s.gl.blitPaper(); s.gl.render({ ...rec, chunks });
+    const cols = []; for (let x = x0 + 120; x < x1 - 30; x += 6) cols.push(s.gl.meanRed(x, y - 4, 6, 8));
+    s.gl.blitCommitted();
+    let jump = 0; for (let i = 1; i < cols.length; i++) jump = Math.max(jump, Math.abs(cols[i] - cols[i - 1]));
+    return { chunks: chunks.length, min: Math.min(...cols), max: Math.max(...cols), jump };
+  });
+  check('chunk boundaries leave no bands along a stroke', seam.chunks > 10 && seam.jump <= 8 && seam.max - seam.min <= 12 && seam.max < 240, JSON.stringify(seam));
 
   // WebKit delivers each coalesced pen batch twice; repeats must not enter the path.
   await page.evaluate(() => { PointerEvent.prototype.getCoalescedEvents = function () { return this.__coalesced || []; }; });
