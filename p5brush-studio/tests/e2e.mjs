@@ -77,8 +77,12 @@ try {
 
   // First visit lands on the course; the studio is the Sketch mode.
   check('a first visit lands on the Learn path', (await page.evaluate(() => location.hash)) === '#/learn' && (await page.locator('[data-testid=path]').count()) === 1, await page.evaluate(() => location.hash));
+  // The Learn path renders every piece preview on first paint (the washes' fills are slow on a software renderer,
+  // and each frame of it blocks the page): wait for them before anything that needs the main thread.
+  const tPrev = Date.now();
+  await page.waitForFunction(() => !!window.__studio.state.lessonPreviews, null, { timeout: 1200000 });
+  console.log(`      (lesson previews took ${Math.round((Date.now() - tPrev) / 1000)} s)`);
   await page.evaluate(() => { location.hash = '#/sketch'; });
-  // The Learn path renders every piece preview on first paint; on a software renderer that can take seconds.
   await page.waitForSelector('[data-testid=welcome]', { timeout: 180000 }).catch(() => {});
   // First visit to Sketch: the welcome card shows once and stays dismissed.
   const welcomeShown = (await page.locator('[data-testid=welcome]').count()) === 1;
