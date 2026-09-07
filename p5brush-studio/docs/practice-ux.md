@@ -266,7 +266,12 @@ the start and lifts. The outline is scored like any stroke with a wider band, th
 and the shape is committed on the learner's own polygon (closed, at most 96 vertices), so
 the picture is theirs. Demos with a `shape` do the same on the lesson paper. Lesson
 previews are cached in localStorage keyed by a hash of the lessons' content: fills are the
-slowest thing the engine paints.
+slowest thing the engine paints. The same landing is the Sketch mode Shape tool (F): while
+the pointer is down a thin pen line follows it, and on lift the outline is simplified to its
+corners and curves and replaced by the shape (a tap or a flick under six pixels is
+dropped). The style panel shows Shape controls instead of the brush grid while the tool is
+active: kind, opacity, bleed and its direction, texture and border, rounded corners, and
+the hatch and mass parameters, plus presets named after the page's pictures.
 
 ## Changes to the rest of the mission
 

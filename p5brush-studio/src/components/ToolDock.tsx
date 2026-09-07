@@ -1,4 +1,4 @@
-import { Download, Eraser, GraduationCap, PenLine, Pencil, SlidersHorizontal, Sparkles } from 'lucide-react';
+import { Download, Droplet, Eraser, GraduationCap, PenLine, Pencil, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { TlButton } from '@/components/TlButton';
@@ -14,6 +14,10 @@ export function ToolDock({ panelOpen, onTogglePanel, onPractice }: { panelOpen: 
     <Card className="pointer-events-auto flex items-center p-1">
       <TlButton label="Brush" kbd="D" active={tool === 'brush'} onClick={() => studio.setTool('brush')}>
         <PenLine />
+        <span aria-hidden className="absolute bottom-1.5 right-1.5 h-2 w-2 rounded-full shadow-[0_0_0_1.5px_rgba(255,255,255,0.95)]" style={{ background: color }} />
+      </TlButton>
+      <TlButton label="Shape: close an outline and it fills, washes, hatches or masses" kbd="F" active={tool === 'shape'} onClick={() => studio.setTool('shape')}>
+        <Droplet />
         <span aria-hidden className="absolute bottom-1.5 right-1.5 h-2 w-2 rounded-full shadow-[0_0_0_1.5px_rgba(255,255,255,0.95)]" style={{ background: color }} />
       </TlButton>
       <TlButton label="Paper eraser" kbd="E" active={tool === 'eraser'} onClick={() => studio.setTool('eraser')}><Eraser /></TlButton>

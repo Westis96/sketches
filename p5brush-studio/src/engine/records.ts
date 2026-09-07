@@ -30,7 +30,7 @@ export interface BrushSpec {
 }
 
 export type PressureMode = 'gaussian' | 'both' | 'stylus';
-export type Tool = 'brush' | 'eraser';
+export type Tool = 'brush' | 'eraser' | 'shape';
 export type PaperName = 'hotpress' | 'washi' | 'bristol';
 
 /** A path point; `alt`/`az`/`tw` (whole degrees) are present on pen samples: altitude, azimuth, barrel twist. */
@@ -133,6 +133,37 @@ export interface ShapeRecord {
 }
 
 export type StrokeRecord = BrushRecord | EraserRecord | ClearRecord | ShapeRecord;
+
+/** The Shape tool's starting style: the Sixteen Washes page's red mountain. */
+export const DEFAULT_SHAPE: ShapeStyle = { kind: 'fill', color: '#b5452e', opacity: 200, bleed: { amount: 0.25, dir: 'out' }, texture: { strength: 0.6, border: 0.5, scatter: true } };
+
+/** Shape presets, each a recipe from the Sixteen Washes page. */
+export interface ShapePreset { id: string; name: string; from: string; style: ShapeStyle }
+const F = (color: string, opacity: number, amount: number, dir: 'in' | 'out', strength: number, border: number, scatter = true): ShapeStyle => ({ kind: 'fill', color, opacity, bleed: { amount, dir }, texture: { strength, border, scatter } });
+export const SHAPE_PRESETS: ShapePreset[] = [
+  { id: 'redbleed', name: 'Red bleed', from: 'Red Fuji', style: F('#b5452e', 200, 0.25, 'out', 0.6, 0.5) },
+  { id: 'sky', name: 'Sky wash', from: 'Red Fuji', style: F('#9fc3d6', 100, 0.35, 'out', 0.45, 0.3, false) },
+  { id: 'shadow', name: 'Shadow, in', from: 'Red Fuji', style: F('#7a2a1a', 90, 0.35, 'in', 0.5, 0.4) },
+  { id: 'cloud', name: 'Cloud', from: 'Red Fuji', style: F('#e6ecf0', 200, 0.45, 'out', 0.5, 0.4) },
+  { id: 'night', name: 'Night', from: 'Lantern Night', style: F('#2b2140', 225, 0.1, 'in', 0.3, 0.2, false) },
+  { id: 'glow', name: 'Glow', from: 'Lantern Night', style: F('#f2a544', 90, 0.55, 'out', 0.5, 0.3) },
+  { id: 'lantern', name: 'Lantern body', from: 'Lantern Night', style: F('#f5b942', 215, 0.18, 'in', 0.45, 0.7) },
+  { id: 'pond', name: 'Pond', from: 'Koi Pond', style: F('#b9cfdc', 100, 0.35, 'out', 0.5, 0.4) },
+  { id: 'koi', name: 'Koi orange', from: 'Koi Pond', style: F('#e8792f', 150, 0.4, 'out', 0.55, 0.5) },
+  { id: 'indigo', name: 'Indigo, flat', from: 'Harvest Moon', style: F('#22304f', 210, 0.08, 'in', 0.35, 0.2, false) },
+  { id: 'moon', name: 'Moon', from: 'Harvest Moon', style: F('#f2d88e', 230, 0.28, 'out', 0.55, 0.6) },
+  { id: 'poppy', name: 'Poppy', from: 'Poppies', style: F('#d8402c', 150, 0.42, 'out', 0.6, 0.5) },
+  { id: 'ridge', name: 'Ridge blue', from: 'Ridge', style: F('#6f8aa6', 130, 0.25, 'out', 0.55, 0.45) },
+  { id: 'leafgreen', name: 'Leaf green', from: 'Leaf', style: F('#5d7a3c', 150, 0.3, 'out', 0.6, 0.5) },
+  { id: 'lilac', name: 'Lilac bell', from: 'Jellyfish', style: { ...F('#d99bb0', 150, 0.35, 'out', 0.6, 0.5), curvature: 0.7 } },
+  { id: 'paper', name: 'Paper wash', from: 'Red Fuji', style: { kind: 'wash', color: '#fcf8f2', opacity: 255 } },
+  { id: 'greywash', name: 'Grey wash', from: 'Six Persimmons', style: { kind: 'wash', color: '#6b625c', opacity: 110 } },
+  { id: 'hill', name: 'Dark hill', from: 'Lantern Night', style: { kind: 'wash', color: '#170f24', opacity: 230 } },
+  { id: 'charcoal', name: 'Charcoal mass', from: 'Six Persimmons', style: { kind: 'mass', color: '#2a2420', opacity: 255, mass: { brush: 'charcoal', precision: 0.5, strength: 1, gradient: 0.2, outline: true } } },
+  { id: 'crayon', name: 'Crayon mass', from: 'Six Persimmons', style: { kind: 'mass', color: '#4a4340', opacity: 255, mass: { brush: 'crayon', precision: 0.7, strength: 0.7, gradient: 0.4 } } },
+  { id: 'rotring', name: 'Rotring hatch', from: 'Marigold Vase', style: { kind: 'hatch', color: '#2b3a55', opacity: 255, hatch: { dist: 5, angle: 60, brush: 'rotring', weight: 0.8, gradient: 0.6, rand: 0.1, continuous: true } } },
+  { id: 'pencilhatch', name: 'Pencil hatch', from: 'the cube', style: { kind: 'hatch', color: '#3a3a3a', opacity: 255, hatch: { dist: 7, angle: 45, brush: '2B', weight: 1, gradient: 0, rand: 0.15, continuous: false } } },
+];
 
 /** p5.brush's standard brushes that shapes may hatch or mass with. */
 export const STD_BRUSHES = ['pen', 'rotring', '2B', 'HB', '2H', 'cpencil', 'charcoal', 'crayon', 'spray', 'marker', 'hatch_brush'] as const;

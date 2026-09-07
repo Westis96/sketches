@@ -201,6 +201,7 @@ function Shell() {
       if (m !== 'sketch') return;
       if (k === 'd' || k === 'b') studio.setTool('brush');
       else if (k === 'e') studio.setTool('eraser');
+      else if (k === 'f') studio.setTool('shape');
       else if (k === 't') studio.drawSampleStroke();
       else if (k === 'q') studio.setPencilOnly(!studio.settings.pencilOnly);
       else if (k === 'c') studio.clear();

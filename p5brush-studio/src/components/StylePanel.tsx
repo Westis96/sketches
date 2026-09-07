@@ -13,7 +13,7 @@ import { TipPreview } from '@/components/TipPreview';
 import { TlTip } from '@/components/TlButton';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { paperPresets } from '@/engine/Studio';
-import { fmt, type PaperName, type PressureMode } from '@/engine/records';
+import { SHAPE_PRESETS, fmt, type PaperName, type PressureMode, type ShapeKind } from '@/engine/records';
 import { setTipDegrees, tipUsesDegrees } from '@/engine/tipShim';
 import { BRUSH_TEMPLATES, matchTemplate } from '@/engine/templates';
 import { PencilTab } from '@/components/PencilTab';
@@ -88,6 +88,96 @@ function NumberField({ label, value, onCommit }: { label: string; value: number;
         className="mt-0.5 h-7 rounded-[7px] border-0 bg-[var(--low)] px-1.5 font-mono text-[11px] shadow-none focus-visible:ring-1"
       />
     </label>
+  );
+}
+
+const KIND_LABEL: Record<ShapeKind, string> = { fill: 'Fill', wash: 'Wash', hatch: 'Hatch', mass: 'Mass' };
+const KIND_HELP: Record<ShapeKind, string> = {
+  fill: 'Watercolour: layers that bleed past the outline and a paper texture. Close the outline and lift.',
+  wash: 'One flat layer inside the outline, no bleed: paper laid back in, a dark hill, a seal.',
+  hatch: 'Parallel pen lines inside the outline; the gradient thins them toward the light.',
+  mass: 'A brush scribbles the shape full, the way charcoal or crayon masses a form.',
+};
+const HATCH_BRUSHES = ['rotring', 'pen', '2B', 'HB', '2H', 'cpencil'];
+const MASS_BRUSHES = ['charcoal', 'crayon', '2B', 'HB', 'pen'];
+
+/** The Shape tool: what a closed outline lands as. Colour is the studio colour below. */
+function ShapeSection() {
+  const studio = useStudio();
+  const sh = useStudioState((st) => st.settings.shape);
+  const bleed = sh.bleed ?? { amount: 0.25, dir: 'out' as const };
+  const tex = sh.texture ?? { strength: 0.5, border: 0.4, scatter: true };
+  const hatch = sh.hatch ?? { dist: 5, angle: 60, brush: 'rotring', weight: 0.8, gradient: 0.6, rand: 0.1, continuous: true };
+  const mass = sh.mass ?? { brush: 'charcoal', precision: 0.5, strength: 1, gradient: 0.2, outline: true };
+  const presets = SHAPE_PRESETS.filter((p) => p.style.kind === sh.kind);
+  return (
+    <>
+      <Section label="Shape" trailing={<span className="font-mono text-[10px] text-[var(--text-3)]">F · close and lift</span>}>
+        <ToggleGroup type="single" value={sh.kind} onValueChange={(v) => v && studio.setShape({ kind: v as ShapeKind })} className="grid grid-cols-4 gap-0.5">
+          {(Object.keys(KIND_LABEL) as ShapeKind[]).map((k) => <ToggleGroupItem key={k} value={k} data-testid={`shape-kind-${k}`} className="text-[11px]">{KIND_LABEL[k]}</ToggleGroupItem>)}
+        </ToggleGroup>
+        <p className="mt-1.5 text-[10.5px] leading-snug text-[var(--text-3)]">{KIND_HELP[sh.kind]}</p>
+      </Section>
+      <Section label="From the Sixteen Washes">
+        <div className="flex flex-wrap gap-1">
+          {presets.map((p) => (
+            <TlTip key={p.id} label={`${p.from}: ${p.style.kind}${p.style.bleed ? `, bleed ${p.style.bleed.amount} ${p.style.bleed.dir}` : ''}`}>
+              <button type="button" data-testid={`shape-preset-${p.id}`} onClick={() => studio.applyShapePreset(p.id)} className="tl-opt h-7 min-w-0 gap-1.5 px-1.5 text-[11px]">
+                <span className="h-3 w-3 rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,0.1)]" style={{ background: p.style.color }} />
+                {p.name}
+              </button>
+            </TlTip>
+          ))}
+        </div>
+      </Section>
+      {sh.kind !== 'mass' && sh.kind !== 'hatch' && <Param label="Opacity" value={sh.opacity} display={fmt(sh.opacity)} min={10} max={255} step={5} onChange={(v) => studio.setShape({ opacity: v })} />}
+      {sh.kind === 'fill' && (<>
+        <Param label="Bleed" value={bleed.amount} display={bleed.amount.toFixed(2)} min={0} max={1} step={0.01} onChange={(v) => studio.setShape({ bleed: { amount: v, dir: bleed.dir } })} />
+        <ToggleGroup type="single" value={bleed.dir} onValueChange={(v) => v && studio.setShape({ bleed: { amount: bleed.amount, dir: v as 'in' | 'out' } })} className="grid grid-cols-2 gap-0.5">
+          <ToggleGroupItem value="out" className="text-[11px]">Bleeds outward</ToggleGroupItem>
+          <ToggleGroupItem value="in" className="text-[11px]">Bleeds inward</ToggleGroupItem>
+        </ToggleGroup>
+        <Param label="Texture" value={tex.strength} display={tex.strength.toFixed(2)} min={0} max={1} step={0.01} onChange={(v) => studio.setShape({ texture: { ...tex, strength: v } })} />
+        <Param label="Border" value={tex.border} display={tex.border.toFixed(2)} min={0} max={1} step={0.01} onChange={(v) => studio.setShape({ texture: { ...tex, border: v } })} />
+        <div className="flex items-center justify-between text-[11.5px] text-[var(--text-2)]">
+          <span>Scattered texture</span>
+          <Switch checked={tex.scatter !== false} onCheckedChange={(v) => studio.setShape({ texture: { ...tex, scatter: v } })} className="data-[checked]:bg-[var(--accent)]" />
+        </div>
+        <Param label="Rounded corners" value={sh.curvature ?? 0} display={(sh.curvature ?? 0).toFixed(2)} min={0} max={1} step={0.05} onChange={(v) => studio.setShape({ curvature: v })} />
+      </>)}
+      {sh.kind === 'hatch' && (<>
+        <Section label="Hatching brush">
+          <Select value={hatch.brush} onValueChange={(v) => v && studio.setShape({ hatch: { ...hatch, brush: v } })}>
+            <SelectTrigger className="h-8 rounded-[8px] border-0 bg-[var(--low)] text-[11.5px] shadow-none"><SelectValue /></SelectTrigger>
+            <SelectContent>{HATCH_BRUSHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
+          </Select>
+        </Section>
+        <Param label="Line distance" value={hatch.dist} display={`${fmt(hatch.dist)} px`} min={2} max={24} step={0.5} onChange={(v) => studio.setShape({ hatch: { ...hatch, dist: v } })} />
+        <Param label="Angle" value={hatch.angle} display={`${fmt(hatch.angle)}°`} min={0} max={180} step={5} onChange={(v) => studio.setShape({ hatch: { ...hatch, angle: v } })} />
+        <Param label="Line weight" value={hatch.weight} display={hatch.weight.toFixed(2)} min={0.3} max={2} step={0.05} onChange={(v) => studio.setShape({ hatch: { ...hatch, weight: v } })} />
+        <Param label="Gradient" value={hatch.gradient ?? 0} display={(hatch.gradient ?? 0).toFixed(2)} min={0} max={1} step={0.05} onChange={(v) => studio.setShape({ hatch: { ...hatch, gradient: v } })} />
+        <Param label="Randomness" value={hatch.rand ?? 0} display={(hatch.rand ?? 0).toFixed(2)} min={0} max={1} step={0.05} onChange={(v) => studio.setShape({ hatch: { ...hatch, rand: v } })} />
+        <div className="flex items-center justify-between text-[11.5px] text-[var(--text-2)]">
+          <span>Continuous zigzag</span>
+          <Switch checked={!!hatch.continuous} onCheckedChange={(v) => studio.setShape({ hatch: { ...hatch, continuous: v } })} className="data-[checked]:bg-[var(--accent)]" />
+        </div>
+      </>)}
+      {sh.kind === 'mass' && (<>
+        <Section label="Massing brush">
+          <Select value={mass.brush} onValueChange={(v) => v && studio.setShape({ mass: { ...mass, brush: v } })}>
+            <SelectTrigger className="h-8 rounded-[8px] border-0 bg-[var(--low)] text-[11.5px] shadow-none"><SelectValue /></SelectTrigger>
+            <SelectContent>{MASS_BRUSHES.map((b) => <SelectItem key={b} value={b}>{b}</SelectItem>)}</SelectContent>
+          </Select>
+        </Section>
+        <Param label="Strength" value={mass.strength ?? 1} display={(mass.strength ?? 1).toFixed(2)} min={0.1} max={1} step={0.05} onChange={(v) => studio.setShape({ mass: { ...mass, strength: v } })} />
+        <Param label="Precision" value={mass.precision ?? 0.5} display={(mass.precision ?? 0.5).toFixed(2)} min={0} max={1} step={0.05} onChange={(v) => studio.setShape({ mass: { ...mass, precision: v } })} />
+        <Param label="Gradient" value={mass.gradient ?? 0.1} display={(mass.gradient ?? 0.1).toFixed(2)} min={0} max={1} step={0.05} onChange={(v) => studio.setShape({ mass: { ...mass, gradient: v } })} />
+        <div className="flex items-center justify-between text-[11.5px] text-[var(--text-2)]">
+          <span>Outline</span>
+          <Switch checked={!!mass.outline} onCheckedChange={(v) => studio.setShape({ mass: { ...mass, outline: v } })} className="data-[checked]:bg-[var(--accent)]" />
+        </div>
+      </>)}
+    </>
   );
 }
 
@@ -167,6 +257,7 @@ export function StylePanel({ open, instant, onOpenChange }: { open: boolean; ins
         <div className={cn('tl-scroll tl-scroll-fade min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain', phone && 'sheet-pad')}>
           {/* ------------------------------------------------------------ Style */}
           <TabsContent value="style" className="m-0 space-y-4 p-3">
+            {s.tool === 'shape' ? <ShapeSection /> : (<>
             {/* Brush templates: previews are strokes rendered by the engine itself */}
             <Section label="Brush" trailing={
               <Button variant="link" size="none" className="group gap-0.5 text-[11px]" onClick={() => selectTab('brush')}>
@@ -215,6 +306,7 @@ export function StylePanel({ open, instant, onOpenChange }: { open: boolean; ins
                 </TlTip>
               </div>
             </Section>
+            </>)}
 
             <Section label="Color" trailing={<span className="font-mono text-[10px] text-[var(--text-3)]">{s.color.toUpperCase()}</span>}>
               <div className="grid grid-cols-6 gap-0.5">
@@ -239,6 +331,7 @@ export function StylePanel({ open, instant, onOpenChange }: { open: boolean; ins
               </div>
             </Section>
 
+            {s.tool !== 'shape' && (<>
             <Section label="Size" trailing={<span className="font-mono text-[10px] text-[var(--text-3)]">×{s.size.toFixed(2)}</span>}>
               <ToggleGroup type="single" value={activeSize} onValueChange={(v) => { const z = sizes.find((x) => x.id === v); if (z) studio.setSize(z.value); }} className="grid grid-cols-4 gap-0.5">
                 {sizes.map((z) => (
@@ -251,6 +344,7 @@ export function StylePanel({ open, instant, onOpenChange }: { open: boolean; ins
 
             <Param label="Opacity" value={spec.opacity} display={fmt(spec.opacity)} min={1} max={80} step={1} onChange={(v) => studio.setSpec({ opacity: v })} />
             <Param label="Weight" value={spec.weight} display={`${fmt(spec.weight)} px`} min={1} max={80} step={1} onChange={(v) => studio.setSpec({ weight: v })} />
+            </>)}
 
             <Section label="Paper">
               <ToggleGroup type="single" value={s.paper} onValueChange={(v) => v && studio.setPaper(v as PaperName)} className="grid grid-cols-3 gap-0.5">

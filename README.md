@@ -68,7 +68,11 @@ with the stroke and swells under pressure), culm (a flat edge held across the st
 leaf (a pointed oval: thin where you land, wide through the middle, a point where you
 lift). Besides strokes the engine now renders p5.brush shapes: `brush.fill` with bleed and
 texture, flat `wash`, `hatch` and `mass` on a closed polygon, as records of their own that
-undo, save, replay and export like strokes.
+undo, save, replay and export like strokes. In Sketch mode they are the Shape tool (`F`):
+close an outline and lift, and it lands as the fill, wash, hatch or mass set in the style
+panel, in the studio colour; the panel carries the page's recipes as presets (red bleed,
+sky wash, night, glow, lantern body, paper wash, charcoal mass, rotring hatch, and more),
+so any of the sixteen washes can be repainted by hand.
 
 On a phone the same interface rearranges itself: the style panel becomes a bottom sheet
 that slides up under the dock (drag the handle down, or flick it, to close), the practice

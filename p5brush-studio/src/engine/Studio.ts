@@ -24,7 +24,7 @@ import {
   type Segment, type StrokeRecord, type Tool, mapStylus,
 } from './records';
 import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
-import type { ShapeRecord, ShapeStyle } from './records';
+import { DEFAULT_SHAPE, SHAPE_PRESETS, type ShapeRecord, type ShapeStyle } from './records';
 import { resampleN } from '@/practice/geometry';
 import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type LessonStep } from '@/practice/lessons';
 import { pathLength } from '@/practice/geometry';
@@ -47,6 +47,8 @@ export interface Settings {
   paper: PaperName;
   tool: Tool;
   eraserSize: number;
+  /** The Shape tool: what a closed outline lands as (its colour is the studio colour). */
+  shape: ShapeStyle;
   pressureMode: PressureMode;
   forceSensitivity: number;
   pencilOnly: boolean;
@@ -238,6 +240,7 @@ const DEFAULT_SETTINGS: Settings = {
   paper: 'hotpress',
   tool: 'brush',
   eraserSize: 24,
+  shape: DEFAULT_SHAPE,
   pressureMode: 'gaussian',
   forceSensitivity: 1.25,
   pencilOnly: false,
@@ -290,6 +293,8 @@ const round = (v: number, d: number) => Math.round(v * d) / d;
  * so lessons draw them, and hand them to the learner, with an opacity floor.
  */
 const LESSON_MIN_OPACITY = 14;
+const isShapeStyleLike = (v: unknown): v is Partial<ShapeStyle> => !!v && typeof v === 'object' && ['fill', 'wash', 'hatch', 'mass'].includes((v as ShapeStyle).kind);
+
 /** A short hash of every lesson's content (ids, brushes, colours, point counts, shapes): the preview cache key. */
 function previewsHash(): string {
   let h = 2166136261;
@@ -581,6 +586,7 @@ export class Studio {
         filters: s.inputVersion === INPUT_VERSION ? mergeFilters(DEFAULT_FILTERS, s.filters) : DEFAULT_FILTERS,
         inputVersion: INPUT_VERSION,
         tool: 'brush',
+        shape: isShapeStyleLike(s.shape) ? { ...clone(DEFAULT_SHAPE), ...s.shape } : clone(DEFAULT_SHAPE),
       };
       try { checkTip(settings.tipSource); } catch { settings.tipSource = DEFAULT_TIP_SOURCE; }
       this.state = { ...this.state, settings };
@@ -2059,6 +2065,11 @@ export class Studio {
   private newRecord(tool: Tool, firstPt: Point, input: InputKind = 'mouse'): BrushRecord | EraserRecord {
     const s = this.settings;
     if (tool === 'eraser') return { tool, size: s.eraserSize, points: [firstPt] };
+    if (tool === 'shape') {
+      // The outline is only the pen's path: a thin technical-pen line in the shape's colour, replaced by the shape on lift.
+      const pen = BRUSH_TEMPLATES.find((t) => t.id === 'pen') ?? BRUSH_TEMPLATES[0];
+      return { tool: 'brush', spec: clone(pen.spec), tipSource: pen.tipSource, size: 0.7, color: s.color, pressureMode: 'gaussian', sensitivity: s.forceSensitivity, seed: (Math.random() * 2147483647) | 0, points: [firstPt], input };
+    }
     const spec = clone(s.spec);
     // 'stylus' mode disables the simulated envelope so only plot pressure remains.
     if (s.pressureMode === 'stylus') spec.pressure = STYLUS_ENVELOPE;
@@ -2399,7 +2410,17 @@ export class Studio {
     }
     this.sample('up', 0, 0, live.rec.tool);
     this.pushRecord(live.rec);
-    if (this.state.practice?.status === 'active') this.practiceEvaluate(live.rec);
+    if (this.state.practice?.status === 'active') { this.practiceEvaluate(live.rec); return; }
+    if (this.settings.tool === 'shape' && live.rec.tool === 'brush') this.landShape(live.rec);
+  }
+
+  /** The Shape tool's lift: the outline just drawn becomes a fill, wash, hatch or mass on its own polygon; a tap or a mere flick is dropped. */
+  private landShape(rec: BrushRecord) {
+    const poly = shapeOutline(rec.points);
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of poly) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
+    if (poly.length < 3 || Math.max(maxX - minX, maxY - minY) < 6) { this.dropLastStroke(); this.syncHistory(); return; }
+    this.replaceLastWithShape({ ...clone(this.settings.shape), color: this.settings.color }, rec.points, rec.seed);
   }
 
   private schedulePreview() {
@@ -2611,7 +2632,26 @@ export class Studio {
     this.setSpec({ pressure: { ...this.settings.spec.pressure, ...patch } });
   }
   setSize(size: number) { this.set({ size }); }
-  setColor(color: string) { this.set({ color, tool: 'brush' }); }
+  setColor(color: string) { this.set({ color, tool: this.settings.tool === 'shape' ? 'shape' : 'brush' }); }
+  /** Shape tool settings; nested groups are merged one level deep. */
+  setShape(patch: Partial<ShapeStyle>) {
+    const cur = this.settings.shape;
+    const shape: ShapeStyle = { ...cur, ...patch };
+    if (patch.bleed) shape.bleed = { ...(cur.bleed ?? { amount: 0.25, dir: 'out' }), ...patch.bleed };
+    if (patch.texture) shape.texture = { ...(cur.texture ?? { strength: 0.5, border: 0.4, scatter: true }), ...patch.texture };
+    if (patch.hatch) shape.hatch = { ...(cur.hatch ?? { dist: 5, angle: 60, brush: 'rotring', weight: 0.8 }), ...patch.hatch };
+    if (patch.mass) shape.mass = { ...(cur.mass ?? { brush: 'charcoal' }), ...patch.mass };
+    if (shape.kind === 'hatch' && !shape.hatch) shape.hatch = { dist: 5, angle: 60, brush: 'rotring', weight: 0.8, gradient: 0.6, rand: 0.1, continuous: true };
+    if (shape.kind === 'mass' && !shape.mass) shape.mass = { brush: 'charcoal', precision: 0.5, strength: 1, gradient: 0.2, outline: true };
+    this.set({ shape, tool: 'shape' });
+  }
+  /** One of the page's recipes: its style and its colour, and the Shape tool. */
+  applyShapePreset(id: string) {
+    const p = SHAPE_PRESETS.find((x) => x.id === id);
+    if (!p) return;
+    this.set({ shape: clone(p.style), color: p.style.color, tool: 'shape' });
+    this.signal('tool');
+  }
   setEraserSize(eraserSize: number) { this.set({ eraserSize }); }
   setPressureMode(pressureMode: PressureMode) { this.set({ pressureMode }); }
   setForceSensitivity(forceSensitivity: number) { this.set({ forceSensitivity }); }
@@ -2852,6 +2892,7 @@ export class Studio {
       history: () => this.strokes,
       commit: (points: Point[], overrides?: Partial<BrushRecord>) => this.commitPoints(points, overrides),
       commitShape: (style: ShapeStyle, points: Point[], seed = 1) => this.commitRecord({ tool: 'shape', style, points: shapeOutline(points), seed }),
+      setTool: (t: Tool) => this.setTool(t), setColor: (c: string) => this.setColor(c), setShape: (p: Partial<ShapeStyle>) => this.setShape(p), applyShapePreset: (id: string) => this.applyShapePreset(id), shapePresets: SHAPE_PRESETS.map((p) => p.id),
       undo: this.undo, redo: this.redo, clear: this.clear, sample: this.drawSampleStroke, cancel: this.cancelStroke,
       sketchCode: () => this.sketchCode(), specCode: () => this.specCode(),
       setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),

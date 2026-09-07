@@ -15,7 +15,7 @@ export function BrushCursor({ canvas }: { canvas: HTMLCanvasElement | null }) {
   const tipExtent = useStudioState((s) => s.tipExtent);
   const zoom = useStudioState((s) => s.view.zoom);
   const pencil = useStudioState((s) => s.settings.pencil);
-  const diameter = (tool === 'eraser' ? eraserSize : Math.max(3, spec.weight * size * tipExtent * spec.pressure.min_max[1])) * zoom;
+  const diameter = (tool === 'eraser' ? eraserSize : tool === 'shape' ? 6 : Math.max(3, spec.weight * size * tipExtent * spec.pressure.min_max[1])) * zoom;
   // Pencil lab: the hover footprint shows the tilted mark (wider, turned with the
   // pencil's lean or the stroke) instead of the plain ring.
   const footprint = pencil.hover && tool === 'brush' ? activeFx(pencil) ?? { tiltWidth: 1, tiltFade: 1, nib: 'stroke' as const, roll: false } : null;

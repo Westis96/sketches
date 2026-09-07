@@ -39,8 +39,9 @@ const BRUSH: Record<BrushKind, { type: BiquadFilterType; f: number; q: number; g
   eraser: { type: 'bandpass', f: 1200, q: 0.6, gain: 0.03 },
 };
 /** Which family a brush template belongs to. */
-export function brushKindOf(template: string | null, tool: 'brush' | 'eraser'): BrushKind {
+export function brushKindOf(template: string | null, tool: 'brush' | 'eraser' | 'shape'): BrushKind {
   if (tool === 'eraser') return 'eraser';
+  if (tool === 'shape') return 'wash';
   switch (template) {
     case 'graphite': case 'charcoal': return 'pencil';
     case 'bristle': case 'flat': case 'chisel': case 'brushpen': return 'brush';
