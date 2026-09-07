@@ -748,11 +748,12 @@ export class Studio {
   /**
    * p5.brush's standard brushes (used by hatching and massing) keep their own
    * weights, which were tuned for a small canvas; the studio draws them at
-   * STD_SCALE times that, scaled with the view like its own brushes. Custom
+   * STD_SCALE times that (the Sixteen Washes page's scaleBrushes), scaled with
+   * the view like its own brushes. Custom
    * brushes are unaffected: ensureRegistered() writes their absolute params on
    * every use.
    */
-  private static readonly STD_SCALE = 3;
+  private static readonly STD_SCALE = 2.5;
   private stdScale = 1;
   private applyStdScale(zoom: number) {
     const target = Studio.STD_SCALE * zoom;

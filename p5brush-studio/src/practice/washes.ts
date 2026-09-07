@@ -213,7 +213,7 @@ function buildGrove(): LessonStep[] {
     for (let i = 0; i < n; i++) {
       const a = base + (i - (n - 1) / 2) * 0.34 + between(r, -0.08, 0.08), L = between(r, 85, 140);
       const ex = tx + Math.cos(a) * L, ey = ty + Math.sin(a) * L, mx = (tx + ex) / 2 - Math.sin(a) * between(r, 4, 12), my = (ty + ey) / 2 + Math.cos(a) * between(r, 4, 12);
-      out.push(strokeStep(LEAF, col, w, wiggle(splineP([[tx, ty], [mx, my], [ex, ey]], leafP, 8), 0.8, r), i === 0 && hint ? 'Leaves: the blade lands thin at the twig, swells, and lifts to a point.' : undefined, 0.55));
+      out.push(strokeStep(LEAF, col, w, wiggle(splineP([[tx, ty], [mx, my], [ex, ey]], leafP, 16), 0.8, r), i === 0 && hint ? 'Leaves: the blade lands thin at the twig, swells, and lifts to a point.' : undefined, 0.55));
     }
   };
   const far = culm(20, 300, 70, -300, 0.45, '#c4cbc2', '#b3bab0', false, 'Far culm first, palest: the flat tip held across the stroke, one pull per segment, bottom to top, a gap at every node.');
@@ -224,6 +224,8 @@ function buildGrove(): LessonStep[] {
   cluster(near[1][0], near[1][1], near[1][0] + 34, near[1][1] - 22, 4, '#1f2a22', 1, 0.45, 'Near clusters: twig, then four or five blades fanning from its tip.');
   out.push(strokeStep(B2, '#2f3a2e', 1, splineP([[near[2][0], near[2][1]], [near[2][0] + 70, near[2][1] - 40], [near[2][0] + 150, near[2][1] - 60]]), 'A branch reaching out from the third joint.', 0.5));
   cluster(near[2][0] + 150, near[2][1] - 60, near[2][0] + 170, near[2][1] - 70, 5, '#1f2a22', 0.95, 0.35);
+  cluster(near[3][0], near[3][1], near[3][0] - 36, near[3][1] - 18, 5, '#1f2a22', 1, Math.PI - 0.45);
+  cluster(mid[3][0], mid[3][1], mid[3][0] + 22, mid[3][1] - 12, 4, '#8a958a', 0.75, 0.55);
   return out;
 }
 

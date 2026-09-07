@@ -898,7 +898,7 @@ export const TEACH: Record<string, TeachSlide[]> = {
       cue: 'Land thin. Swell. Lift to a point.',
       demos: [
         D(B2, timed(line(300, 300, 334, 278, flat(0.6), 8), 0.55), { label: 'twig first' }),
-        ...[-0.2, 0.15, 0.5, 0.85].map((a, i) => { const R = frame(334, 278, a); return D(LEAF, timed(spline([R(0, 0), R(56, 5), R(112, 0)], 10, leafP), 0.55), { label: i === 0 ? 'thin, wide, point' : undefined, good: i === 0 ? true : undefined, delay: i === 0 ? 300 : 200 }); }),
+        ...[-0.2, 0.15, 0.5, 0.85].map((a, i) => { const R = frame(334, 278, a); return D(LEAF, timed(spline([R(0, 0), R(56, 5), R(112, 0)], 18, leafP), 0.55), { label: i === 0 ? 'thin, wide, point' : undefined, good: i === 0 ? true : undefined, delay: i === 0 ? 300 : 200 }); }),
         D(LEAF, timed(spline([[520, 420], [600, 400], [680, 380]], 10, flat(0.7)), 0.55), { label: 'one pressure: a sausage', good: false, delay: 600 }),
       ],
     },

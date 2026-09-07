@@ -202,15 +202,16 @@ _m.circle(0, 0, 90);`,
   },
   // --- From the Sixteen Washes studies -------------------------------------------
   // The pens and pencils are p5.brush's own standard brushes (its `default` stamp
-  // family: grainy dots along the line) at three times their reference weight,
-  // which is the studio's scale; the three shaped tips are the page's custom brushes.
+  // family: grainy dots along the line) at the page's scaleBrushes(2.5); the three
+  // shaped tips are the page's custom brushes at their own weights (the lesson box
+  // maps the page's sheet one to one).
   {
     id: 'pen',
     name: 'Technical pen',
     codeName: 'pen',
     description: "p5.brush's pen: a solid, even ink line with almost no give. Outlines, stems and birds.",
     spec: {
-      type: 'default', weight: 0.9, scatter: 0.45, opacity: 150, spacing: 0.3, noise: 0.1, sharpness: 0.9, grain: 0.7,
+      type: 'default', weight: 0.75, scatter: 0.375, opacity: 150, spacing: 0.25, noise: 0.1, sharpness: 0.9, grain: 0.7,
       pressure: { mode: 'gaussian', curve: [0.15, 0.2], min_max: [1.2, 1] },
       rotate: 'none', markerTip: false,
     },
@@ -223,7 +224,7 @@ _m.circle(0, 0, 90);`,
     codeName: 'pencil2H',
     description: "p5.brush's 2H: a thin, pale, grainy line that barely darkens under pressure. Guides, hoops, ripples.",
     spec: {
-      type: 'default', weight: 0.6, scatter: 1.8, opacity: 120, spacing: 0.3, noise: 0.1, sharpness: 0.3, grain: 0.75,
+      type: 'default', weight: 0.5, scatter: 1.5, opacity: 120, spacing: 0.25, noise: 0.1, sharpness: 0.3, grain: 0.75,
       pressure: { mode: 'gaussian', curve: [0.15, 0.2], min_max: [1.1, 0.9] },
       rotate: 'none', markerTip: false,
     },
@@ -235,7 +236,7 @@ _m.circle(0, 0, 90);`,
     codeName: 'pencil2B',
     description: "p5.brush's 2B: dark and grainy, the sketching pencil. Twigs, stalks, rays, outlines.",
     spec: {
-      type: 'default', weight: 0.9, scatter: 2.25, opacity: 180, spacing: 0.3, noise: 0.1, sharpness: 0.45, grain: 0.8,
+      type: 'default', weight: 0.75, scatter: 1.875, opacity: 180, spacing: 0.25, noise: 0.1, sharpness: 0.45, grain: 0.8,
       pressure: { mode: 'gaussian', curve: [0.1, 0.3], min_max: [1.1, 0.9] },
       rotate: 'none', markerTip: false,
     },
@@ -247,7 +248,7 @@ _m.circle(0, 0, 90);`,
     codeName: 'cpencil',
     description: "p5.brush's coloured pencil: waxy and grainy, and it keeps its colour when layered. Veins and lines over wash.",
     spec: {
-      type: 'default', weight: 1.05, scatter: 1.65, opacity: 75, spacing: 0.3, noise: 0.1, sharpness: 0.8, grain: 0.7,
+      type: 'default', weight: 0.875, scatter: 1.375, opacity: 75, spacing: 0.25, noise: 0.1, sharpness: 0.8, grain: 0.7,
       pressure: { mode: 'gaussian', curve: [0.15, 0.2], min_max: [0.95, 1.1] },
       rotate: 'none', markerTip: false,
     },
@@ -259,7 +260,7 @@ _m.circle(0, 0, 90);`,
     codeName: 'petal',
     description: 'An oval tip that turns with the stroke and swells under pressure: mandala petals, spiral fills.',
     spec: {
-      type: 'custom', weight: 17, scatter: 1.0, opacity: 70, spacing: 0.9, noise: 0.3,
+      type: 'custom', weight: 7, scatter: 0.4, opacity: 70, spacing: 0.35, noise: 0.3,
       pressure: { mode: 'gaussian', curve: [0.45, 0.3], min_max: [0.5, 1.6] },
       rotate: 'natural', markerTip: false,
     },
@@ -274,7 +275,7 @@ _m.ellipse(0, 0, 100, 44);`,
     codeName: 'culm',
     description: 'A flat edge held across the stroke: a broad, even band with square ends, the bamboo culm.',
     spec: {
-      type: 'custom', weight: 32, scatter: 0, opacity: 95, spacing: 0.3, noise: 0.3,
+      type: 'custom', weight: 14, scatter: 0, opacity: 95, spacing: 0.12, noise: 0.3,
       pressure: { mode: 'gaussian', curve: [0.3, 0.3], min_max: [1.0, 1.12] },
       rotate: 'natural', markerTip: false,
     },
@@ -288,7 +289,7 @@ _m.rect(-16, -50, 32, 100);`,
     codeName: 'leaf',
     description: 'A pointed oval that follows the stroke: thin where you land, wide through the middle, a point where you lift.',
     spec: {
-      type: 'custom', weight: 24, scatter: 0.4, opacity: 150, spacing: 0.45, noise: 0.3,
+      type: 'custom', weight: 10, scatter: 0.15, opacity: 150, spacing: 0.18, noise: 0.3,
       pressure: { mode: 'gaussian', curve: [0.5, 0.35], min_max: [0.12, 1.3] },
       rotate: 'natural', markerTip: false,
     },
