@@ -17,6 +17,11 @@ const PART_LABEL: Record<Part, { name: string; blurb: string; icon: typeof Dumbb
   guided: { name: 'Guided piece', blurb: 'Full guide · practice, no stars', icon: RouteIcon },
   perform: { name: 'Perform', blurb: 'Less guide · this one counts', icon: Trophy },
 };
+/** Seeing missions are not traced: the subject is the guide, and the rule never changes. */
+const SEEING_PART_LABEL: Partial<Record<Part, { blurb: string }>> = {
+  guided: { blurb: 'The subject beside you · practice, no stars' },
+  perform: { blurb: 'Fewer clues · this one counts' },
+};
 
 /** One tier less help than the last guided run ended at; never past dots by default. */
 function defaultTier(guidedTier: Tier | undefined): Tier {
@@ -54,7 +59,7 @@ export function MissionCard({ mission: x }: { mission: Mission }) {
 
       <div className="flex flex-col gap-1.5">
         {parts.map((part) => {
-          const meta = PART_LABEL[part];
+          const meta = x.kind === 'seeing' && SEEING_PART_LABEL[part] ? { ...PART_LABEL[part], ...SEEING_PART_LABEL[part] } : PART_LABEL[part];
           const Icon = meta.icon;
           const best = part === 'trainer' ? mp?.trainer : part === 'guided' ? mp?.guided : part === 'perform' ? mp?.perform : undefined;
           const isNext = part === nextPart;
@@ -85,7 +90,7 @@ export function MissionCard({ mission: x }: { mission: Mission }) {
         })}
       </div>
 
-      {parts.includes('perform') && (
+      {parts.includes('perform') && x.kind !== 'seeing' && (
         <div>
           <div className="mb-1 font-display text-[11px] font-extrabold uppercase tracking-[0.06em] text-[var(--text-3)]">Perform with</div>
           <ToggleGroup type="single" value={tier} onValueChange={(v) => { if (v) setTier(v as Tier); }} className="grid grid-cols-4 gap-1">

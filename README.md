@@ -93,7 +93,7 @@ you improve (full, centreline, dots, blind), steps back up after two misses and 
 three-stroke loop; Perform gives three tries and a critique at the end with the
 costliest strokes, the dimension that cost the most, and your first Perform of that
 piece next to today's. A three-minute warm-up (lines, arcs, ellipses, waves) sits on the
-Path. Levels 0–3 and 5 are built (except 3.4, which needs pen tilt), with 6.1 and 6.2 in Level 6; Level 4 (seeing exercises) and the last two of Level 6 show as "soon". Short synthesized sound cues (a note per clean stroke, pitched by the score; a chime and star notes at the results; a tock when the lesson's pen lands) can be turned off from the Learn header. Routes live in the URL hash
+Path. Levels 0–5 are built, with 6.1 and 6.2 in Level 6; the last two of Level 6 show as "soon". Level 4 is not tracing: a blind contour hides the ink until you lift, the negative-space piece paints around a chair that is never drawn, the portrait is copied upside down, and the cup is drawn from a ten-second look. Short synthesized sound cues (a note per clean stroke, pitched by the score; a chime and star notes at the results; a tock when the lesson's pen lands) can be turned off from the Learn header. Routes live in the URL hash
 (`#/learn`, `#/learn/1.2`, `#/learn/1.2/perform`, `#/warmup`, `#/progress`, `#/sketch`), so the
 back button works and links can be shared. Progress is local; older bests migrate. The
 plan is in `p5brush-studio/docs/curriculum-plan.md`, the UX spec in `docs/practice-ux.md`.

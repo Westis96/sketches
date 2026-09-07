@@ -26,6 +26,8 @@ export interface Lesson {
   subtitle: string;
   difficulty: 1 | 2 | 3;
   build: () => LessonStep[];
+  /** Polylines shown on the paper but never drawn: the subject of a negative-space piece. */
+  overlay?: XY[][];
 }
 
 export const LESSON_BOX = { w: 800, h: 600 };
@@ -388,8 +390,8 @@ function buildCube(): LessonStep[] {
   const hatch = (p0: XY, p1: XY, p2: XY, p3: XY, n: number, hint?: string) => {
     for (let i = 1; i < n; i++) { const t = i / n; const a: XY = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t], b: XY = [p3[0] + (p2[0] - p3[0]) * t, p3[1] + (p2[1] - p3[1]) * t]; out.push(step('ballpoint', '#1a1c23', 1.0, polyPts([a, b], 12, flat(0.55)), i === 1 ? hint : undefined)); }
   };
-  hatch(D, C, F, Hh, 7, 'The dark face: parallel lines, evenly spaced, same speed. Look at where the line ends, not at the pen.');
-  hatch(C, F, Hh, D, 4, 'Darker means another direction: cross the dark face with a second set, not harder pressure.');
+  hatch(D, C, F, Hh, 9, 'The dark face: parallel lines, evenly spaced, same speed. Look at where the line ends, not at the pen.');
+  hatch(C, F, Hh, D, 6, 'Darker means another direction: cross the dark face with a second set, not harder pressure.');
   hatch(A, D, Hh, E, 5, 'The side face: fewer lines, same rhythm.');
   hatch(A, B, C, D, 3, 'The top, lightest: two lines only.');
   out.push(step('graphite', '#8a847a', 1.0, spline([[80, 540], [400, 536], [720, 542]], 20, flat(0.5)), 'The ground line.'));
@@ -414,6 +416,96 @@ function buildKoi(): LessonStep[] {
   return out;
 }
 
+
+// --- 3.4 Feather: the nib's width follows the stroke's direction ------------------
+function buildFeather(): LessonStep[] {
+  const out: LessonStep[] = [];
+  const c = '#2c3e8f';
+  const a: XY = [150, 530], b: XY = [660, 100];
+  const shaft = (t: number): XY => [a[0] + (b[0] - a[0]) * t + Math.sin(t * Math.PI) * 28, a[1] + (b[1] - a[1]) * t - Math.sin(t * Math.PI) * 18];
+  out.push({ ...step('nib', c, 0.8, spline([shaft(0), shaft(0.25), shaft(0.5), shaft(0.75), shaft(1)], 28, bell), 'The shaft: one long pull from the quill to the tip. Where it runs along the nib\'s edge it goes thin, across it goes wide.'), speed: 0.5 });
+  const ang = Math.atan2(b[1] - a[1], b[0] - a[0]);
+  for (let i = 0; i < 6; i++) {
+    const t = 0.22 + i * 0.13;
+    const [sx, sy] = shaft(t);
+    const len = 118 - i * 12;
+    for (const side of [-1, 1]) {
+      const th = ang + side * (1.15 - i * 0.06);
+      const tip: XY = [sx + Math.cos(th) * len, sy + Math.sin(th) * len];
+      const mid: XY = [sx + Math.cos(th) * len * 0.5 + Math.cos(ang) * 14, sy + Math.sin(th) * len * 0.5 + Math.sin(ang) * 14];
+      out.push({ ...step('nib', c, 0.6, spline([[sx, sy], mid, tip], 10, taperOut), i === 0 && side === -1 ? 'Barbs: short pulls away from the shaft, angled toward the tip. Each side leaves the nib at a different angle, so one side comes out wide and the other thin.' : i === 3 && side === -1 ? 'Keep the pen still in your hand. Only the direction of the stroke changes.' : undefined), speed: 0.65 });
+    }
+  }
+  return out;
+}
+
+// --- 4.1 Hand: a blind contour ----------------------------------------------------
+function buildHand(): LessonStep[] {
+  const c = '#3a3128';
+  const s = (pts: XY[], hint?: string): LessonStep => ({ ...step('liner', c, 1.1, spline(pts, 14, flat(0.6)), hint), speed: 0.35 });
+  return [
+    s([[300, 560], [286, 470], [252, 410], [215, 350], [242, 334], [282, 380], [316, 420]], 'The thumb: start at the wrist and follow the edge with your eye. The pen goes where your eye goes, at the same slow speed.'),
+    s([[316, 420], [300, 300], [305, 180], [332, 180], [346, 300], [352, 410]], 'The index finger: up one side, round the tip, down the other. Do not look at the paper.'),
+    s([[352, 410], [360, 280], [370, 150], [396, 150], [401, 280], [401, 405]], 'The middle finger, the longest.'),
+    s([[401, 405], [410, 290], [420, 175], [446, 178], [451, 290], [451, 410]], 'The ring finger.'),
+    s([[451, 410], [466, 320], [480, 240], [503, 250], [501, 330], [495, 430]], 'The little finger, shorter and set lower.'),
+    s([[495, 430], [506, 500], [500, 560]], 'Down the outside of the palm to the wrist.'),
+    s([[300, 560], [400, 567], [500, 560]], 'The wrist closes it. Now lift, and look.'),
+  ];
+}
+
+// --- 4.2 Chair: negative space ----------------------------------------------------
+const CHAIR: XY[][] = [
+  [[330, 120], [470, 120], [470, 330], [330, 330], [330, 120]],
+  [[300, 330], [500, 330], [500, 370], [300, 370], [300, 330]],
+  [[310, 370], [310, 520]], [[490, 370], [490, 520]],
+];
+function buildChair(): LessonStep[] {
+  const c = '#4b6a8a';
+  const band = (pts: XY[], hint?: string): LessonStep => ({ ...step('wash', c, 1.0, spline(pts, 16, flat(0.65)), hint), speed: 0.4 });
+  return [
+    band([[110, 70], [112, 300], [110, 540]], 'Paint the space, not the chair. Down the left: a flat band from top to bottom.'),
+    band([[175, 70], [173, 300], [175, 540]]),
+    band([[240, 70], [242, 300], [240, 540]], 'Right up against the chair: the band stops where the wood begins.'),
+    band([[300, 85], [400, 84], [500, 85]], 'Above the back: the sky between the two uprights.'),
+    band([[560, 70], [558, 300], [560, 540]], 'The right side, the same three bands.'),
+    band([[625, 70], [627, 300], [625, 540]]),
+    band([[690, 70], [688, 300], [690, 540]]),
+    band([[325, 450], [400, 452], [475, 450]], 'Under the seat, between the legs: a short band.'),
+    band([[325, 505], [400, 503], [475, 505]]),
+    band([[60, 562], [400, 560], [740, 562]], 'The floor. The chair is the paper you never touched.'),
+  ];
+}
+
+// --- 4.3 Portrait line, upside down -----------------------------------------------
+function buildPortrait(): LessonStep[] {
+  const c = '#3a3a3a';
+  const flip = (pts: XY[]): XY[] => pts.map(([x, y]) => [800 - x, 600 - y]);
+  const s = (pts: XY[], hint?: string): LessonStep => ({ ...step('graphite', c, 1.0, spline(flip(pts), 14, flat(0.65)), hint), speed: 0.4 });
+  return [
+    s([[400, 120], [380, 180], [372, 240], [368, 280], [350, 330], [366, 350]], 'Start with the line at the bottom right and copy its bends exactly. Do not name what it is.'),
+    s([[366, 350], [372, 375], [366, 395], [380, 412], [376, 440], [392, 470], [420, 485]], 'The next line: two small bumps and a longer curve. Just shapes.'),
+    s([[420, 485], [430, 530], [440, 580]], 'A short, nearly straight line.'),
+    s([[400, 120], [470, 95], [540, 120], [580, 200], [575, 290], [550, 360], [520, 420], [500, 470]], 'The big curve. Check how far it is from the edge of the paper, not what it means.'),
+    s([[505, 290], [525, 270], [540, 300], [525, 345], [505, 340]], 'A small loop, open on one side.'),
+    s([[390, 245], [445, 238]], 'Two short lines that sit inside the big curve.'),
+    s([[400, 275], [420, 265], [440, 275]]),
+    s([[430, 140], [480, 150], [530, 200]], 'The last line. Then turn it the right way up in your head.'),
+  ];
+}
+
+// --- 4.4 Cup, from memory ----------------------------------------------------------
+function buildCup(): LessonStep[] {
+  const c = '#3a3128';
+  return [
+    { ...step('liner', c, 1.2, ellipsePts(400, 200, 150, 45, 0, 44, flat(0.6)), 'The rim: an ellipse, one pass.'), speed: 0.45 },
+    { ...step('liner', c, 1.2, spline([[250, 200], [254, 310], [262, 420]], 10, flat(0.6)), 'The left side, leaning in a little.'), speed: 0.5 },
+    { ...step('liner', c, 1.2, spline([[550, 200], [546, 310], [538, 420]], 10, flat(0.6)), 'The right side, the same lean.'), speed: 0.5 },
+    { ...step('liner', c, 1.2, arcPts(400, 420, 138, 40, 0, Math.PI, 18, flat(0.6)), 'The base: the bottom half of a flatter ellipse.'), speed: 0.45 },
+    { ...step('liner', c, 1.2, spline([[550, 240], [640, 250], [660, 330], [600, 400], [540, 395]], 16, flat(0.6)), 'The handle: a hook off the right side.'), speed: 0.45 },
+  ];
+}
+
 export const LESSONS: Lesson[] = [
   { id: 'fence', title: 'Fence', subtitle: 'Posts and rails', difficulty: 1, build: buildFence },
   { id: 'waves', title: 'Warm-up waves', subtitle: 'Five strokes, one motion each', difficulty: 1, build: buildWaves },
@@ -433,6 +525,11 @@ export const LESSONS: Lesson[] = [
   { id: 'stones', title: 'Stones', subtitle: 'Pale first, dark after, line last', difficulty: 2, build: buildStones },
   { id: 'moon', title: 'Moon', subtitle: 'Spray, a halo, a charcoal tree', difficulty: 2, build: buildMoon },
   { id: 'cube', title: 'Cube', subtitle: 'Nine edges and three hatched faces', difficulty: 2, build: buildCube },
+  { id: 'feather', title: 'Feather', subtitle: 'The nib turned by direction', difficulty: 2, build: buildFeather },
+  { id: 'hand', title: 'Hand', subtitle: 'A blind contour', difficulty: 2, build: buildHand },
+  { id: 'chair', title: 'Chair', subtitle: 'Painted from the space around it', difficulty: 2, build: buildChair, overlay: CHAIR },
+  { id: 'portrait', title: 'Portrait line', subtitle: 'Copied upside down', difficulty: 2, build: buildPortrait },
+  { id: 'cup', title: 'Cup', subtitle: 'Drawn from memory', difficulty: 2, build: buildCup },
   { id: 'koi', title: 'Koi', subtitle: 'Ten living lines', difficulty: 3, build: buildKoi },
 ];
 

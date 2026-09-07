@@ -56,8 +56,9 @@ export function LearnHome({ selectedId, instant }: { selectedId: string | null; 
     const el = nodeRefs.current.get(selectedId);
     if (!el) return;
     scrolled.current = true;
-    el.scrollIntoView({ block: 'center', behavior: instant ? 'auto' : 'smooth' });
-  }, [selectedId, instant]);
+    // A phone has no room beside the node: put it near the top so the card below it fits.
+    el.scrollIntoView({ block: window.innerWidth < 640 ? 'start' : 'center' });
+  }, [selectedId]);
   let index = 0;
 
   return (
@@ -123,7 +124,7 @@ export function LearnHome({ selectedId, instant }: { selectedId: string | null; 
                           navigate(selectedId === x.id ? learnPath() : missionPath(x.id));
                         }}
                         className={cn('node', st === 'soon' && 'border-[3px] border-dashed border-[var(--hint-strong)]', st === 'locked' && 'cursor-not-allowed')}
-                        style={{ width: size, height: size, background: bg, boxShadow: st === 'soon' ? 'none' : `0 6px 0 ${edge}`, '--node-edge': edge } as React.CSSProperties}
+                        style={{ width: size, height: size, background: bg, boxShadow: st === 'soon' ? 'none' : `0 6px 0 ${edge}`, scrollMarginTop: 88, '--node-edge': edge } as React.CSSProperties}
                       >
                         {thumb && st !== 'soon' ? (
                           <span className={cn('block overflow-hidden rounded-full bg-white ring-[3px] ring-white/90', st === 'locked' && 'opacity-50 grayscale')} style={{ width: size - 16, height: size - 16 }}>

@@ -46,6 +46,8 @@ const browser = await chromium.launch({
 });
 const context = await browser.newContext({ viewport: { width: 1200, height: 800 }, deviceScaleFactor: 1 });
 const page = await context.newPage();
+// Toasts stack at the foot of the paper; the suite never clicks them, so they must never take a pointer event meant for the canvas.
+await page.addInitScript(() => { document.addEventListener('DOMContentLoaded', () => { const st = document.createElement('style'); st.textContent = '[data-sonner-toaster],[data-sonner-toast]{pointer-events:none !important}'; document.head.appendChild(st); }); });
 const pageErrors = [];
 page.on('pageerror', (e) => pageErrors.push(e.message));
 await page.route(/^https?:\/\/(?!127\.0\.0\.1)/, (r) => r.abort()); // no fonts/CDNs in CI
@@ -339,6 +341,40 @@ try {
   const missions = await studio((s) => s.practice.missions);
   check('the path declares 27 missions across 7 levels', missions.length === 27 && missions[0] === '0.1' && missions.at(-1) === '6.4', missions.join(','));
 
+  // Seeing missions: the subject is the guide, the rule sets the tier, and the ink of a blind contour waits for the lift.
+  await page.goto(page.url().split('#')[0] + '#/learn/4.1/guided');
+  // The path page can linger over the canvas while the piece previews render: wait for the session's own guide.
+  await page.waitForSelector('[data-testid=path]', { state: 'detached', timeout: 10000 }).catch(() => {});
+  await page.waitForSelector('[data-testid=practice-guide]', { timeout: 10000 }).catch(() => {});
+  await page.waitForTimeout(500);
+  let sp = await studio((s) => s.state.practice);
+  check('a blind contour opens with the whole subject on the paper and a locked tier', sp?.seeing === 'blind' && sp.tierLocked && sp.tier === 'light' && (await page.locator('[data-guide=ghost]').count()) === sp.steps.length && (await page.locator('[data-testid=practice-guide]').getAttribute('data-subject')) === 'true', JSON.stringify({ seeing: sp?.seeing, tier: sp?.tier, n: sp?.steps.length }));
+  // Trace the first stroke of the hand with the mouse, along the reference, so it is accepted and kept.
+  const blindPath = await studio((s) => { const v = s.state.view; return s.practice.current()[0].points.map((q) => [v.x + q.x * v.zoom, v.y + q.y * v.zoom]); });
+  const inkBefore = await checksum();
+  await page.mouse.move(blindPath[0][0], blindPath[0][1]); await page.mouse.down();
+  for (let k = 1; k < blindPath.length; k += 2) await page.mouse.move(blindPath[k][0], blindPath[k][1], { steps: 2 });
+  await page.waitForTimeout(300);
+  const inkDuring = await checksum();
+  await page.mouse.move(blindPath.at(-1)[0], blindPath.at(-1)[1]);
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+  const inkAfter = await checksum();
+  sp = await studio((s) => s.state.practice);
+  check('blind contour ink is hidden while the pen moves and lands on lift', inkDuring.ink === inkBefore.ink && inkAfter.ink > inkBefore.ink && sp.step === 1, JSON.stringify({ inkBefore, inkDuring, inkAfter, step: sp?.step, fb: sp?.feedback }));
+  await page.goto(page.url().split('#')[0] + '#/learn/4.2/guided');
+  await page.waitForTimeout(500);
+  sp = await studio((s) => s.state.practice);
+  check('the negative-space piece shows the chair as an overlay that is never a step', sp?.seeing === 'negative' && (await page.locator('[data-guide=overlay] path').count()) === 4 && sp.steps.every((st) => st.template === 'wash'), JSON.stringify({ seeing: sp?.seeing, n: sp?.steps.length }));
+  await page.goto(page.url().split('#')[0] + '#/learn/4.4/guided');
+  await page.waitForTimeout(500);
+  sp = await studio((s) => s.state.practice);
+  check('a memory piece starts with a timed look at the whole cup', sp?.seeing === 'memory' && sp.memoryUntil > Date.now() + 5000 && sp.tier === 'dots' && (await page.locator('[data-guide=ghost]').count()) === sp.steps.length && /Look: \d+ s/.test(await page.locator('[data-testid=seeing-note]').textContent()), JSON.stringify({ seeing: sp?.seeing, until: sp?.memoryUntil, now: Date.now() }));
+  await page.goto(page.url().split('#')[0] + '#/learn/3.4/trainer');
+  await page.waitForTimeout(500);
+  sp = await studio((s) => s.state.practice);
+  check('3.4 drills the nib in eight directions', sp?.part === 'trainer' && sp.steps.length === 8 && sp.steps.every((st) => st.template === 'nib'), JSON.stringify({ part: sp?.part, n: sp?.steps.length }));
+
   // The lesson: slides beside the paper, demos drawn by the engine, nothing scored.
   await page.goto(page.url().split('#')[0] + '#/learn/1.1');
   await page.waitForSelector('[data-testid="mission-sheet"]');
@@ -514,6 +550,8 @@ try {
   await page.waitForFunction(() => window.__studio.state.practice === null, null, { timeout: 8000 }).catch(() => {});
   check('the back button leaves the session', (await studio((s) => s.state.practice)) === null && (await page.evaluate(() => location.hash)) === '#/learn');
   await page.goto(page.url().split('#')[0] + '#/sketch');
+  // The path page is a full-screen layer over the canvas: wait until it has unmounted before drawing.
+  await page.waitForSelector('[data-testid=path]', { state: 'detached', timeout: 10000 }).catch(() => {});
   await page.waitForTimeout(300);
   await studio((s) => s.clear());
 

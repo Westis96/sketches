@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router';
-import { BookOpen, Flame, Lightbulb, Repeat, RotateCcw, SkipForward, Undo2, Volume2, VolumeX, X } from 'lucide-react';
+import { BookOpen, Eye, Flame, Lightbulb, Repeat, RotateCcw, SkipForward, Undo2, Volume2, VolumeX, X } from 'lucide-react';
 import { useSoundEnabled } from '@/hooks/useSfx';
 import { sfx } from '@/sound/sfx';
 import { Button } from '@/components/ui/button';
@@ -10,7 +10,7 @@ import { TlTip } from '@/components/TlButton';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { BRUSH_TEMPLATES } from '@/engine/templates';
 import type { PracticeFeedback } from '@/engine/Studio';
-import { TIERS, TIER_LABEL, levelVars, missionById, type Tier } from '@/practice/curriculum';
+import { TIERS, TIER_LABEL, levelVars, missionById, type Seeing, type Tier } from '@/practice/curriculum';
 import { stepHint } from '@/practice/lessons';
 import { learnPath, missionPath, sessionPath } from '@/practice/routes';
 import { hasLesson } from '@/practice/teach';
@@ -68,6 +68,21 @@ function FeedbackBar({ fb, perform }: { fb: PracticeFeedback | null; perform: bo
       {f && <span className="font-mono text-[15px] font-medium tabular-nums">{f.score}</span>}
     </div>
   );
+}
+
+/** The rule of a seeing mission, and the countdown of a memory look. */
+function SeeingNote({ seeing, until }: { seeing: Seeing; until: number | null }) {
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (seeing !== 'memory' || !until || now >= until) return;
+    const t = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(t);
+  }, [seeing, until, now]);
+  const text = seeing === 'blind' ? 'Eyes on the subject. The ink shows when you lift.'
+    : seeing === 'negative' ? 'Paint the space. The chair is never touched.'
+    : seeing === 'flipped' ? 'Upside down on purpose. Copy the lines, not the face.'
+    : until && now < until ? `Look: ${Math.max(1, Math.ceil((until - now) / 1000))} s` : 'Gone. Draw it from memory.';
+  return <span className="inline-flex items-center gap-1 rounded-full bg-[var(--low)] px-2 py-0.5 text-[11px] font-semibold text-[var(--text-1)]" data-testid="seeing-note"><Eye className="h-3.5 w-3.5 text-[var(--lvl)]" />{text}</span>;
 }
 
 /** Tiny picture of what each tier shows: a road, a line, two dots. */
@@ -142,6 +157,7 @@ export function SessionScreen() {
               </span>
             )}
             {pr.note && <span className="font-medium text-[var(--lvl)]" data-testid="practice-note">{pr.note}</span>}
+            {pr.seeing && <SeeingNote seeing={pr.seeing} until={pr.memoryUntil} />}
           </div>
         </div>
       </div>

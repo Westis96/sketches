@@ -237,7 +237,7 @@ export const TEACH: Record<string, TeachSlide[]> = {
     },
     {
       title: 'Count one at the corner',
-      body: 'Say "one" at every corner, pen down, before you move again. The pencil darkens slightly where you stop; that is right, it is how a drawn corner looks.',
+      body: 'Say "one" at every corner, pen down, before you move again. The stop is what makes the corner: leave a beat early and the pencil rounds it for you.',
       cue: 'Drive in. Stop. New direction.',
       demos: [D(GRAPHITE, paused(poly(zigzagPts(120, 300, 680, 90, 4), 10, flat(0.65)), 0.5, [10, 20, 30], 160), { delay: 700 })],
     },
@@ -586,6 +586,113 @@ export const TEACH: Record<string, TeachSlide[]> = {
       ],
     },
     { title: 'Your turn', body: 'Draw two or three living lines here, weight in the middle. Then the trainer.', tryIt: true },
+  ],
+
+
+  '3.4': [
+    {
+      title: 'The nib has two widths',
+      body: 'A calligraphy nib is a flat edge. Pull across that edge and the line is wide; pull along it and the line is a hair. The pen never turns in your hand: the direction of the stroke does the turning.',
+      demos: [
+        D(NIB, timed(line(150, 300, 650, 300, flat(0.7)), 0.5), { label: 'across the edge: wide', good: true }),
+        D(NIB, timed(line(400, 120, 400, 480, flat(0.7)), 0.5), { label: 'along the edge: thin', good: true, delay: 500 }),
+      ],
+    },
+    {
+      title: 'A curve turns through both',
+      body: 'One curved stroke passes through every direction, so it swells and thins on its own. Watch where it goes wide: those are the parts running across the edge.',
+      cue: 'Hold the pen still. Turn the stroke.',
+      demos: [D(NIB, timed(ell(400, 300, 190, 120, 0.3), 0.5), { delay: 600 })],
+    },
+    {
+      title: 'A feather',
+      body: 'The shaft is one long pull. The barbs leave it at two angles, so one side of the feather comes out wide and the other thin, from the same pen at the same pressure.',
+      demos: [
+        D({ ...NIB, size: 0.75 }, timed(spline([[200, 480], [330, 360], [470, 240], [600, 120]], 22, bell), 0.5), { delay: 300 }),
+        D(NIB, timed(spline([[330, 360], [300, 300], [270, 260]], 8, taperOut), 0.6), { delay: 300 }),
+        D(NIB, timed(spline([[330, 360], [400, 330], [450, 325]], 8, taperOut), 0.6), { delay: 150 }),
+        D(NIB, timed(spline([[420, 285], [390, 225], [365, 190]], 8, taperOut), 0.6), { delay: 150 }),
+        D(NIB, timed(spline([[420, 285], [490, 255], [540, 250]], 8, taperOut), 0.6), { delay: 150 }),
+      ],
+    },
+    { title: 'Your turn', body: 'Draw the same short stroke in six directions here and watch the width change. Then the drill.', tryIt: true },
+  ],
+
+  '4.1': [
+    {
+      title: 'Draw what you see, not what you know',
+      body: 'Ask for a hand and most people draw the symbol: a mitten with five sausages. A blind contour breaks the habit. Your eye crawls along the real edge and the pen copies its movement, slowly, without ever looking at the paper.',
+      demos: [
+        D(LINER, timed(spline([[250, 470], [236, 400], [210, 350], [186, 300], [212, 288], [246, 330], [276, 370]], 14, flat(0.6)), 0.3), { label: 'the edge, followed', good: true }),
+        D(LINER, timed(spline([[520, 470], [520, 300], [560, 300], [560, 470]], 6, flat(0.6)), 0.6), { label: 'the symbol', good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'The ink hides until you lift',
+      body: 'On paper you would be tempted to peek. Here the ink stays hidden while the pen moves and appears when you lift, so there is nothing to look at but the subject. The line will be strange. That is the point.',
+      cue: 'Eyes on the edge. Pen at eye speed. Lift, then look.',
+      demos: [D(LINER, timed(spline([[276, 370], [262, 260], [268, 160], [296, 160], [308, 260], [314, 370]], 14, flat(0.6)), 0.3), { delay: 600 })],
+    },
+    { title: 'Your turn', body: 'Look at your own hand and draw its outline here without looking down. Then the piece.', tryIt: true },
+  ],
+
+  '4.2': [
+    {
+      title: 'The shape of the space',
+      body: 'The eye names objects and ignores the gaps between them. The gaps have exact shapes too, and they are easier to see because they have no names. Paint the gaps and the object appears without being drawn.',
+      demos: [
+        D(WASH, timed(line(130, 90, 130, 510, flat(0.65), 24), 0.4), { label: 'the space', delay: 200 }),
+        D(WASH, timed(line(195, 90, 195, 510, flat(0.65), 24), 0.4), { delay: 200 }),
+        D(WASH, timed(line(260, 90, 260, 510, flat(0.65), 24), 0.4), { label: 'stops at the chair', delay: 200 }),
+        D(WASH, timed(line(540, 90, 540, 510, flat(0.65), 24), 0.4), { delay: 300 }),
+        D(WASH, timed(line(605, 90, 605, 510, flat(0.65), 24), 0.4), { delay: 200 }),
+        D(WASH, timed(line(670, 90, 670, 510, flat(0.65), 24), 0.4), { delay: 200 }),
+      ],
+    },
+    {
+      title: 'Edge to edge, and stop',
+      body: 'Each band is a flat wash from the top of the paper to the bottom, or to the chair. The dashed outline is the chair: never paint across it. Where you stop is the drawing.',
+      cue: 'Paint the gap. Stop at the wood.',
+      demos: [D(WASH, timed(line(360, 80, 440, 80, flat(0.65), 16), 0.4), { delay: 600 })],
+    },
+    { title: 'Your turn', body: 'Paint a few bands here and leave a shape unpainted in the middle. Then the piece.', tryIt: true },
+  ],
+
+  '4.3': [
+    {
+      title: 'Upside down, the face goes away',
+      body: 'Turn a drawing upside down and the brain stops recognising a nose, a lip, an eye. What is left is lines: this one bends here, that one is this far from the edge. Copying lines is easy. Copying a face is hard because you draw the one you know.',
+      demos: [
+        D(GRAPHITE, timed(spline([[430, 480], [428, 420], [432, 360], [450, 300], [434, 280]], 14, flat(0.65)), 0.4), { label: 'a line with two bends', delay: 200 }),
+        D(GRAPHITE, timed(spline([[434, 280], [428, 250], [434, 230], [420, 210], [424, 180], [408, 150], [380, 135]], 14, flat(0.65)), 0.4), { delay: 300 }),
+      ],
+    },
+    {
+      title: 'Measure, do not name',
+      body: 'For each line ask only two things: where does it start, and how does it bend on the way. Compare it with the line next to it and with the edge of the paper. Do not turn it the right way up in your head until the last line is down.',
+      cue: 'Where does it start. How does it bend.',
+      demos: [D(GRAPHITE, timed(spline([[400, 480], [330, 505], [260, 480], [220, 400], [225, 310], [250, 240], [280, 180], [300, 130]], 16, flat(0.65)), 0.4), { delay: 600 })],
+    },
+    { title: 'Your turn', body: 'Copy the two lines above here, upside down, without deciding what they are. Then the piece.', tryIt: true },
+  ],
+
+  '4.4': [
+    {
+      title: 'Look for ten seconds',
+      body: 'A drawing from memory is a test of how you looked. Most people look for two seconds and remember a word: cup. Ten seconds of real looking remembers proportions: how wide the rim is against the height, where the handle joins, how the sides lean.',
+      demos: [
+        D(LINER, timed(ell(400, 200, 150, 45), 0.45), { label: 'rim: how wide against the height', delay: 200 }),
+        D(LINER, timed(spline([[250, 200], [254, 310], [262, 420]], 10, flat(0.6)), 0.5), { delay: 200 }),
+        D(LINER, timed(spline([[550, 200], [546, 310], [538, 420]], 10, flat(0.6)), 0.5), { delay: 150 }),
+        D(LINER, timed(spline([[550, 240], [640, 250], [660, 330], [600, 400], [540, 395]], 16, flat(0.6)), 0.45), { label: 'handle: where it joins', delay: 300 }),
+      ],
+    },
+    {
+      title: 'Then it is gone',
+      body: 'In the piece the cup stays on the paper for ten seconds, then disappears. Two dots mark each stroke\'s start and end; the shape between them is yours to remember. Say the proportions to yourself while you look: rim, sides, base, handle.',
+      cue: 'Ten seconds. Name the proportions. Then draw.',
+    },
+    { title: 'Your turn', body: 'Look at the cup above once more, then draw it here from memory. Then the piece.', tryIt: true },
   ],
 
   '3.5': [

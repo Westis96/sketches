@@ -56,6 +56,13 @@ export function PracticeGuide() {
     const t = window.setTimeout(() => tick((n) => n + 1), REVEAL_MS + 50);
     return () => window.clearTimeout(t);
   }, [revealAt]);
+  // Memory missions: the subject leaves the paper when the look is over.
+  const memoryUntil = practice?.memoryUntil ?? 0;
+  useEffect(() => {
+    if (!memoryUntil || Date.now() >= memoryUntil) return;
+    const t = window.setTimeout(() => tick((n) => n + 1), memoryUntil - Date.now() + 50);
+    return () => window.clearTimeout(t);
+  }, [memoryUntil]);
   if (!practice) return null;
   const pr = practice;
   const steps = pr.steps;
@@ -63,12 +70,16 @@ export function PracticeGuide() {
   const cur: LessonStep | null = active ? steps[pr.step] : null;
   const tier = pr.tier;
   const z = view.zoom;
+  // Seeing missions keep the subject on the paper: always for a blind contour or a
+  // flipped copy, for the length of the look in a memory piece.
+  const subject = active && (pr.seeing === 'blind' || pr.seeing === 'flipped' || (pr.seeing === 'memory' && memoryUntil > Date.now()));
   const showGhost = (i: number) => {
     if (!active) return pr.guide; // finished: the whole reference, for comparing
+    if (subject) return true;
     if (!pr.guide || tier === 'dots' || tier === 'blind') return false;
     return i > pr.step || (i < pr.step && pr.results[i] === null);
   };
-  const ghostOpacity = !active ? 0.28 : tier === 'full' ? 0.1 : 0.06;
+  const ghostOpacity = !active ? 0.28 : subject ? 0.3 : tier === 'full' ? 0.1 : 0.06;
   const dim = drawing && active;
   const reveal = pr.reveal && Date.now() - pr.reveal.at < REVEAL_MS ? steps[pr.reveal.step] : null;
 
@@ -100,9 +111,14 @@ export function PracticeGuide() {
   const costly = !active && pr.summary?.costly?.length && pr.part === 'perform' ? pr.summary.costly : [];
 
   return (
-    <svg data-testid="practice-guide" aria-hidden className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible" data-dim={dim ? 'true' : undefined} data-tier={tier}>
+    <svg data-testid="practice-guide" aria-hidden className="pointer-events-none absolute inset-0 z-10 h-full w-full overflow-visible" data-dim={dim ? 'true' : undefined} data-tier={tier} data-subject={subject ? 'true' : undefined}>
       <g transform={`translate(${view.x} ${view.y}) scale(${z})`} fill="none" strokeLinecap="round" strokeLinejoin="round">
         <rect x={0} y={0} width={LESSON_BOX.w} height={LESSON_BOX.h} rx={8 / z} stroke="rgba(0,0,0,0.09)" strokeWidth={1} strokeDasharray="6 5" vectorEffect="non-scaling-stroke" />
+        {pr.overlay && (
+          <g data-guide="overlay">
+            {pr.overlay.map((poly, i) => <path key={i} d={d(poly)} stroke="var(--text-2)" strokeWidth={1.5} strokeDasharray="6 4" vectorEffect="non-scaling-stroke" opacity={0.75} />)}
+          </g>
+        )}
         <g className="guide-layer" style={{ opacity: dim ? 0.35 : 1 }}>
           {steps.map((st, i) => showGhost(i) && (
             <path key={i} data-guide="ghost" d={d(st.points)} stroke={st.color} strokeWidth={stepWidth(st)} opacity={ghostOpacity} />

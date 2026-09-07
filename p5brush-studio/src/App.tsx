@@ -42,7 +42,8 @@ declare global {
 const router = createHashRouter([{ path: '*', element: <Shell /> }]);
 
 export default function App() {
-  const [studio] = useState(() => new Studio((msg, opts) => toast(msg, opts)));
+  // Toasts without an action let the pen through: they sit over the foot of the paper.
+  const [studio] = useState(() => new Studio((msg, opts) => toast(msg, opts?.action ? opts : { ...opts, style: { pointerEvents: 'none', ...(opts?.style ?? {}) } })));
   return (
     <StudioContext.Provider value={studio}>
       <TooltipProvider delayDuration={250} skipDelayDuration={400}>
@@ -147,6 +148,9 @@ function Shell() {
   // its URL; the other direction is handled above.
   useEffect(() => {
     if (!practice) return;
+    // Whatever was toasting in the sketch (a "New sketch · Undo", a pencil notice) has no
+    // place over a session's paper, where it would sit on the first stroke.
+    toast.dismiss();
     const r = routeRef.current;
     if (practice.part === 'warmup') { if (r.kind !== 'warmup') navigate(warmupPath(), { replace: true }); return; }
     if (practice.missionId && (r.kind !== 'session' || r.missionId !== practice.missionId || r.part !== practice.part)) {

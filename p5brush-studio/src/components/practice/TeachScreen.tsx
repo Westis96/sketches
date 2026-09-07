@@ -184,7 +184,7 @@ function Slides({ mission }: { mission: Mission }) {
           </div>
         </div>
 
-        <div key={i} className={cn('tl-scroll min-h-0 flex-1 overflow-y-auto px-5 py-4', dir === 'fwd' ? 'slide-fwd' : 'slide-back')}>
+        <div key={i} className={cn('tl-scroll min-h-0 flex-1 overflow-y-auto px-5 pb-8 pt-4', dir === 'fwd' ? 'slide-fwd' : 'slide-back')}>
           <h2 className="font-display text-[20px] font-extrabold leading-tight text-[var(--text-1)]" data-testid="teach-title">{slide.title}</h2>
           <p className="mt-2 text-[13.5px] leading-relaxed text-[var(--text-2)]">{slide.body}</p>
           {slide.cue && (

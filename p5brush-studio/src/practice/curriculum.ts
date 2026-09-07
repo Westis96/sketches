@@ -45,9 +45,14 @@ export interface Mission {
   trainer?: string;      // trainer id
   about: string;         // one line
   kind: 'trace' | 'seeing' | 'free';
+  /** How a seeing mission changes the session: ink hidden until lift, a silhouette to paint around, a flipped reference, or a ten-second look. */
+  seeing?: Seeing;
   /** The piece is not built yet: shown on the Path, not playable. */
   planned?: boolean;
 }
+export type Seeing = 'blind' | 'negative' | 'flipped' | 'memory';
+/** How long the reference stays up in a memory mission. */
+export const MEMORY_MS = 10000;
 
 export interface Level { n: number; theme: string; blurb: string; missions: Mission[] }
 /** CSS variables of a level's colour and its bottom edge, for `style`. */
@@ -76,14 +81,14 @@ export const LEVELS: Level[] = [
     m('3.1', 'Ellipses in planes', 'shape', 'graphite', 'Round, closed, and inside the box.', { trainer: 'ellipses', piece: 'pebbles' }),
     m('3.2', 'S-curves and spirals', 'shape', 'liner', 'Two bends in one motion.', { trainer: 'scurves', piece: 'vine' }),
     m('3.3', 'The angled tip', 'direction', 'chisel', 'The chisel changes width with direction. Use it.', { trainer: 'chiselangles', piece: 'ribbon' }),
-    m('3.4', 'Lean and roll', 'direction', 'nib', 'Barrel roll and tilt turn the nib.', { trainer: 'curves', piece: 'feather', planned: true }),
+    m('3.4', 'Turn the nib', 'direction', 'nib', 'Wide across its edge, thin along it. Turn the stroke, not the pen.', { trainer: 'nibangles', piece: 'feather' }),
     m('3.5', 'Outline over wash', 'layering', 'wash', 'Wet first, then one clean line around it.', { trainer: 'sweeps', piece: 'leaf', brushLabel: 'wash + liner' }),
   ] },
   { n: 4, theme: 'Seeing', blurb: 'Draw what is there, not what you know. None of this is tracing.', missions: [
-    m('4.1', 'Blind contour', 'seeing', 'liner', 'The ink is hidden until you lift. Look at the subject, not the page.', { piece: 'hand', kind: 'seeing', planned: true }),
-    m('4.2', 'Negative space', 'seeing', 'wash', 'Paint the space around it.', { piece: 'chair', kind: 'seeing', planned: true }),
-    m('4.3', 'Upside-down copy', 'seeing', 'graphite', 'The reference is flipped. Draw the lines you see.', { piece: 'portrait', kind: 'seeing', planned: true }),
-    m('4.4', 'From memory', 'seeing', 'liner', 'Ten seconds to look. Then it is gone.', { piece: 'cup', kind: 'seeing', planned: true }),
+    m('4.1', 'Blind contour', 'seeing', 'liner', 'The ink is hidden until you lift. Look at the subject, not the page.', { piece: 'hand', kind: 'seeing', seeing: 'blind' }),
+    m('4.2', 'Negative space', 'seeing', 'wash', 'Paint the space around it. The chair appears on its own.', { piece: 'chair', kind: 'seeing', seeing: 'negative' }),
+    m('4.3', 'Upside-down copy', 'seeing', 'graphite', 'The reference is flipped. Draw the lines you see, not the face you know.', { piece: 'portrait', kind: 'seeing', seeing: 'flipped' }),
+    m('4.4', 'From memory', 'seeing', 'liner', 'Ten seconds to look. Then it is gone.', { piece: 'cup', kind: 'seeing', seeing: 'memory' }),
   ] },
   { n: 5, theme: 'Value and layering', blurb: 'Washes, order, soft edges and rhythm.', missions: [
     m('5.1', 'Flat bands', 'layering', 'wash', 'Edge to edge, even pressure, no stopping.', { trainer: 'bands', piece: 'seabands' }),
@@ -265,6 +270,8 @@ export const TRAINERS: Record<string, Trainer> = {
     gen: (c, r) => ellipseIn(c, r) }),
   scurves: T({ id: 'scurves', title: 'S-curves', hint: 'Two bends in one motion.', reps: 8, tier: 'light', focus: 'shape', template: 'liner', color: '#1a1c23', size: 1.3, speed: 0.45,
     gen: (c, r) => scurveIn(c, r) }),
+  nibangles: T({ id: 'nibangles', title: 'Nib angles', hint: 'Same stroke, different directions: the nib decides the width.', reps: 8, tier: 'light', focus: 'direction', template: 'nib', color: '#2c3e8f', size: 0.6, speed: 0.5,
+    gen: (c, r) => lineIn(c, r, Math.PI) }),
   chiselangles: T({ id: 'chiselangles', title: 'Angled tip', hint: 'Same stroke, different directions: watch the width change.', reps: 8, tier: 'light', focus: 'shape', template: 'chisel', color: '#c9407c', size: 0.8, speed: 0.5,
     gen: (c, r) => lineIn(c, r, Math.PI) }),
   bands: T({ id: 'bands', title: 'Flat bands', hint: 'Edge to edge, even pressure, no stopping.', reps: 6, tier: 'light', focus: 'pressure', template: 'wash', color: '#7aa6c2', size: 1.2, speed: 0.4,

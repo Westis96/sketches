@@ -29,7 +29,7 @@ import { pathLength } from '@/practice/geometry';
 import { DEFAULT_SPEED, DIMS, PASS_SCORE, PERFORM_PASS_SCORE, STEP_DOWN_SCORE, praiseFor, scoreStroke, scoreTrace, starsFor, type Band, type Dim, type ScoreMode, type Tip } from '@/practice/score';
 import { addSeconds, loadProgress, recordGuided, recordPerform, recordTaught, recordTrainer, recordWarmup, saveProgress, type Progress } from '@/practice/progress';
 import { teachCue, type DemoStroke } from '@/practice/teach';
-import { MISSIONS, TIER_LABEL, TIERS, TRAINERS, isPlayable, missionById, missionForPiece, partsOf, trainerReps, warmupReps, type Part, type Tier } from '@/practice/curriculum';
+import { MEMORY_MS, MISSIONS, TIER_LABEL, TIERS, TRAINERS, isPlayable, missionById, missionForPiece, partsOf, trainerReps, warmupReps, type Part, type Tier, type Seeing } from '@/practice/curriculum';
 
 export const paperPresets: Record<PaperName, { bg: [number, number, number]; grain: number; label: string }> = {
   hotpress: { bg: [255, 254, 250], grain: 2.2, label: 'Hot Press Fine Art' },
@@ -167,6 +167,12 @@ export interface PracticeState {
   note: string | null;
   /** Blind tier: which step to reveal, and since when. */
   reveal: { step: number; at: number } | null;
+  /** A seeing mission's rule: ink hidden until lift, a silhouette to paint around, a flipped reference, a timed look. */
+  seeing: Seeing | null;
+  /** Memory missions: the reference stays up until this time (ms since epoch). */
+  memoryUntil: number | null;
+  /** Polylines shown on the paper and never drawn (the chair in the negative-space piece). */
+  overlay: Point[][] | null;
   /** False once a finger or mouse stroke arrived: pressure is simulated for those. */
   pressureScored: boolean;
   summary: PracticeSummary | null;
@@ -289,6 +295,16 @@ interface Dock { top?: number; right?: number; bottom?: number }
 const STYLUS_ENVELOPE: BrushSpec['pressure'] = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
 /** Pressure response inside lessons: light strokes at about half width, heavy ones half again as wide. */
 const LESSON_SENSITIVITY = 1;
+/** The guide a seeing mission gets: the subject does the guiding, so the current stroke shows less than in a traced piece. */
+function seeingTier(rule: Seeing, part: 'guided' | 'perform' | Part): Tier {
+  const guided = part === 'guided';
+  switch (rule) {
+    case 'blind': return guided ? 'light' : 'dots';
+    case 'negative': return guided ? 'full' : 'light';
+    case 'flipped': return guided ? 'light' : 'dots';
+    case 'memory': return 'dots';
+  }
+}
 /** Pointer id of the engine's own demo strokes (never a real pointer). */
 const DEMO_POINTER = -7;
 /** A constant-pace timeline for reference points that carry none. */
@@ -902,18 +918,32 @@ export class Studio {
       return;
     }
     let steps: LessonStep[], tier: Tier, mode: ScoreMode, focus: Dim | undefined, subtitle: string;
+    let tierLocked = part === 'perform';
+    const extra: Partial<Pick<PracticeState, 'seeing' | 'memoryUntil' | 'overlay'>> = {};
     if (part === 'trainer') {
       const t = TRAINERS[x.trainer!];
       steps = trainerReps(t, seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
       tier = t.tier; mode = 'trainer'; focus = t.focus; subtitle = 'Trainer';
+    } else if (x.kind === 'seeing' && x.seeing) {
+      // Seeing missions: the rule sets the guide, not the learner; the subject is the guide.
+      const lesson = lessonById(x.piece!)!;
+      steps = lessonSteps(lesson);
+      mode = 'seeing';
+      tier = seeingTier(x.seeing, part);
+      tierLocked = true;
+      subtitle = part === 'guided' ? 'Guided' : 'Perform';
+      extra.seeing = x.seeing;
+      extra.overlay = lesson.overlay?.map((poly) => poly.map(([px, py]) => ({ x: px, y: py, p: 0.6 }))) ?? null;
+      extra.memoryUntil = x.seeing === 'memory' ? Date.now() + MEMORY_MS : null;
     } else {
       steps = lessonSteps(lessonById(x.piece!)!);
       mode = part;
       tier = opts.tier ?? (part === 'guided' ? 'full' : this.defaultPerformTier(id));
       subtitle = part === 'guided' ? 'Guided' : 'Perform';
     }
-    this.enterSession({ missionId: id, lessonId: x.piece ?? null, part, title: `${x.id} ${x.title}`, subtitle, steps, tier, tierLocked: part === 'perform' }, { seed, mode, focus });
-    this.toast(part === 'perform' ? `${x.title}: this one counts` : `${x.title}: ${steps[0]?.hint ?? 'trace the highlighted stroke'}`, { duration: 2800 });
+    // No toast here: the session header carries the hint and the part, and a toast
+    // over the foot of the paper would sit on the first stroke and swallow the pen.
+    this.enterSession({ missionId: id, lessonId: x.piece ?? null, part, title: `${x.id} ${x.title}`, subtitle, steps, tier, tierLocked, ...extra }, { seed, mode, focus });
   }
 
   /** The warm-up: the Han / Drawabox set, three to five minutes. */
@@ -922,7 +952,6 @@ export class Studio {
     const seed = (Date.now() % 1_000_000) | 0;
     const steps = warmupReps(seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
     this.enterSession({ missionId: null, lessonId: null, part: 'warmup', title: 'Warm-up', subtitle: `${steps.length} strokes`, steps, tier: 'light', tierLocked: false }, { seed, mode: 'warmup', focus: 'confidence' });
-    this.toast('Warm-up: confident pulls, accuracy second', { duration: 2500 });
   }
 
   /** Perform starts one tier below where the last guided run ended (never past dots by default). */
@@ -932,7 +961,7 @@ export class Studio {
     return stepTier(g.tier, 1, 2);
   }
 
-  private enterSession(init: Pick<PracticeState, 'missionId' | 'lessonId' | 'part' | 'title' | 'subtitle' | 'steps' | 'tier' | 'tierLocked'>, sess: { seed: number; mode: ScoreMode; focus?: Dim }, dock: Dock = {}) {
+  private enterSession(init: Pick<PracticeState, 'missionId' | 'lessonId' | 'part' | 'title' | 'subtitle' | 'steps' | 'tier' | 'tierLocked'> & Partial<Pick<PracticeState, 'seeing' | 'memoryUntil' | 'overlay'>>, sess: { seed: number; mode: ScoreMode; focus?: Dim }, dock: Dock = {}) {
     this.stopDemo();
     if (this.live) this.cancelStroke(true);
     this.dismissWelcome();
@@ -947,6 +976,7 @@ export class Studio {
     this.set({ pressureMode: 'stylus', forceSensitivity: LESSON_SENSITIVITY });
     this.session = { startedAt: performance.now(), dims: [], ...sess };
     this.emit({ practice: {
+      seeing: null, memoryUntil: null, overlay: null,
       ...init, cue: init.missionId ? teachCue(init.missionId) : null, step: 0, results: [], tips: [], status: 'active', guide: this.state.practice?.guide ?? true,
       feedback: null, streak: 0, misses: 0, loopOffer: false, loop: 0, note: null, reveal: null, pressureScored: true, summary: null,
     } });
@@ -1149,7 +1179,8 @@ export class Studio {
     if (pr.part === 'teach') return; // trying it out beside the lesson: nothing is scored
     if (rec.tool !== 'brush') { this.dropLastStroke(); this.syncHistory(); this.toast('Lessons are traced with the brush'); return; }
     const st = pr.steps[pr.step];
-    const tol = Math.max(10, stepWidth(st) * 0.6 + 4);
+    // Seeing missions are about the shape you saw, not the line you traced: the band is wider.
+    const tol = Math.max(10, stepWidth(st) * 0.6 + 4) * (sess.mode === 'seeing' ? 1.8 : 1);
     if (rec.points.length < 2 || pathLength(rec.points) < tol) {
       this.dropLastStroke();
       this.syncHistory();
@@ -2214,6 +2245,8 @@ export class Studio {
     this.previewQueued = false;
     const live = this.live;
     if (!live) return;
+    // Blind contour: nothing shows while the pen moves; the whole stroke lands on lift.
+    if (this.state.practice?.seeing === 'blind' && this.state.practice.status === 'active' && live.pointerType !== 'demo' && live.rec.tool === 'brush') return;
     if (this.overlayEvent) { const e = this.overlayEvent; this.overlayEvent = null; const to = performance.now(); this.drawLiveOverlay(e, live); this.perf.overlayMs += performance.now() - to; this.perf.overlays++; }
     const { rec } = live;
     if (rec.tool === 'eraser') {

@@ -345,8 +345,15 @@ were added with the construction methods they proved out: pebbles (3.1), vine (3
 ribbon (3.3), sea bands (5.1), stones (5.2), moon (5.3), cube (5.4) and koi (6.2), each
 with a lesson. Two brush findings shaped them: the nib turns short marks into bars, so
 short accents use the liner or wash; evenly spaced charcoal contours band, so masses are
-built from short strokes that follow the form. Still planned: 3.4 (needs tilt), Level 4
-(seeing, a different mode), 6.3 and 6.4.
+built from short strokes that follow the form. 3.4 became "Turn the nib": the
+calligraphy nib's width follows the stroke's direction, which any input can do, so the
+mission no longer waits for tilt. Level 4 is built as four seeing rules on top of the
+session engine: a blind contour hides the ink until the pen lifts (the whole subject
+stays on the paper), the negative-space piece paints wash bands around a chair drawn
+only as a dashed overlay, the portrait line is authored upside down and copied at the
+centreline tier, and the cup stays up for a ten-second look before the guide drops to
+two dots per stroke. Seeing missions score in the `seeing` mode (shape and a wider
+band; no direction or pressure) and lock their tier. Still planned: 6.3 and 6.4.
 
 ## 12. Risks and how the plan handles them
 
