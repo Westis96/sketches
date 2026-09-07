@@ -338,6 +338,16 @@ cue is repeated inside the session; drills report the focus dimension; the guide
 road follows the reference pressure; 1.1 became superimposed lines. See
 `practice-ux.md`, "v3: lessons that teach".
 
+### Update: Levels 3 and 5 built
+
+After the gallery studies (`tools/draw-gallery.mjs`, `docs/gallery/`), eight pieces
+were added with the construction methods they proved out: pebbles (3.1), vine (3.2),
+ribbon (3.3), sea bands (5.1), stones (5.2), moon (5.3), cube (5.4) and koi (6.2), each
+with a lesson. Two brush findings shaped them: the nib turns short marks into bars, so
+short accents use the liner or wash; evenly spaced charcoal contours band, so masses are
+built from short strokes that follow the form. Still planned: 3.4 (needs tilt), Level 4
+(seeing, a different mode), 6.3 and 6.4.
+
 ## 12. Risks and how the plan handles them
 
 - **Tracing isn't drawing.** Level 4 is not tracing at all, Perform fades the guide,

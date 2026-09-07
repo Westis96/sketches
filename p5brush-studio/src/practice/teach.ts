@@ -107,6 +107,26 @@ const zigzagPts = (x0: number, y: number, x1: number, amp: number, n = 4): XY[] 
 };
 
 const D = (base: { template: string; color: string; size: number }, points: Point[], o: Partial<DemoStroke> = {}): DemoStroke => ({ ...base, points, ...o });
+const CHISEL = { template: 'chisel', color: '#c9407c', size: 0.85 };
+const BALLPOINT = { template: 'ballpoint', color: '#1a1c23', size: 1.0 };
+const SPRAY = { template: 'spray', color: '#e6d29a', size: 1.6 };
+const BRUSHPEN = { template: 'brushpen', color: '#d2452c', size: 0.95 };
+const STONE_PALE = { template: 'wash', color: '#d3ccbf', size: 0.7 };
+const STONE_DARK = { template: 'wash', color: '#8f8677', size: 0.6 };
+/** A closed ellipse in one pass from the top; `wobble` makes it egg-shaped and lumpy. */
+const ell = (cx: number, cy: number, rx: number, ry: number, rot = 0, wobble = 0, n = 44, prof: Profile = flat(0.6)): Point[] => {
+  const R = frame(cx, cy, rot);
+  const out: Point[] = [];
+  for (let i = 0; i <= n; i++) { const a = -Math.PI / 2 + (i / n) * Math.PI * 2; const k = 1 + wobble * (0.5 * Math.sin(3 * a) + 0.35 * Math.cos(a)); const [x, y] = R(Math.cos(a) * rx * k, Math.sin(a) * ry * k); out.push({ x, y, p: prof(i / n) }); }
+  return out;
+};
+const spiral = (cx: number, cy: number, r0: number, turns: number, dir = 1): Point[] => {
+  const n = Math.round(turns * 22), out: Point[] = [];
+  for (let i = 0; i <= n; i++) { const a = (i / n) * turns * Math.PI * 2, r = r0 * (1 - (0.82 * i) / n); out.push({ x: cx + Math.cos(a * dir) * r, y: cy + Math.sin(a * dir) * r, p: 0.6 - (0.2 * i) / n }); }
+  return out;
+};
+const living: Profile = (t) => 0.3 + 0.6 * Math.sin(t * Math.PI);
+
 
 // ---------------------------------------------------------------------------
 // Slides per mission
@@ -386,6 +406,183 @@ export const TEACH: Record<string, TeachSlide[]> = {
       body: 'Draw two or three long fades here. Then the trainer.',
       tryIt: true,
     },
+  ],
+
+  '3.1': [
+    {
+      title: 'An ellipse is a circle seen at an angle',
+      body: 'Its two halves mirror each other and it closes where it began. Draw it in pieces and it turns into an egg with corners; swing it in one pass from the elbow and it stays round.',
+      demos: [
+        D(GRAPHITE, timed(ell(260, 300, 130, 80, 0.1), 0.5), { label: 'one pass, closed', good: true }),
+        D(GRAPHITE, timed(ell(580, 300, 130, 80, 0.1, 0.18), 0.28), { label: 'pushed round in pieces', good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'Ghost it, then go round once',
+      body: 'Round it in the air two or three times over the spot, at speed. When the motion feels smooth, lower the pen without slowing and make one pass, ending on the point you started.',
+      cue: 'Ghost twice. One pass. Close it.',
+      demos: [D(GRAPHITE, timed(ell(400, 300, 170, 100, -0.15), 0.5), { delay: 900 })],
+    },
+    {
+      title: 'The plane decides how flat it is',
+      body: 'A pebble on the ground is a circle you look down on. The farther away, the more edge-on and the narrower the ellipse; the closer, the rounder. Same motion, different squash.',
+      demos: [
+        D(GRAPHITE, timed(ell(400, 170, 110, 26), 0.5), { label: 'far: nearly edge-on' }),
+        D(GRAPHITE, timed(ell(400, 300, 120, 52), 0.5), { delay: 300 }),
+        D(GRAPHITE, timed(ell(400, 460, 130, 90), 0.5), { label: 'near: almost round', delay: 300 }),
+      ],
+    },
+    { title: 'Your turn', body: 'Round a few ellipses here, ghosting each one first. Then the trainer.', tryIt: true },
+  ],
+
+  '3.2': [
+    {
+      title: 'Two bends, one motion',
+      body: 'An S-curve is not two arcs joined; the join always shows as a kink. It is a single swing whose direction reverses in the middle without the pen slowing down.',
+      demos: [
+        D(LINER, timed(spline([[160, 480], [270, 380], [380, 320], [480, 250], [620, 140]], 20, flat(0.6)), 0.5), { label: 'one swing', good: true }),
+        D(LINER, paused(spline([[160, 560], [280, 470], [390, 430]], 12, flat(0.6)).concat(spline([[390, 430], [500, 340], [620, 240]], 12, flat(0.6))), 0.5, [12], 260), { label: 'two arcs with a stop', good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'A spiral is a curve that tightens evenly',
+      body: 'Keep the speed steady and let the radius shrink a little with every turn. If the pen speeds up, the spiral collapses; if the radius jumps, it stops looking like a spiral.',
+      cue: 'Steady speed. Shrink the radius, never the pace.',
+      demos: [D(LINER, timed(spiral(400, 310, 150, 2.2), 0.45), { delay: 700 })],
+    },
+    {
+      title: 'A leaf is one loop',
+      body: 'Out along one edge, round the tip, back along the other, and close it where it started. Two S-curves back to back, drawn as one.',
+      demos: [D(LINER, timed(spline([[220, 380], [360, 250], [560, 220], [420, 330], [220, 380]], 14, flat(0.6)), 0.5), { delay: 500 })],
+    },
+    { title: 'Your turn', body: 'Swing a few S-curves and one spiral here. Then the trainer.', tryIt: true },
+  ],
+
+  '3.3': [
+    {
+      title: 'The chisel is a flat edge',
+      body: 'Pull it across its edge and the mark is broad; pull it along its edge and the mark is a hairline. Nothing about your pressure changed. Only the direction did.',
+      demos: [
+        D(CHISEL, timed(line(160, 200, 640, 200), 0.55), { label: 'across the edge: broad', good: true }),
+        D(CHISEL, timed(line(400, 280, 400, 540), 0.55), { label: 'along the edge: thin', delay: 500 }),
+      ],
+    },
+    {
+      title: 'A curve goes through both',
+      body: 'Take the tip round a bend and the mark swells and thins on its own, thick where you cross the edge, thin where you run along it. That is the whole trick of a ribbon.',
+      cue: 'Same pressure. Let the direction do the width.',
+      demos: [D(CHISEL, timed(spline([[140, 420], [280, 220], [430, 200], [520, 380], [680, 200]], 20, flat(0.7)), 0.5), { delay: 700 })],
+    },
+    { title: 'Your turn', body: 'Pull the chisel in a few directions here, then round a bend. Then the trainer.', tryIt: true },
+  ],
+
+  '5.1': [
+    {
+      title: 'Edge to edge at one pressure',
+      body: 'A flat band is a single wash stroke that keeps the same weight the whole way across. Press harder anywhere and the water pools into a dark blot; ease off and the band thins and breaks.',
+      demos: [
+        D(WASH, timed(line(-40, 210, 840, 210, flat(0.6), 40), 0.5), { label: 'even all the way', good: true }),
+        D(WASH, timed(line(-40, 380, 840, 380, (t) => 0.4 + 0.45 * Math.abs(Math.sin(t * 7)), 40), 0.5), { label: 'pressure wandering', good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'Start before the edge, finish after it',
+      body: 'Begin the stroke off the paper and let it run out past the far side, so the band has no hesitant start and no fat stop. The edges of the paper crop it clean.',
+      cue: 'Start past the edge. One weight. Run off the other side.',
+      demos: [D(WASH, timed(line(-60, 300, 860, 300, flat(0.6), 40), 0.5), { delay: 700 })],
+    },
+    { title: 'Your turn', body: 'Lay three bands here, each a little darker than the one above. Then the trainer.', tryIt: true },
+  ],
+
+  '5.2': [
+    {
+      title: 'Light before dark',
+      body: 'Wash is transparent: a pale layer over a dark one changes nothing, but a dark layer over a pale one reads as shadow. So the order is fixed. The palest wash goes down first, every time.',
+      demos: [
+        D(STONE_PALE, timed(spline([[110, 280], [180, 200], [300, 200], [370, 280]], 20, bell), 0.45), { label: 'pale first, dark on top', good: true }),
+        D(STONE_DARK, timed(spline([[250, 330], [320, 290], [370, 280]], 12, bell), 0.45), { good: true, delay: 500 }),
+        D(STONE_DARK, timed(spline([[580, 330], [650, 290], [700, 280]], 12, bell), 0.45), { label: 'dark first, pale on top', good: false, delay: 600 }),
+        D(STONE_PALE, timed(spline([[440, 280], [510, 200], [630, 200], [700, 280]], 20, bell), 0.45), { good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'Plan the order before the pen lands',
+      body: 'Farthest and lightest first, nearest and darkest last, and the line last of all. A stone is two pale sweeps, one dark sweep on the shadow side, then a single slow outline.',
+      cue: 'Pale. Pale. Dark. Then the line.',
+      demos: [
+        D(STONE_PALE, timed(spline([[250, 320], [320, 240], [480, 240], [550, 320]], 20, bell), 0.45)),
+        D(STONE_PALE, timed(spline([[250, 340], [320, 410], [480, 400], [550, 330]], 20, bell), 0.45), { delay: 300 }),
+        D(STONE_DARK, timed(spline([[420, 400], [500, 380], [550, 330]], 12, bell), 0.45), { delay: 300 }),
+        D({ template: 'liner', color: '#5a524a', size: 1.1 }, timed(ell(400, 328, 150, 80, 0, 0, 48, flat(0.55)), 0.4), { delay: 500 }),
+      ],
+    },
+    { title: 'Your turn', body: 'Paint one stone here in that order. Then the trainer.', tryIt: true },
+  ],
+
+  '5.3': [
+    {
+      title: 'Speed is the edge',
+      body: 'Spray puts down scattered dots. Move fast and they thin out into a soft haze; move slowly and they pile into a hard, dense mark. The same path drawn at two speeds gives two different edges.',
+      demos: [
+        D(SPRAY, timed(line(120, 200, 680, 200, flat(0.6), 30), 0.9), { label: 'fast: soft', good: true }),
+        D(SPRAY, timed(line(120, 400, 680, 400, flat(0.6), 30), 0.18), { label: 'slow: hard and heavy', good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'Build a glow in rings',
+      body: 'A moon is not one filled circle. It is a wide loose ring for the halo, then smaller rings inside it, each lighter and slower, so the centre is dense and the edge fades into the sky.',
+      cue: 'Fast and wide first. Slower and smaller inside.',
+      demos: [
+        D({ ...SPRAY, color: '#d5d9e3', size: 1.8 }, timed(ell(400, 300, 130, 130), 0.9)),
+        D(SPRAY, timed(ell(400, 300, 80, 80), 0.6), { delay: 300 }),
+        D({ ...SPRAY, color: '#f6ecc8', size: 1.2 }, timed(ell(400, 300, 40, 40), 0.45), { delay: 300 }),
+      ],
+    },
+    { title: 'Your turn', body: 'Spray a fast band and a slow one here, then a moon in rings. Then the trainer.', tryIt: true },
+  ],
+
+  '5.4': [
+    {
+      title: 'Parallel, evenly spaced, same speed',
+      body: 'Hatching is tone made of rhythm. Lines that keep one angle, one gap and one speed read as a flat grey; lines that wander in angle or spacing read as scribble, however carefully each was drawn.',
+      demos: [
+        ...[0, 1, 2, 3, 4, 5].map((k) => D(BALLPOINT, timed(line(150 + k * 30, 300, 230 + k * 30, 160, flat(0.55), 12), 0.7), { label: k === 0 ? 'one angle, one gap' : undefined, good: true, delay: k === 0 ? 0 : 120 })),
+        ...[0, 1, 2, 3, 4, 5].map((k) => D(BALLPOINT, timed(line(470 + k * 30 + [0, 6, -4, 9, -2, 5][k], 300, 550 + k * 30 + [0, -6, 8, 2, -9, 4][k], 160 + [0, 10, -8, 4, 12, -6][k], flat(0.55), 12), 0.7), { label: k === 0 ? 'angle and gap drifting' : undefined, good: false, delay: k === 0 ? 500 : 120 })),
+      ],
+    },
+    {
+      title: 'Darker means another direction, not harder',
+      body: 'To deepen a tone, lay a second set of lines across the first at a new angle. Pressing harder or scribbling back and forth kills the rhythm; a second direction keeps it.',
+      cue: 'Look at where the line ends, not at the pen.',
+      demos: [
+        ...[0, 1, 2, 3, 4, 5, 6].map((k) => D(BALLPOINT, timed(line(280 + k * 30, 480, 360 + k * 30, 340, flat(0.55), 12), 0.7), { delay: k === 0 ? 300 : 110 })),
+        ...[0, 1, 2, 3, 4].map((k) => D(BALLPOINT, timed(line(290, 360 + k * 26, 540, 340 + k * 26, flat(0.55), 14), 0.7), { delay: k === 0 ? 500 : 110 })),
+      ],
+    },
+    { title: 'Your turn', body: 'Hatch a patch here, then cross it. Then the trainer.', tryIt: true },
+  ],
+
+  '6.2': [
+    {
+      title: 'A dead line and a living one',
+      body: 'A line at one pressure is a wire: it describes an edge and nothing else. A line that comes in thin, carries weight through the middle and leaves thin again has a body; it describes a form.',
+      demos: [
+        D(BRUSHPEN, timed(spline([[130, 230], [280, 160], [460, 170], [620, 240], [700, 280]], 20, living), 0.5), { label: 'thin, weight, thin', good: true }),
+        D(BRUSHPEN, timed(spline([[130, 430], [280, 360], [460, 370], [620, 440], [700, 480]], 20, flat(0.6)), 0.5), { label: 'one pressure', good: false, delay: 500 }),
+      ],
+    },
+    {
+      title: 'The weight sits where the form is',
+      body: 'On a fish the belly is round and the nose and tail are fine, so the line is heaviest through the middle and fades at both ends. Decide where the weight goes before the pen lands.',
+      cue: 'Thin in. Weight through the body. Thin out.',
+      demos: [
+        D(BRUSHPEN, timed(spline([[170, 300], [300, 230], [460, 240], [600, 300], [700, 340]], 20, living), 0.5), { delay: 700 }),
+        D(BRUSHPEN, timed(spline([[170, 300], [280, 360], [440, 380], [590, 350], [700, 340]], 20, living), 0.5), { delay: 400 }),
+        D({ ...BRUSHPEN, size: 0.85 }, timed(spline([[700, 340], [760, 260], [790, 200]], 12, (t) => 0.7 - 0.5 * t), 0.7), { delay: 300 }),
+        D({ ...BRUSHPEN, size: 0.85 }, timed(spline([[700, 340], [770, 400], [800, 470]], 12, (t) => 0.7 - 0.5 * t), 0.7), { delay: 200 }),
+      ],
+    },
+    { title: 'Your turn', body: 'Draw two or three living lines here, weight in the middle. Then the trainer.', tryIt: true },
   ],
 
   '3.5': [
