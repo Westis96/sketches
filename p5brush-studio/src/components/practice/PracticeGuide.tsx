@@ -73,9 +73,20 @@ export function PracticeGuide() {
   const reveal = pr.reveal && Date.now() - pr.reveal.at < REVEAL_MS ? steps[pr.reveal.step] : null;
 
   let arrow: string | null = null;
+  let startTick: string | null = null;
   let ghostDur = 0;
   if (cur && cur.points.length >= 2) {
     const n = cur.points.length;
+    {
+      // Dots only: which way to leave the start dot, since there is no line to follow.
+      const p0 = cur.points[0], p1 = cur.points[Math.min(3, n - 1)];
+      const a0 = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+      const L = 8 / z, Wd = 5 / z, off = 14 / z;
+      const bx = p0.x + Math.cos(a0) * off, by = p0.y + Math.sin(a0) * off;
+      const tx = bx + Math.cos(a0) * L, ty = by + Math.sin(a0) * L;
+      const nx = -Math.sin(a0) * Wd, ny = Math.cos(a0) * Wd;
+      startTick = `M${tx} ${ty}L${bx + nx} ${by + ny}L${bx - nx} ${by - ny}Z`;
+    }
     const a = cur.points[Math.max(0, n - 4)], b = cur.points[n - 1];
     const ang = Math.atan2(b.y - a.y, b.x - a.x);
     const L = 11 / z, W = 7 / z;
@@ -114,6 +125,9 @@ export function PracticeGuide() {
                   </circle>
                 )}
               </g>
+            )}
+            {tier === 'dots' && startTick && (
+              <path className="guide-layer" data-guide="start-tick" d={startTick} fill="var(--accent)" stroke="#fff" strokeWidth={1.5} vectorEffect="non-scaling-stroke" style={{ opacity: dim ? 0 : 0.9 }} />
             )}
             {tier === 'dots' && (
               <circle className="guide-layer" cx={cur.points[cur.points.length - 1].x} cy={cur.points[cur.points.length - 1].y} r={7 / z} stroke="var(--accent)" strokeWidth={2} vectorEffect="non-scaling-stroke" style={{ opacity: dim ? 0.4 : 1 }} />

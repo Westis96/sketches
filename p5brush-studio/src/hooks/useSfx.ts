@@ -52,8 +52,8 @@ export function useSfx(studio: Studio) {
           if (same && pr.part === 'perform' && pr.misses === 2 && pp!.misses !== 2) sfx.play('lastTry');
         }
         if (same && pr.note && pr.note !== pp!.note) {
-          if (/stepped down/.test(pr.note)) sfx.play('stepDown');
-          else if (/stepped up/.test(pr.note)) sfx.play('stepUp');
+          if (/^Less guide/.test(pr.note)) sfx.play('stepDown');
+          else if (/^More guide/.test(pr.note)) sfx.play('stepUp');
         }
         if (same && pp!.status === 'active' && pr.step < pp!.step) sfx.play('undo');
       } else if (pr.status === 'complete' && (!same || pp!.status !== 'complete')) {

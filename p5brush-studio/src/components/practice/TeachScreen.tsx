@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { TlTip } from '@/components/TlButton';
 import { useStudio, useStudioState } from '@/hooks/useStudio';
 import { levelVars, missionById, playedParts, type Mission, type Part } from '@/practice/curriculum';
-import { demoMotion, labelAnchor, pressureVaries, teachSlides, type DemoStroke, type TeachSlide } from '@/practice/teach';
+import { demoMotion, labelAnchors, pressureVaries, teachSlides, type DemoStroke, type TeachSlide } from '@/practice/teach';
 import { missionPath, sessionPath } from '@/practice/routes';
 import { cn } from '@/lib/utils';
 import { sfx } from '@/sound/sfx';
@@ -135,6 +135,7 @@ function Slides({ mission }: { mission: Mission }) {
   const current = demoOn && shown > 0 ? demos[shown - 1] : null;
   // The trace follows the stroke being drawn, then stays on the last one that showed pressure.
   const traced = current && pressureVaries(current) ? current : [...demos.slice(0, played)].reverse().find(pressureVaries) ?? null;
+  const anchors = labelAnchors(demos);
   const toneOf = (d: DemoStroke) => (d.good === true ? 'var(--success)' : d.good === false ? 'var(--danger)' : 'var(--lvl)');
 
   return (
@@ -143,10 +144,10 @@ function Slides({ mission }: { mission: Mission }) {
       <svg aria-hidden className="absolute inset-0 h-full w-full overflow-visible" data-testid="teach-labels">
         <g transform={`translate(${view.x} ${view.y}) scale(${z})`}>
           {demos.slice(0, shown).map((d, k) => {
-            const a = labelAnchor(d);
+            const a = anchors[k];
             const tone = d.good === true ? 'var(--success)' : d.good === false ? 'var(--danger)' : 'var(--text-2)';
-            return d.label ? (
-              <text key={`${take}-${k}`} x={a.x} y={a.y} fontSize={14 / z} fontWeight={800} fontFamily="Nunito, system-ui, sans-serif" fill={tone} stroke="var(--paper)" strokeWidth={4 / z} paintOrder="stroke" strokeLinejoin="round" className="label-in" data-teach-label>
+            return d.label && a ? (
+              <text key={`${take}-${k}`} x={a.x} y={a.y} textAnchor="middle" fontSize={14 / z} fontWeight={800} fontFamily="Nunito, system-ui, sans-serif" fill={tone} stroke="var(--paper)" strokeWidth={4 / z} paintOrder="stroke" strokeLinejoin="round" className="label-in" data-teach-label>
                 {d.good === true ? '✓ ' : d.good === false ? '✗ ' : ''}{d.label}
               </text>
             ) : null;

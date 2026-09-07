@@ -76,7 +76,8 @@ try {
   // First visit lands on the course; the studio is the Sketch mode.
   check('a first visit lands on the Learn path', (await page.evaluate(() => location.hash)) === '#/learn' && (await page.locator('[data-testid=path]').count()) === 1, await page.evaluate(() => location.hash));
   await page.evaluate(() => { location.hash = '#/sketch'; });
-  await page.waitForSelector('[data-testid=welcome]', { timeout: 3000 }).catch(() => {});
+  // The Learn path renders every piece preview on first paint; on a software renderer that can take seconds.
+  await page.waitForSelector('[data-testid=welcome]', { timeout: 12000 }).catch(() => {});
   // First visit to Sketch: the welcome card shows once and stays dismissed.
   const welcomeShown = (await page.locator('[data-testid=welcome]').count()) === 1;
   if (welcomeShown) await page.locator('text=Start drawing').click({ timeout: 2000 });
@@ -408,7 +409,7 @@ try {
   pr = await traceStep(1, { input: 'mouse' });
   check('a mouse stroke turns pressure scoring off with a note', pr.pressureScored === false && /Pressure/.test(pr.note || ''), pr.note);
   pr = await traceStep(2);
-  check('two clean strokes in a row step the guide down', pr.tier === 'light' && /stepped down/.test(pr.note || ''), JSON.stringify({ tier: pr.tier, note: pr.note }));
+  check('two clean strokes in a row step the guide down', pr.tier === 'light' && /^Less guide/.test(pr.note || ''), JSON.stringify({ tier: pr.tier, note: pr.note }));
   const nBefore = await studio((s) => s.history().length);
   await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
   await studio((s) => s.commit([{ x: 60, y: 590, p: 0.5 }, { x: 740, y: 20, p: 0.5 }]));
@@ -510,7 +511,7 @@ try {
   pr = await studio((s) => s.state.practice);
   check('the warm-up starts from Today', (await page.evaluate(() => location.hash)) === '#/warmup' && pr?.part === 'warmup' && pr.steps.length === 24, JSON.stringify({ part: pr?.part, n: pr?.steps.length }));
   await page.goBack();
-  await page.waitForTimeout(400);
+  await page.waitForFunction(() => window.__studio.state.practice === null, null, { timeout: 8000 }).catch(() => {});
   check('the back button leaves the session', (await studio((s) => s.state.practice)) === null && (await page.evaluate(() => location.hash)) === '#/learn');
   await page.goto(page.url().split('#')[0] + '#/sketch');
   await page.waitForTimeout(300);
@@ -519,6 +520,7 @@ try {
   // Render self-test: all four ways of drawing the same line agree on this renderer.
   // (The self-test measures the middle of the viewport, so this stroke stays clear of it.)
   await drag([[200, 440], [400, 470], [600, 440]]);
+  await page.waitForFunction(() => { const h = window.__studio.history(); return h.length > 0 && h[h.length - 1].input === 'mouse'; }, null, { timeout: 8000 }).catch(() => {});
   const diag = await studio((s) => s.diagnostics());
   const t = diag.tests;
   check('render self-test: one-shot and chunked agree', Math.abs(t.oneShot - t.chunked) < 20 && t.oneShot < t.paper - 20, JSON.stringify(t));

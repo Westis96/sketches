@@ -285,6 +285,10 @@ const LESSON_MIN_OPACITY = 14;
 const lessonSpec = (t: BrushTemplate): BrushSpec => ({ ...clone(t.spec), opacity: Math.max(t.spec.opacity, LESSON_MIN_OPACITY) });
 /** Room the session chrome (or a docked panel) takes around the lesson box, CSS px. */
 interface Dock { top?: number; right?: number; bottom?: number }
+/** In stylus mode the plot pressure is the only envelope. */
+const STYLUS_ENVELOPE: BrushSpec['pressure'] = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
+/** Pressure response inside lessons: light strokes at about half width, heavy ones half again as wide. */
+const LESSON_SENSITIVITY = 1;
 /** Pointer id of the engine's own demo strokes (never a real pointer). */
 const DEMO_POINTER = -7;
 /** A constant-pace timeline for reference points that carry none. */
@@ -871,8 +875,8 @@ export class Studio {
   private stepRecord(st: LessonStep, i: number): BrushRecord {
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template) ?? BRUSH_TEMPLATES[0];
     return {
-      tool: 'brush', spec: lessonSpec(t), tipSource: t.tipSource, size: st.size, color: st.color,
-      pressureMode: 'gaussian', sensitivity: 1.25, seed: 7000 + i, points: st.points,
+      tool: 'brush', spec: { ...lessonSpec(t), pressure: STYLUS_ENVELOPE }, tipSource: t.tipSource, size: st.size, color: st.color,
+      pressureMode: 'stylus', sensitivity: LESSON_SENSITIVITY, seed: 7000 + i, points: st.points,
     };
   }
 
@@ -938,6 +942,9 @@ export class Studio {
     }
     this.strokes = [];
     this.redoStack = [];
+    // Lessons render the pen's own pressure: the simulated envelope would hide what the
+    // lesson teaches. The sketch's setting comes back with the backup on exit.
+    this.set({ pressureMode: 'stylus', forceSensitivity: LESSON_SENSITIVITY });
     this.session = { startedAt: performance.now(), dims: [], ...sess };
     this.emit({ practice: {
       ...init, cue: init.missionId ? teachCue(init.missionId) : null, step: 0, results: [], tips: [], status: 'active', guide: this.state.practice?.guide ?? true,
@@ -971,7 +978,11 @@ export class Studio {
     const top = dock.top ?? (short ? 96 : this.cssW >= 640 ? 140 : 164), bottom = Math.max(short ? 76 : 104, dock.bottom ?? 0);
     const left = 24, right = 24 + (dock.right ?? 0);
     const zoom = clamp(Math.min((this.cssW - left - right) / w, (this.cssH - top - bottom) / h), MIN_ZOOM, MAX_ZOOM);
-    this.setViewLive({ zoom, x: left + (this.cssW - left - right) / 2 - (w / 2) * zoom, y: top + (this.cssH - top - bottom) / 2 - (h / 2) * zoom });
+    // A phone held upright has far more height than the box needs: the paper sits
+    // under the header, where the eye is, and the spare room goes below the hand.
+    const free = this.cssH - top - bottom;
+    const y = this.cssW < 640 && !short && free > h * zoom + 48 ? top + 16 : top + free / 2 - (h / 2) * zoom;
+    this.setViewLive({ zoom, x: left + (this.cssW - left - right) / 2 - (w / 2) * zoom, y });
     this.committedView = { ...this.view };
     this.repaintPaper();
   }
@@ -1171,7 +1182,7 @@ export class Studio {
       let tier = pr.tier, loopOffer = pr.loopOffer;
       if (misses >= 2 && pr.part !== 'perform') {
         loopOffer = true;
-        if (!pr.tierLocked) { const up = stepTier(tier, -1); if (up !== tier) { tier = up; note = `Guide stepped up: ${TIER_LABEL[up].toLowerCase()}`; } }
+        if (!pr.tierLocked) { const up = stepTier(tier, -1); if (up !== tier) { tier = up; note = `More guide now: ${TIER_LABEL[up].toLowerCase()}`; } }
       }
       this.emit({ practice: { ...pr, feedback, streak: 0, misses, tier, loopOffer, note, reveal, pressureScored } });
       this.syncHistory();
@@ -1201,7 +1212,7 @@ export class Studio {
     const prev = pr.results[pr.step - 1];
     if (!pr.tierLocked && score !== null && score >= STEP_DOWN_SCORE && prev !== null && prev !== undefined && prev >= STEP_DOWN_SCORE) {
       const down = stepTier(tier, 1, 2);
-      if (down !== tier) { tier = down; note = `Guide stepped down: ${TIER_LABEL[down].toLowerCase()}`; }
+      if (down !== tier) { tier = down; note = `Less guide now: ${TIER_LABEL[down].toLowerCase()}`; }
     }
     const common = { results, tips, streak, feedback, tier, misses: 0, loopOffer: false, loop: 0, reveal: extra.reveal ?? null, pressureScored: extra.pressureScored ?? pr.pressureScored };
     if (step >= pr.steps.length) { this.completePractice({ ...pr, ...common, step, note: null }); return; }
@@ -1832,7 +1843,7 @@ export class Studio {
     if (tool === 'eraser') return { tool, size: s.eraserSize, points: [firstPt] };
     const spec = clone(s.spec);
     // 'stylus' mode disables the simulated envelope so only plot pressure remains.
-    if (s.pressureMode === 'stylus') spec.pressure = { mode: 'gaussian', curve: [0, 0], min_max: [1, 1] };
+    if (s.pressureMode === 'stylus') spec.pressure = STYLUS_ENVELOPE;
     const rec: BrushRecord = {
       tool,
       spec,

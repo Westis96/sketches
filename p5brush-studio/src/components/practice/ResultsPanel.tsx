@@ -34,7 +34,7 @@ export function ResultsPanel() {
   const pr = practice;
   const s = practice.summary;
   const mission = pr.missionId ? missionById(pr.missionId) : null;
-  const next = nextMission((id) => missionDone(progress, id));
+  const next = nextMission((id) => missionDone(progress, id), pr.missionId);
   const perform = pr.part === 'perform';
   const drill = pr.part === 'trainer' || pr.part === 'warmup';
   const level = mission?.level ?? 0;
@@ -42,7 +42,7 @@ export function ResultsPanel() {
   const heading = pr.part === 'warmup' ? 'Warmed up' : pr.part === 'trainer' ? 'Drill done' : pr.part === 'guided' ? 'Guided run done' : s.stars === 3 ? 'Perfect run' : s.stars >= 1 ? 'Perform complete' : 'Run complete';
   const line = perform
     ? s.stars === 3 ? 'Beautiful control.' : s.stars === 2 ? 'Solid. A few strokes drifted.' : s.stars === 1 ? 'Finished. Once more with the guide, then again.' : 'Rough one. Back to the guided run, then try again.'
-    : drill ? (s.clean >= pr.steps.length * 0.8 ? 'Clean. Ready for the piece.' : 'Warm. One more round would not hurt.')
+    : drill ? (s.clean >= pr.steps.length * 0.8 ? (mission?.piece ? 'Clean. Ready for the piece.' : 'Clean. On to the next one.') : 'Warm. One more round would not hurt.')
     : s.score >= 85 ? 'You know this one. Perform it.' : s.score >= 65 ? 'Close. Perform it, or run it once more.' : 'Run it again with the full guide before you perform.';
 
   // The one thing to do next.
@@ -69,7 +69,7 @@ export function ResultsPanel() {
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <div className="font-display text-[11px] font-extrabold uppercase tracking-[0.08em] opacity-85">{heading}</div>
-            <div className="truncate font-display text-[22px] font-extrabold leading-tight">{pr.title}</div>
+            <div className="font-display text-[22px] font-extrabold leading-tight [text-wrap:balance]">{pr.title}</div>
             <div className="mt-1 text-[12.5px] opacity-90">{line}</div>
           </div>
           {perform && <Stars n={s.stars} size="h-7 w-7" animate className="[&_svg]:drop-shadow" />}

@@ -34,13 +34,13 @@ const step = (template: string, color: string, size: number, points: Point[], hi
 
 // --- Warm-up: waves -----------------------------------------------------------
 function buildWaves(): LessonStep[] {
-  const wave = (y: number, amp: number): XY[] => [[90, y], [250, y - amp], [400, y], [550, y + amp], [710, y]];
+  const wave = (y: number, amp: number, x0 = 90, x1 = 710): XY[] => [[x0, y], [x0 + (x1 - x0) * 0.25, y - amp], [(x0 + x1) / 2, y], [x0 + (x1 - x0) * 0.75, y + amp], [x1, y]];
   return [
-    step('liner', '#1a1c23', 1.3, spline(wave(180, 60), 20, flat(0.6)), 'One smooth pull from left to right. Speed matters more than precision.'),
-    step('nib', '#2c3e8f', 0.55, spline(wave(280, 60), 20, bell), 'Same wave, now press harder in the middle and ease off at both ends.'),
-    step('chisel', '#c9407c', 0.8, spline(wave(380, 60), 20, flat(0.7)), 'The chisel tip is angled: notice how the width changes with direction.'),
+    step('liner', '#1a1c23', 1.3, spline(wave(160, 60), 20, flat(0.6)), 'One smooth pull from left to right. Speed matters more than precision.'),
+    step('graphite', '#4d4d4d', 1.0, spline(wave(260, 40), 20, flat(0.65)), 'The same wave in pencil, a little flatter. Same one motion.'),
+    { ...step('liner', '#1a1c23', 1.3, spline(wave(370, 85), 20, flat(0.6)), 'Bigger and faster: this one comes from the shoulder, not the wrist.'), speed: 0.7 },
     step('graphite', '#4d4d4d', 1.0, spline([[90, 470], [170, 440], [250, 500], [330, 440], [410, 500], [490, 440], [570, 500], [650, 440], [710, 470]], 12, flat(0.65)), 'A quick zigzag. Keep the corners sharp.'),
-    step('bristle', '#3f6b3a', 1.0, spline([[90, 545], [400, 540], [710, 545]], 30, taperOut), 'Start firm and lift off gently, so the bristles fade out.'),
+    { ...step('liner', '#1a1c23', 1.3, spline([[90, 548], [400, 546], [710, 548]], 24, flat(0.6)), 'One flat pull to finish: a horizon under the waves.'), speed: 0.7 },
   ];
 }
 
@@ -175,7 +175,7 @@ function buildFence(): LessonStep[] {
 
 // --- Mountains (1.3 Corners) -----------------------------------------------------
 function buildMountains(): LessonStep[] {
-  const ridge = (pts: XY[], color: string, size: number, hint?: string): LessonStep => ({ ...step('graphite', color, size, spline(pts, 8, flat(0.65)), hint), speed: 0.5 });
+  const ridge = (pts: XY[], color: string, size: number, hint?: string): LessonStep => ({ ...step('graphite', color, size, polyPts(pts, 8, flat(0.65)), hint), speed: 0.5 });
   const out: LessonStep[] = [
     ridge([[60, 330], [170, 210], [260, 290], [380, 150], [500, 280], [610, 190], [740, 320]], '#8a8378', 0.9, 'The far ridge: stop at every peak, then change direction. Corners stay sharp.'),
     ridge([[60, 420], [200, 300], [320, 380], [450, 250], [580, 370], [740, 410]], '#5e5850', 1.05, 'The middle ridge, a little darker.'),
@@ -184,7 +184,7 @@ function buildMountains(): LessonStep[] {
   ];
   // snow: short ticks on the two tallest peaks
   for (const [x, y] of [[380, 150], [450, 250]] as XY[]) {
-    out.push({ ...step('graphite', '#8a8378', 0.8, spline([[x - 22, y + 26], [x - 8, y + 18], [x + 8, y + 18], [x + 22, y + 26]], 6, flat(0.5)), x === 380 ? 'Snow lines: a small zigzag just under the peak.' : undefined), speed: 0.5 });
+    out.push({ ...step('graphite', '#8a8378', 0.8, polyPts([[x - 22, y + 26], [x - 8, y + 18], [x + 8, y + 18], [x + 22, y + 26]], 6, flat(0.5)), x === 380 ? 'Snow lines: a small zigzag just under the peak.' : undefined), speed: 0.5 });
   }
   return out;
 }
@@ -272,14 +272,17 @@ function polyPts(ctrl: XY[], per = 10, prof: Profile = flat(0.6)): Point[] {
 // 3.1 Pebbles: ellipses in planes
 function buildPebbles(): LessonStep[] {
   const out: LessonStep[] = [];
-  out.push(step('graphite', '#8a847a', 0.9, spline([[40, 470], [400, 466], [760, 472]], 20, flat(0.5)), 'The ground: one light line, edge to edge.'));
-  const stones: Array<[number, number, number, number, number]> = [[150, 428, 70, 40, 0.1], [300, 442, 54, 32, -0.3], [440, 420, 84, 52, 0.15], [590, 446, 50, 30, 0.45], [700, 426, 62, 42, -0.2]];
-  stones.forEach(([x, y, rx, ry, rot], i) => out.push(step('graphite', '#4d4d4d', 1.0, ellipsePts(x, y, rx, ry, rot, 44, flat(0.6)), i === 0 ? 'A pebble is an ellipse: ghost it twice in the air, then one pass round, and close it where you began.' : i === 2 ? 'The big one. Same motion, bigger radius: it comes from the elbow, not the fingers.' : undefined)));
-  out.push(step('graphite', '#3a3a3a', 1.2, arcPts(150, 428, 72, 42, 0.3, 2.6, 16, bell), 'The shadow side: a shorter, heavier arc along the lower right of each pebble.'));
-  out.push(step('graphite', '#3a3a3a', 1.2, arcPts(440, 420, 86, 54, 0.2, 2.7, 18, bell)));
-  out.push(step('graphite', '#3a3a3a', 1.1, arcPts(700, 426, 64, 44, 0.3, 2.5, 14, bell)));
-  out.push(step('graphite', '#3a3a3a', 1.0, ellipsePts(260, 520, 40, 22, 0.1, 40, flat(0.65)), 'One small pebble in front: flatter, because you look down on it more.'));
-  out.push(step('graphite', '#3a3a3a', 1.0, ellipsePts(560, 528, 36, 18, -0.2, 40, flat(0.65))));
+  const ground = 486;
+  out.push(step('graphite', '#8a847a', 0.9, spline([[40, ground], [400, ground - 4], [760, ground + 2]], 20, flat(0.5)), 'The ground: one light line, edge to edge.'));
+  // Each pebble sits on the line: its centre is one short radius above it.
+  const stones: Array<[number, number, number, number]> = [[150, 70, 40, 0.1], [300, 54, 32, -0.3], [440, 84, 52, 0.15], [590, 50, 30, 0.45], [700, 62, 42, -0.2]];
+  const cy = (ry: number) => ground - ry - 2;
+  stones.forEach(([x, rx, ry, rot], i) => out.push(step('graphite', '#4d4d4d', 1.0, ellipsePts(x, cy(ry), rx, ry, rot, 44, flat(0.6)), i === 0 ? 'A pebble is an ellipse: ghost it twice in the air, then one pass round, and close it where you began.' : i === 2 ? 'The big one. Same motion, bigger radius: it comes from the elbow, not the fingers.' : undefined)));
+  out.push(step('graphite', '#3a3a3a', 1.2, arcPts(150, cy(40), 72, 42, 0.3, 2.6, 16, bell), 'The shadow side: a shorter, heavier arc along the lower right of each pebble.'));
+  out.push(step('graphite', '#3a3a3a', 1.2, arcPts(440, cy(52), 86, 54, 0.2, 2.7, 18, bell)));
+  out.push(step('graphite', '#3a3a3a', 1.1, arcPts(700, cy(42), 64, 44, 0.3, 2.5, 14, bell)));
+  out.push(step('graphite', '#3a3a3a', 1.0, ellipsePts(260, 528, 40, 22, 0.1, 40, flat(0.65)), 'One small pebble in front: flatter, because you look down on it more.'));
+  out.push(step('graphite', '#3a3a3a', 1.0, ellipsePts(560, 536, 36, 18, -0.2, 40, flat(0.65))));
   return out;
 }
 
@@ -342,8 +345,8 @@ function buildStones(): LessonStep[] {
   const out: LessonStep[] = [];
   const stone = (x: number, y: number, rx: number, ry: number, first: boolean) => {
     const R = frame(x, y, 0);
-    out.push(step('wash', '#d3ccbf', 0.7, spline([R(-rx * 0.9, -ry * 0.1), R(-rx * 0.3, -ry * 0.75), R(rx * 0.4, -ry * 0.7), R(rx * 0.9, 0)], 24, bell), first ? 'Pale first: the lightest wash goes down before anything darker can.' : undefined));
-    out.push(step('wash', '#c4bcae', 0.7, spline([R(-rx * 0.9, ry * 0.1), R(-rx * 0.2, ry * 0.8), R(rx * 0.5, ry * 0.7), R(rx * 0.9, 0)], 24, bell)));
+    out.push(step('wash', '#cdc2ae', 0.7, spline([R(-rx * 0.9, -ry * 0.1), R(-rx * 0.3, -ry * 0.75), R(rx * 0.4, -ry * 0.7), R(rx * 0.9, 0)], 24, bell), first ? 'Pale first: the lightest wash goes down before anything darker can.' : undefined));
+    out.push(step('wash', '#bdb09a', 0.7, spline([R(-rx * 0.9, ry * 0.1), R(-rx * 0.2, ry * 0.8), R(rx * 0.5, ry * 0.7), R(rx * 0.9, 0)], 24, bell)));
     out.push(step('wash', '#8f8677', 0.55, spline([R(rx * 0.1, ry * 0.85), R(rx * 0.6, ry * 0.6), R(rx * 0.9, 0)], 16, bell), first ? 'Now the shadow side: one darker sweep along the lower right. It could never go under the pale one later.' : undefined));
     out.push(step('liner', '#5a524a', 1.1, ellipsePts(x, y, rx, ry, 0, 48, flat(0.55)), first ? 'Last, one line around it: slow, once.' : undefined));
   };
@@ -359,10 +362,10 @@ function buildStones(): LessonStep[] {
 function buildMoon(): LessonStep[] {
   const out: LessonStep[] = [];
   const cx = 520, cy = 210;
-  out.push(step('spray', '#8f9db5', 2.0, spline([[40, 120], [400, 112], [760, 122]], 30, flat(0.6)), 'Night sky: fast spray bands, edge to edge. Speed keeps them soft.'));
+  out.push(step('spray', '#8f9db5', 2.0, spline([[40, 120], [400, 112], [760, 122]], 30, flat(0.6)), 'Night sky: one spray pass per band, edge to edge. One pass stays soft.'));
   out.push(step('spray', '#8f9db5', 2.0, spline([[40, 260], [400, 268], [760, 258]], 30, flat(0.6))));
   out.push(step('spray', '#8f9db5', 2.0, spline([[40, 400], [400, 392], [760, 402]], 30, flat(0.6))));
-  out.push(step('spray', '#c9b56a', 1.8, circle(cx, cy, 96, 40, 0, 1, flat(0.5)), 'The halo: a wide loose ring, quick and light.'));
+  out.push(step('spray', '#c9b56a', 1.8, circle(cx, cy, 96, 40, 0, 1, flat(0.5)), 'The halo: a wide loose ring, one pass, wide and light.'));
   out.push(step('spray', '#c9a94a', 1.7, circle(cx, cy, 60, 36, 0.5, 1, flat(0.85)), 'The moon: three circles, darkest first, lightest last.'));
   out.push(step('spray', '#d9bd63', 1.5, circle(cx, cy, 44, 32, 1, 1, flat(0.85))));
   out.push(step('spray', '#e8d08a', 1.3, circle(cx, cy, 28, 28, 1.5, 1, flat(0.85))));
@@ -386,6 +389,7 @@ function buildCube(): LessonStep[] {
     for (let i = 1; i < n; i++) { const t = i / n; const a: XY = [p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t], b: XY = [p3[0] + (p2[0] - p3[0]) * t, p3[1] + (p2[1] - p3[1]) * t]; out.push(step('ballpoint', '#1a1c23', 1.0, polyPts([a, b], 12, flat(0.55)), i === 1 ? hint : undefined)); }
   };
   hatch(D, C, F, Hh, 7, 'The dark face: parallel lines, evenly spaced, same speed. Look at where the line ends, not at the pen.');
+  hatch(C, F, Hh, D, 4, 'Darker means another direction: cross the dark face with a second set, not harder pressure.');
   hatch(A, D, Hh, E, 5, 'The side face: fewer lines, same rhythm.');
   hatch(A, B, C, D, 3, 'The top, lightest: two lines only.');
   out.push(step('graphite', '#8a847a', 1.0, spline([[80, 540], [400, 536], [720, 542]], 20, flat(0.5)), 'The ground line.'));
@@ -412,7 +416,7 @@ function buildKoi(): LessonStep[] {
 
 export const LESSONS: Lesson[] = [
   { id: 'fence', title: 'Fence', subtitle: 'Posts and rails', difficulty: 1, build: buildFence },
-  { id: 'waves', title: 'Warm-up waves', subtitle: 'Five strokes, five brushes', difficulty: 1, build: buildWaves },
+  { id: 'waves', title: 'Warm-up waves', subtitle: 'Five strokes, one motion each', difficulty: 1, build: buildWaves },
   { id: 'mountains', title: 'Mountains', subtitle: 'Three ridges, sharp corners', difficulty: 1, build: buildMountains },
   { id: 'kites', title: 'Kite strings', subtitle: 'Start at the dot', difficulty: 1, build: buildKites },
   { id: 'grass', title: 'Grass', subtitle: 'Twelve tapering blades', difficulty: 1, build: buildGrass },

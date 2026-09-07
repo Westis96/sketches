@@ -77,7 +77,7 @@ export const LEVELS: Level[] = [
     m('3.2', 'S-curves and spirals', 'shape', 'liner', 'Two bends in one motion.', { trainer: 'scurves', piece: 'vine' }),
     m('3.3', 'The angled tip', 'direction', 'chisel', 'The chisel changes width with direction. Use it.', { trainer: 'chiselangles', piece: 'ribbon' }),
     m('3.4', 'Lean and roll', 'direction', 'nib', 'Barrel roll and tilt turn the nib.', { trainer: 'curves', piece: 'feather', planned: true }),
-    m('3.5', 'Outline over wash', 'layering', 'wash', 'Wet first, then one clean line around it.', { trainer: 'curves', piece: 'leaf', brushLabel: 'wash + liner' }),
+    m('3.5', 'Outline over wash', 'layering', 'wash', 'Wet first, then one clean line around it.', { trainer: 'sweeps', piece: 'leaf', brushLabel: 'wash + liner' }),
   ] },
   { n: 4, theme: 'Seeing', blurb: 'Draw what is there, not what you know. None of this is tracing.', missions: [
     m('4.1', 'Blind contour', 'seeing', 'liner', 'The ink is hidden until you lift. Look at the subject, not the page.', { piece: 'hand', kind: 'seeing', planned: true }),
@@ -87,14 +87,14 @@ export const LEVELS: Level[] = [
   ] },
   { n: 5, theme: 'Value and layering', blurb: 'Washes, order, soft edges and rhythm.', missions: [
     m('5.1', 'Flat bands', 'layering', 'wash', 'Edge to edge, even pressure, no stopping.', { trainer: 'bands', piece: 'seabands' }),
-    m('5.2', 'Light before dark', 'layering', 'wash', 'Order matters: the pale wash goes down first.', { trainer: 'bands', piece: 'stones' }),
-    m('5.3', 'Spray and soft edges', 'speed', 'spray', 'Speed gives the spray its edge.', { trainer: 'ellipses', piece: 'moon' }),
+    m('5.2', 'Light before dark', 'layering', 'wash', 'Order matters: the pale wash goes down first.', { trainer: 'paledark', piece: 'stones' }),
+    m('5.3', 'Spray and soft edges', 'speed', 'spray', 'Passes build the tone; rings build a glow.', { trainer: 'sprayrings', piece: 'moon' }),
     m('5.4', 'Hatching rhythm', 'repetition', 'ballpoint', 'Parallel, evenly spaced, same speed.', { trainer: 'hatching', piece: 'cube' }),
-    m('5.5', 'Layered ridges', 'layering', 'bristle', 'Far to near, light to dark.', { trainer: 'curves', piece: 'dusk' }),
+    m('5.5', 'Layered ridges', 'layering', 'bristle', 'Far to near, light to dark.', { trainer: 'ridges', piece: 'dusk' }),
   ] },
   { n: 6, theme: 'Compose', blurb: 'Whole pieces, your brush, a reference beside you.', missions: [
-    m('6.1', 'Petals and centre', 'composition', 'wash', 'A flower from the centre out.', { trainer: 'curves', piece: 'bloom', brushLabel: 'wash + chisel' }),
-    m('6.2', 'Living line', 'composition', 'brushpen', 'One line that thickens and thins as it moves.', { trainer: 'scurves', piece: 'koi' }),
+    m('6.1', 'Petals and centre', 'composition', 'wash', 'A flower from the centre out.', { trainer: 'petals', piece: 'bloom', brushLabel: 'wash + chisel' }),
+    m('6.2', 'Living line', 'composition', 'brushpen', 'One line that thickens and thins as it moves.', { trainer: 'livinglines', piece: 'koi' }),
     m('6.3', 'From a reference', 'composition', 'liner', 'No guide. Your brush. Match the silhouette.', { piece: 'teacup', kind: 'free', planned: true }),
     m('6.4', 'Piece of the week', 'composition', 'liner', 'One piece for everyone, best score kept per week.', { planned: true }),
   ] },
@@ -146,6 +146,8 @@ export interface Trainer {
   group?: number;
   /** Hint for the repeats inside a group. */
   againHint?: string;
+  /** Colour per repeat inside a group (the layering drill: pale, then dark over it). */
+  colors?: string[];
 }
 export interface Cell { x: number; y: number; w: number; h: number }
 export type Rng = () => number;
@@ -212,12 +214,31 @@ const ellipseIn = (c: Cell, r: Rng): Point[] => {
   for (let i = 0; i <= n; i++) { const a = -Math.PI / 2 + (i / n) * Math.PI * 2; const [x, y] = R(Math.cos(a) * rx, Math.sin(a) * ry); out.push({ x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, p: 0.6 }); }
   return out;
 };
-const scurveIn = (c: Cell, r: Rng): Point[] => {
+const scurveIn = (c: Cell, r: Rng, prof: Profile = flat(0.6)): Point[] => {
   const h = c.h * 0.85, w = Math.min(c.w * 0.5, h * 0.45) * between(r, 0.7, 1);
   const x = c.x + c.w / 2, y0 = c.y + (c.h - h) / 2;
   const s = r() < 0.5 ? 1 : -1;
-  return spline([[x, y0], [x + w * s, y0 + h * 0.3], [x - w * s, y0 + h * 0.7], [x, y0 + h]], 12, flat(0.6));
+  return spline([[x, y0], [x + w * s, y0 + h * 0.3], [x - w * s, y0 + h * 0.7], [x, y0 + h]], 12, prof);
 };
+const circleIn = (c: Cell, r: Rng): Point[] => {
+  const rad = Math.min(c.w, c.h) * between(r, 0.26, 0.4), cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+  const out: Point[] = [];
+  const n = 40;
+  for (let i = 0; i <= n; i++) { const a = -Math.PI / 2 + (i / n) * Math.PI * 2; out.push({ x: Math.round((cx + Math.cos(a) * rad) * 100) / 100, y: Math.round((cy + Math.sin(a) * rad) * 100) / 100, p: 0.6 }); }
+  return out;
+};
+/** A petal sweep: from a point near the cell's foot, out and up, swelling then lifting to nothing. */
+const petalIn = (c: Cell, r: Rng): Point[] => {
+  const len = Math.min(c.w, c.h) * between(r, 0.7, 0.9);
+  const a = between(r, -1.15, -0.45) - Math.PI / 4;
+  const R = frame(c.x + c.w / 2, c.y + c.h / 2, a);
+  const bulge = len * between(r, 0.1, 0.2);
+  return spline([R(-len / 2, 0), R(0, bulge), R(len / 2, 0)], 16, petal);
+};
+/** Weight through the middle, lifting away to nothing at the tip. */
+const petal: Profile = (t) => 0.3 + 0.65 * Math.sin(t * Math.PI) * (1 - 0.35 * t);
+/** Thin in, weight through the body, thin out: the living line. */
+const living: Profile = (t) => 0.3 + 0.6 * Math.sin(t * Math.PI);
 const hatchIn = (c: Cell, r: Rng): Point[] => lineIn(c, r, 0.25, flat(0.55));
 
 const T = (t: Omit<Trainer, 'gen'> & { gen: Trainer['gen'] }): Trainer => t;
@@ -252,6 +273,18 @@ export const TRAINERS: Record<string, Trainer> = {
     gen: (c, r) => hatchIn(c, r) }),
   waves: T({ id: 'waves', title: 'Waves', hint: 'A wave without stopping.', reps: 6, tier: 'light', focus: 'shape', template: 'liner', color: '#1a1c23', size: 1.3, speed: 0.45,
     gen: (c, r) => waveIn(c, r) }),
+  sweeps: T({ id: 'sweeps', title: 'Wash sweeps', hint: 'One loose sweep at one weight. Do not go back over it.', reps: 6, tier: 'light', focus: 'confidence', template: 'wash', color: '#5d9a52', size: 0.7, speed: 0.4,
+    gen: (c, r) => curveIn(c, r, flat(0.65)) }),
+  paledark: T({ id: 'paledark', title: 'Pale, then dark', hint: 'Pale first: one flat band.', reps: 8, group: 2, againHint: 'Now the dark one over it. Same band, same weight.', tier: 'light', focus: 'pressure', template: 'wash', color: '#d9d2c5', colors: ['#d9d2c5', '#8f8677'], size: 1.1, speed: 0.4,
+    gen: (c, r) => lineIn(c, r, 0.08, flat(0.65)) }),
+  sprayrings: T({ id: 'sprayrings', title: 'Spray rings', hint: 'One loose ring, round in one pass. Wide and light.', reps: 6, tier: 'light', focus: 'shape', template: 'spray', color: '#8f9db5', size: 1.5, speed: 0.6,
+    gen: (c, r) => circleIn(c, r) }),
+  ridges: T({ id: 'ridges', title: 'Ridges', hint: 'One long ridge: light in, heavy through, light out.', reps: 6, tier: 'light', focus: 'pressure', template: 'bristle', color: '#4a6178', size: 1.4, speed: 0.45,
+    gen: (c, r) => waveIn(c, r, bell) }),
+  petals: T({ id: 'petals', title: 'Petals', hint: 'One sweep per petal: swell in the middle, lift at the tip.', reps: 8, tier: 'light', focus: 'pressure', template: 'wash', color: '#d86a8a', size: 0.65, speed: 0.45,
+    gen: (c, r) => petalIn(c, r) }),
+  livinglines: T({ id: 'livinglines', title: 'Living lines', hint: 'Thin in, weight through the body, thin out.', reps: 8, tier: 'light', focus: 'pressure', template: 'brushpen', color: '#8b2d1c', size: 0.9, speed: 0.45,
+    gen: (c, r) => scurveIn(c, r, living) }),
 };
 
 /** Builds the reps of a trainer for a run seed. A grouped trainer lays out reps / group strokes and repeats each. */
@@ -263,7 +296,7 @@ export function trainerReps(t: Trainer, seed: number): TrainerRep[] {
   cells.forEach((c, i) => {
     const points = t.gen(c, r, i);
     for (let k = 0; k < group && out.length < t.reps; k++) {
-      out.push({ points, template: t.template, color: t.color, size: t.size, speed: t.speed, hint: i === 0 && k === 0 ? t.hint : k === 1 && i === 0 ? t.againHint : k === 0 ? t.hint : undefined });
+      out.push({ points, template: t.template, color: t.colors?.[k % t.colors.length] ?? t.color, size: t.size, speed: t.speed, hint: i === 0 && k === 0 ? t.hint : k === 1 && i === 0 ? t.againHint : k === 0 ? t.hint : undefined });
     }
   });
   return out;
@@ -287,9 +320,14 @@ export function warmupReps(seed: number): TrainerRep[] {
 }
 
 /** Levels the user should see as "in progress" first: the first level with an unplayed playable mission. */
-export function nextMission(done: (id: string) => boolean): Mission | null {
-  for (const l of LEVELS) for (const x of l.missions) if (isPlayable(x) && !done(x.id)) return x;
-  return null;
+export function nextMission(done: (id: string) => boolean, after?: string | null): Mission | null {
+  const open = MISSIONS.filter((x) => isPlayable(x) && !done(x.id));
+  if (after) {
+    const k = MISSIONS.findIndex((x) => x.id === after);
+    const onward = open.find((x) => MISSIONS.indexOf(x) > k);
+    if (onward) return onward;
+  }
+  return open[0] ?? null;
 }
 
 /** Missions open in order inside a level; the first of each level is always open. */

@@ -236,8 +236,24 @@ matters for this brush → the physical cue → right vs wrong → try it**.
 - **Try it**: the last slide invites the learner to draw on the paper, unscored, then
   hands over to the trainer.
 
-Slides are content (`src/practice/teach.ts`), written for 0.1, 1.1–1.4, 2.1–2.4, 3.5,
-5.5 and 6.1. Missions without slides skip the part.
+Slides are content (`src/practice/teach.ts`), written for every playable mission.
+Missions without slides skip the part.
+
+Two rules that came out of walking every mission with screenshots:
+
+- **Lessons render the pen's pressure.** A session switches the engine to stylus
+  pressure mode for its duration (demos, reference strokes and the learner's own
+  strokes alike) and restores the sketch's setting on exit. In the default gaussian
+  mode the plot pressure is ignored and every "light vs heavy" pair draws the same
+  line, which is the opposite of what the lesson says.
+- **Captions sit over the stroke, inside the paper.** A demo's label is centred above
+  the stroke's extent and clamped into the box (a band that starts off the edge is
+  captioned over its visible part), moved below when the top is out of room, and
+  pushed down when it would land on an earlier caption.
+
+Each mission drills in its own brush: wash sweeps for 3.5, pale-then-dark bands for
+5.2, spray rings for 5.3, bristle ridges for 5.5, wash petals for 6.1 and brush-pen
+living lines for 6.2, so the drill's cue line describes the stroke under it.
 
 ## Changes to the rest of the mission
 

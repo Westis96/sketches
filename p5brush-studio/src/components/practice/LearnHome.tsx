@@ -50,6 +50,14 @@ export function LearnHome({ selectedId, instant }: { selectedId: string | null; 
     nodeRefs.current.get(next.id)?.scrollIntoView({ block: 'center' });
   }, [next]);
   const selected = selectedId ? missionById(selectedId) ?? null : null;
+  // An opened card follows the route: a link or a return from a session lands on its node.
+  useEffect(() => {
+    if (!selectedId) return;
+    const el = nodeRefs.current.get(selectedId);
+    if (!el) return;
+    scrolled.current = true;
+    el.scrollIntoView({ block: 'center', behavior: instant ? 'auto' : 'smooth' });
+  }, [selectedId, instant]);
   let index = 0;
 
   return (

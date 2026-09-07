@@ -49,10 +49,10 @@ const NIB = { template: 'nib', color: '#2c3e8f', size: 0.6 };
 const BAMBOO_NIB = { template: 'nib', color: '#2f5a33', size: 0.6 };
 const WASH = { template: 'wash', color: '#4f8a48', size: 0.62 };
 const OUTLINE = { template: 'liner', color: '#2a4a2c', size: 1.25 };
-const RIDGE_FAR = { template: 'bristle', color: '#8fa7bd', size: 1.2 };
-const RIDGE_NEAR = { template: 'bristle', color: '#3c5468', size: 1.2 };
+const RIDGE_FAR = { template: 'bristle', color: '#c0ccd8', size: 1.1 };
+const RIDGE_NEAR = { template: 'bristle', color: '#2c3f52', size: 1.4 };
 const PETAL = { template: 'wash', color: '#d86a8a', size: 0.62 };
-const CENTRE = { template: 'chisel', color: '#c9407c', size: 0.8 };
+const CENTRE = { template: 'chisel', color: '#a8285e', size: 1.15 };
 
 /** Adds a timeline at a constant pace. */
 function timed(pts: Point[], speed: number): Point[] {
@@ -109,9 +109,9 @@ const zigzagPts = (x0: number, y: number, x1: number, amp: number, n = 4): XY[] 
 const D = (base: { template: string; color: string; size: number }, points: Point[], o: Partial<DemoStroke> = {}): DemoStroke => ({ ...base, points, ...o });
 const CHISEL = { template: 'chisel', color: '#c9407c', size: 0.85 };
 const BALLPOINT = { template: 'ballpoint', color: '#1a1c23', size: 1.0 };
-const SPRAY = { template: 'spray', color: '#e6d29a', size: 1.6 };
+const SPRAY = { template: 'spray', color: '#8f9db5', size: 1.6 };
 const BRUSHPEN = { template: 'brushpen', color: '#d2452c', size: 0.95 };
-const STONE_PALE = { template: 'wash', color: '#d3ccbf', size: 0.7 };
+const STONE_PALE = { template: 'wash', color: '#cdc2ae', size: 0.7 };
 const STONE_DARK = { template: 'wash', color: '#8f8677', size: 0.6 };
 /** A closed ellipse in one pass from the top; `wobble` makes it egg-shaped and lumpy. */
 const ell = (cx: number, cy: number, rx: number, ry: number, rot = 0, wobble = 0, n = 44, prof: Profile = flat(0.6)): Point[] => {
@@ -182,8 +182,8 @@ export const TEACH: Record<string, TeachSlide[]> = {
       demos: [
         D(LINER, timed(line(120, 220, 680, 232), 0.75), { label: 'missed by a little, left alone', good: true }),
         D(LINER, timed(line(120, 400, 680, 412), 0.75), { label: 'missed, then corrected', good: false, delay: 500 }),
-        D(LINER, timed(over(line(120, 400, 680, 400), 1), 0.3), { good: false, delay: 250 }),
-        D(LINER, timed(over(line(120, 400, 680, 396), 2), 0.3), { good: false, delay: 200 }),
+        D(LINER, timed(over(line(140, 402, 690, 400), 3), 0.3), { good: false, delay: 250 }),
+        D(LINER, timed(over(line(160, 404, 700, 394), 6), 0.3), { good: false, delay: 200 }),
       ],
     },
     {
@@ -521,24 +521,27 @@ export const TEACH: Record<string, TeachSlide[]> = {
 
   '5.3': [
     {
-      title: 'Speed is the edge',
-      body: 'Spray puts down scattered dots. Move fast and they thin out into a soft haze; move slowly and they pile into a hard, dense mark. The same path drawn at two speeds gives two different edges.',
+      title: 'Passes build the tone',
+      body: 'Spray puts down scattered dots, so one pass is a haze you can see the paper through. Go over the same band again and the dots pile up into a solid mark. The number of passes sets the tone; the edge stays soft either way.',
       demos: [
-        D(SPRAY, timed(line(120, 200, 680, 200, flat(0.6), 30), 0.9), { label: 'fast: soft', good: true }),
-        D(SPRAY, timed(line(120, 400, 680, 400, flat(0.6), 30), 0.18), { label: 'slow: hard and heavy', good: false, delay: 500 }),
+        D(SPRAY, timed(line(120, 200, 680, 200, flat(0.6), 30), 0.7), { label: 'one pass: a haze', good: true }),
+        D(SPRAY, timed(line(120, 400, 680, 400, flat(0.6), 30), 0.7), { label: 'three passes: solid', delay: 500 }),
+        D(SPRAY, timed(line(680, 404, 120, 402, flat(0.6), 30), 0.7), { delay: 150 }),
+        D(SPRAY, timed(line(120, 398, 680, 400, flat(0.6), 30), 0.7), { delay: 150 }),
       ],
     },
     {
       title: 'Build a glow in rings',
-      body: 'A moon is not one filled circle. It is a wide loose ring for the halo, then smaller rings inside it, each lighter and slower, so the centre is dense and the edge fades into the sky.',
-      cue: 'Fast and wide first. Slower and smaller inside.',
+      body: 'A moon is not one filled circle. It is a wide loose ring for the halo, then smaller rings inside it, each denser than the last, so the centre is solid and the edge fades into the sky.',
+      cue: 'Wide and loose first. Smaller and denser inside.',
       demos: [
-        D({ ...SPRAY, color: '#d5d9e3', size: 1.8 }, timed(ell(400, 300, 130, 130), 0.9)),
-        D(SPRAY, timed(ell(400, 300, 80, 80), 0.6), { delay: 300 }),
-        D({ ...SPRAY, color: '#f6ecc8', size: 1.2 }, timed(ell(400, 300, 40, 40), 0.45), { delay: 300 }),
+        D({ ...SPRAY, color: '#c9b56a', size: 1.8 }, timed(ell(400, 300, 130, 130), 0.8)),
+        D({ ...SPRAY, color: '#d9bd63', size: 1.3 }, timed(ell(400, 300, 80, 80), 0.6), { delay: 300 }),
+        D({ ...SPRAY, color: '#e8d08a', size: 1.0 }, timed(ell(400, 300, 42, 42), 0.45), { delay: 300 }),
+        D({ ...SPRAY, color: '#e8d08a', size: 1.0 }, timed(ell(400, 300, 38, 38), 0.45), { delay: 150 }),
       ],
     },
-    { title: 'Your turn', body: 'Spray a fast band and a slow one here, then a moon in rings. Then the trainer.', tryIt: true },
+    { title: 'Your turn', body: 'Spray one band once and another three times here, then a moon in rings. Then the drill.', tryIt: true },
   ],
 
   '5.4': [
@@ -592,7 +595,7 @@ export const TEACH: Record<string, TeachSlide[]> = {
       demos: [
         D(WASH, timed(spline([[110, 300], [250, 180], [360, 300]], 18, bell), 0.45), { label: 'wash, then line', good: true }),
         D(OUTLINE, timed(spline([[110, 300], [250, 165], [360, 300]], 18, bell), 0.4), { good: true, delay: 500 }),
-        D(OUTLINE, timed(spline([[440, 300], [580, 165], [690, 300]], 18, bell), 0.4), { label: 'line, then wash', good: false, delay: 600 }),
+        D({ ...OUTLINE, color: '#75857a' }, timed(spline([[440, 300], [580, 165], [690, 300]], 18, bell), 0.4), { label: 'line, then wash', good: false, delay: 600 }),
         D(WASH, timed(spline([[440, 300], [580, 180], [690, 300]], 18, bell), 0.45), { good: false, delay: 500 }),
       ],
     },
@@ -616,7 +619,7 @@ export const TEACH: Record<string, TeachSlide[]> = {
     },
     {
       title: 'Your turn',
-      body: 'Lay a wash and line it here. Then the arcs trainer, and the leaf.',
+      body: 'Lay a wash and line it here. Then the sweeps drill, and the leaf.',
       tryIt: true,
     },
   ],
@@ -627,7 +630,7 @@ export const TEACH: Record<string, TeachSlide[]> = {
       body: 'Distant hills are pale and flat; near ones are dark and detailed. Paint the farthest ridge first, so each nearer ridge covers the foot of the one behind it.',
       demos: [
         D(RIDGE_FAR, timed(spline([[60, 300], [220, 230], [400, 270], [580, 210], [740, 260]], 16, bell), 0.45), { label: 'far: pale, first' }),
-        D({ ...RIDGE_NEAR, color: '#607a91' }, timed(spline([[60, 380], [200, 320], [380, 360], [600, 300], [740, 350]], 16, bell), 0.45), { delay: 400 }),
+        D({ ...RIDGE_NEAR, color: '#7d93a8', size: 1.25 }, timed(spline([[60, 380], [200, 320], [380, 360], [600, 300], [740, 350]], 16, bell), 0.45), { label: 'middle', delay: 400 }),
         D(RIDGE_NEAR, timed(spline([[60, 470], [240, 410], [420, 450], [620, 400], [740, 440]], 16, bell), 0.45), { label: 'near: dark, last', delay: 400 }),
       ],
     },
@@ -669,14 +672,15 @@ export const TEACH: Record<string, TeachSlide[]> = {
         D(PETAL, timed(spline([[400, 300], [430, 200], [410, 120]], 16, bell), 0.45)),
         D(PETAL, timed(spline([[400, 300], [520, 240], [590, 200]], 16, bell), 0.45), { delay: 200 }),
         D(PETAL, timed(spline([[400, 300], [280, 240], [210, 200]], 16, bell), 0.45), { delay: 200 }),
-        D(CENTRE, timed(line(384, 292, 416, 300, flat(0.9), 8), 0.35), { delay: 500 }),
-        D(CENTRE, timed(line(390, 310, 412, 286, flat(0.9), 8), 0.35), { delay: 200 }),
-        D(CENTRE, timed(line(386, 304, 418, 312, flat(0.9), 8), 0.35), { delay: 200 }),
+        D(CENTRE, timed(line(372, 290, 428, 302, flat(0.9), 10), 0.35), { label: 'the centre, last', delay: 500 }),
+        D(CENTRE, timed(line(384, 322, 416, 278, flat(0.9), 10), 0.35), { delay: 200 }),
+        D(CENTRE, timed(line(374, 312, 426, 288, flat(0.9), 10), 0.35), { delay: 200 }),
+        D(CENTRE, timed(line(378, 284, 422, 316, flat(0.9), 10), 0.35), { delay: 200 }),
       ],
     },
     {
       title: 'Your turn',
-      body: 'Sweep a few petals from one point here. Then the arcs trainer, and the bloom.',
+      body: 'Sweep a few petals from one point here. Then the petals drill, and the bloom.',
       tryIt: true,
     },
   ],
@@ -727,11 +731,35 @@ export function teachCue(missionId: string): string | null {
   for (let i = slides.length - 1; i >= 0; i--) if (slides[i].cue) return slides[i].cue!;
   return null;
 }
-/** Where each stroke's label goes: just above its first point, or below when that is near the top. */
-export const labelAnchor = (d: DemoStroke): { x: number; y: number } => {
-  const p = d.points[0];
-  return { x: p.x, y: p.y < 60 ? p.y + 34 : p.y - 26 };
-};
+/**
+ * Where each labelled demo's caption sits: centred above the stroke's extent, kept
+ * inside the paper (a band that starts off the edge is still captioned over the part
+ * you can see), moved below the stroke when the top is out of room, and pushed down
+ * when it would land on an earlier caption.
+ */
+export function labelAnchors(demos: DemoStroke[]): Array<{ x: number; y: number } | null> {
+  const W = 800, H = 600;
+  const boxes: Array<{ minX: number; minY: number; maxX: number; maxY: number }> = [];
+  const placed: Array<{ x: number; y: number }> = [];
+  return demos.map((d) => {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const p of d.points) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+    const box = { minX, minY, maxX, maxY };
+    const earlier = boxes.slice();
+    boxes.push(box);
+    if (!d.label) return null;
+    const x = Math.min(W - 120, Math.max(120, (Math.max(minX, 0) + Math.min(maxX, W)) / 2));
+    const above = minY - 18, below = Math.min(H - 12, maxY + 30);
+    // A spot is taken when an earlier caption sits there or an earlier stroke runs through it.
+    const taken = (y: number) =>
+      placed.some((q) => Math.abs(q.y - y) < 22 && Math.abs(q.x - x) < 270) ||
+      earlier.some((b) => y > b.minY - 8 && y < b.maxY + 8 && Math.abs(x - (b.minX + b.maxX) / 2) < (b.maxX - b.minX) / 2 + 90);
+    let y = above >= 28 && !taken(above) ? above : below;
+    for (let guard = 0; guard < 4 && taken(y); guard++) y += 24;
+    placed.push({ x, y });
+    return { x, y };
+  });
+}
 
 // The frame helper is re-exported for lesson authors who compose slides elsewhere.
 export { frame };
