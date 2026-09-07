@@ -68,7 +68,7 @@ export function BrushCursor({ canvas }: { canvas: HTMLCanvasElement | null }) {
   }, [canvas, studio, footprint, diameter]);
 
   return (
-    <div ref={ref} aria-hidden className="pointer-events-none fixed left-0 top-0 z-20 opacity-0 transition-opacity duration-100">
+    <div ref={ref} aria-hidden data-testid="brush-cursor" className="pointer-events-none fixed left-0 top-0 z-20 opacity-0 transition-opacity duration-100">
       <div
         className="rounded-full"
         style={{

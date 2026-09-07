@@ -232,7 +232,8 @@ function Shell() {
         <canvas ref={canvasRef} id="ink-canvas" className="absolute inset-0 block h-full w-full cursor-none touch-none" />
         <PracticeGuide />
       </div>
-      {sketch && <BrushCursor canvas={canvasEl} />}
+      {/* The canvas hides the system cursor, so the brush ring must follow the pointer wherever the canvas takes a pen: the sketch and every session. */}
+      {(sketch || mode === 'session') && <BrushCursor canvas={canvasEl} />}
 
       {/* Session: focused chrome, then the docked results */}
       {mode === 'session' && practice?.status === 'active' && (practice.part === 'teach' ? <TeachScreen /> : <SessionScreen />)}

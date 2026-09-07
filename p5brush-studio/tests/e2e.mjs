@@ -374,6 +374,11 @@ try {
   await page.waitForTimeout(500);
   sp = await studio((s) => s.state.practice);
   check('3.4 drills the nib in eight directions', sp?.part === 'trainer' && sp.steps.length === 8 && sp.steps.every((st) => st.template === 'nib'), JSON.stringify({ part: sp?.part, n: sp?.steps.length }));
+  // The canvas hides the system cursor; a session must show the brush ring over the paper like the sketch does.
+  await page.mouse.move(600, 420);
+  await page.waitForTimeout(250);
+  const ring = await page.evaluate(() => { const el = document.querySelector('[data-testid=brush-cursor]'); return el ? { opacity: getComputedStyle(el).opacity, cursor: getComputedStyle(document.getElementById('ink-canvas')).cursor } : null; });
+  check('a session shows the brush cursor over the paper', !!ring && ring.opacity === '1' && ring.cursor === 'none', JSON.stringify(ring));
 
   // The lesson: slides beside the paper, demos drawn by the engine, nothing scored.
   await page.goto(page.url().split('#')[0] + '#/learn/1.1');
