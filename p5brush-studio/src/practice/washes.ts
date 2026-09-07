@@ -395,9 +395,9 @@ function buildVase(): LessonStep[] {
 function buildWheat(): LessonStep[] {
   const r = rng(112), out: LessonStep[] = [];
   const tops: XY[] = [];
-  for (let x = -150; x <= 150; x += 22) {
+  for (let x = -150; x <= 150; x += 17) {
     const h = between(r, 90, 180), tx = x + between(r, -12, 12), ty = 160 - h;
-    out.push(strokeStep(B2, '#b07a2a', 1.3, wiggle(lineP(x + between(r, -3, 3), 160, tx, ty, even, 24), 3, r), x === -150 ? 'Stalks: soft pencil from the ground up, each with a hand wobble, fourteen of them.' : undefined, 0.55));
+    out.push(strokeStep(B2, '#b07a2a', 1.3, wiggle(lineP(x + between(r, -3, 3), 160, tx, ty, even, 24), 3, r), x === -150 ? 'Stalks: soft pencil from the ground up, each with a hand wobble, eighteen of them.' : undefined, 0.55));
     tops.push([tx, ty]);
   }
   tops.forEach(([tx, ty], i) => out.push(strokeStep(SPRAY, '#a8702a', 1.4, wiggle(lineP(tx, ty, tx + between(r, -6, 6), ty - 22, even, 8), 3, r), i === 0 ? 'Heads: a short spray stroke up from the top of each stalk.' : undefined, 0.5)));
@@ -426,15 +426,15 @@ function buildWinds(): LessonStep[] {
   const r = rng(114), out: LessonStep[] = [];
   out.push(shapeStep(fillSt('#dfe6ec', 110, 0.25, 'out', 0.45, 0.35, false), toBox(rectP(-155, -155, 310, 310)), 'The sky: a pale square, bleeding a little.'));
   let n = 0;
-  for (let i = 0; i < 40 && n < 12; i++) {
-    const pts = flowLine(between(r, -150, 150), between(r, -150, 150), between(r, 60, 140), 165);
-    if (pts.length < 8) continue;
+  for (let i = 0; i < 60 && n < 14; i++) {
+    const pts = flowLine(between(r, -150, 150), between(r, -150, 150), between(r, 110, 200), 165);
+    if (pts.length < 16) continue;
     out.push(strokeStep(H2, '#7fa6bd', 1.1, pts, n === 0 ? 'Breeze: hard-pencil streaks that follow the wind. Each one is a slow curve; follow its bends.' : undefined, 0.5)); n++;
   }
   n = 0;
-  for (let i = 0; i < 40 && n < 8; i++) {
-    const pts = flowLine(between(r, -150, 150), between(r, -150, 150), between(r, 40, 110), 165);
-    if (pts.length < 8) continue;
+  for (let i = 0; i < 60 && n < 10; i++) {
+    const pts = flowLine(between(r, -150, 150), between(r, -150, 150), between(r, 80, 160), 165);
+    if (pts.length < 14) continue;
     out.push(strokeStep(PEN, '#2f4a63', 1.0, pts, n === 0 ? 'Gusts: shorter pen streaks over them, darker.' : undefined, 0.5)); n++;
   }
   return out;
