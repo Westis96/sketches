@@ -166,6 +166,8 @@ condition for a level is two stars on its final Perform.
 | 4 | Seeing (new: none of these are tracing) | 4.1 Blind contour · liner · **Hand** (the ink is hidden until you lift; a digital advantage over paper)  ·  4.2 Negative space · wash · **Chair** (paint the space around it)  ·  4.3 Upside-down copy · graphite · **Portrait line** (the reference is flipped)  ·  4.4 From memory · liner · **Cup** (ten seconds to look, then it's gone) | 2★ on 4.3 |
 | 5 | Value and layering | 5.1 Flat bands · wash · **Sea bands**  ·  5.2 Light before dark · wash · **Stones**  ·  5.3 Spray and soft edges · spray · **Moon**  ·  5.4 Hatching rhythm · ballpoint · **Cube**  ·  5.5 Layered ridges · bristle · **Hills at dusk** (existing) | 2★ on 5.5 |
 | 6 | Compose | 6.1 Petals and centre · wash + chisel · **Bloom** (existing)  ·  6.2 Living line · brush pen · **Koi**  ·  6.3 From a reference · your brush · **Teacup** (freehand: silhouette match, no trace)  ·  6.4 Piece of the week · any · rotating | 2★ on 6.3 |
+| 7 | Washes I (the Sixteen Washes, first eight) | 7.1 **Red Fuji** · fills + wash + pen  ·  7.2 **Lantern Night** · fills + wash + 2H + 2B  ·  7.3 **Bamboo** · culm + leaf + 2B  ·  7.4 **Six Persimmons** · charcoal mass, crayon mass, wash, 2B  ·  7.5 **Mandala** · petal + 2H  ·  7.6 **Koi Pond** · fills + 2H  ·  7.7 **Harvest Moon** · fills + pen  ·  7.8 **Seabed Star** · fills + cpencil + 2B | 2★ on 7.8 |
+| 8 | Washes II (second eight) | 8.1 **Poppies** · pen + fills + wash  ·  8.2 **Ridge** · three fills  ·  8.3 **Marigold Vase** · fill + rotring hatch + 2B  ·  8.4 **Wheat** · 2B + spray + charcoal  ·  8.5 **Sun** · fills + 2B  ·  8.6 **Trade Winds** · fill + 2H + pen  ·  8.7 **Jellyfish** · fills + pen + 2H  ·  8.8 **Leaf** · fill + cpencil | 2★ on 8.8 |
 
 Seeing missions are scored on shape match with a wide tolerance and no direction term;
 Mission 6.3 on silhouette coverage and stroke count, brush chosen by the user. That
@@ -354,6 +356,22 @@ only as a dashed overlay, the portrait line is authored upside down and copied a
 centreline tier, and the cup stays up for a ten-second look before the guide drops to
 two dots per stroke. Seeing missions score in the `seeing` mode (shape and a wider
 band; no direction or pressure) and lock their tier. Still planned: 6.3 and 6.4.
+
+Levels 7 and 8 are the Sixteen Washes page: sixteen p5.brush pictures built with
+fills, washes, hatching, massing and flow fields. Rather than approximate them with
+strokes, the engine gained shape records: a closed polygon rendered by p5.brush's own
+`fill` (bleed and texture), `wash`, `hatch` or `mass`, committed, undone, saved, replayed
+and exported like a stroke. In a piece a shape is a step the learner traces as its outline;
+on lift the outline is dropped and the shape lands on the learner's own polygon. The
+sixteen recipes are ported one for one (`src/practice/washes.ts`): the page's random is a
+seeded generator, its `wiggle` and `waves` fields and the `murmur` noise field are baked
+into the reference points, and its brushes are the studio's: p5.brush's pen, 2H, 2B and
+cpencil as `default`-family templates (three times their reference weight, the studio's
+scale) and the page's own petal, culm and leaf tips. Drills land as shapes too (bleeding
+fills, glow and body, six inks, wedges, ridges, hatched shapes) and lesson demos draw the
+outline and let the fill land. Counts were trimmed where the page drew dozens of a thing
+(seven clouds to five, 160 wind streaks to twenty, six lanterns to three) so a piece stays
+under forty steps.
 
 ## 12. Risks and how the plan handles them
 

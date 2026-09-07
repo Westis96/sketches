@@ -53,4 +53,18 @@ declare module 'p5.brush/standalone' {
   export function noField(): void;
   export function box(): string[];
   export function scaleBrushes(f: number): void;
+  // Fills, washes, hatching and massing on polygons (shape records).
+  export function fill(color: string, opacity?: number): void;
+  export function fillBleed(strength: number, direction?: 'in' | 'out', angle?: number | null): void;
+  export function fillTexture(texture?: number, border?: number, scatter?: boolean): void;
+  export function wash(color: string, opacity?: number): void;
+  export function noWash(): void;
+  export function hatch(dist?: number, angle?: number, options?: { rand?: number | boolean; continuous?: boolean; gradient?: number | boolean }): void;
+  export function hatchStyle(brush: string, color?: string, weight?: number): void;
+  export function mass(brush: string, color: string, options?: { precision?: number; strength?: number; gradient?: number; outline?: boolean }): void;
+  export function noMass(): void;
+  export function polygon(points: Array<[number, number]>): unknown;
+  export function beginShape(curvature?: number): void;
+  export function vertex(x: number, y: number): void;
+  export function endShape(close?: boolean): void;
 }

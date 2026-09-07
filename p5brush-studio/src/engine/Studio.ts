@@ -24,6 +24,8 @@ import {
   type Segment, type StrokeRecord, type Tool, mapStylus,
 } from './records';
 import { BRUSH_TEMPLATES, matchTemplate, type BrushTemplate } from './templates';
+import type { ShapeRecord, ShapeStyle } from './records';
+import { resampleN } from '@/practice/geometry';
 import { LESSONS, LESSON_BOX, lessonById, lessonSteps, stepWidth, type LessonStep } from '@/practice/lessons';
 import { pathLength } from '@/practice/geometry';
 import { DEFAULT_SPEED, DIMS, PASS_SCORE, PERFORM_PASS_SCORE, STEP_DOWN_SCORE, praiseFor, scoreStroke, scoreTrace, starsFor, type Band, type Dim, type ScoreMode, type Tip } from '@/practice/score';
@@ -288,6 +290,71 @@ const round = (v: number, d: number) => Math.round(v * d) / d;
  * so lessons draw them, and hand them to the learner, with an opacity floor.
  */
 const LESSON_MIN_OPACITY = 14;
+/** A short hash of every lesson's content (ids, brushes, colours, point counts, shapes): the preview cache key. */
+function previewsHash(): string {
+  let h = 2166136261;
+  const mix = (str: string) => { for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); } };
+  mix(String(SAVE_VERSION));
+  for (const l of LESSONS) {
+    mix(l.id);
+    for (const st of lessonSteps(l)) { mix(st.template + st.color + st.size + st.points.length + (st.shape ? JSON.stringify(st.shape) : '')); const q = st.points[st.points.length >> 1]; if (q) mix(q.x + ',' + q.y); }
+  }
+  return (h >>> 0).toString(36);
+}
+
+/**
+ * A traced outline as a shape polygon. p5.brush bleeds each edge in proportion to
+ * its length, so a hand's dense path is simplified to its corners and curves
+ * (Ramer-Douglas-Peucker, a tolerance that grows with the shape) the way the
+ * page's own polygons are sparse: a rectangle comes back as four points.
+ */
+export function shapeOutline(points: Point[]): Point[] {
+  let pts = points;
+  if (pts.length > 2) {
+    const a = pts[0], b = pts[pts.length - 1];
+    if (Math.hypot(a.x - b.x, a.y - b.y) < 1.5) pts = pts.slice(0, -1);
+  }
+  if (pts.length > 200) pts = resampleN(pts, 200);
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) { if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x; if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y; }
+  const size = Math.max(maxX - minX, maxY - minY);
+  const eps = Math.min(6, Math.max(1.5, size * 0.012));
+  const keep = new Array<boolean>(pts.length).fill(false);
+  keep[0] = true; keep[pts.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [i0, i1] = stack.pop()!;
+    if (i1 - i0 < 2) continue;
+    const a = pts[i0], b = pts[i1];
+    const dx = b.x - a.x, dy = b.y - a.y, len = Math.hypot(dx, dy) || 1;
+    let worst = -1, worstD = 0;
+    for (let i = i0 + 1; i < i1; i++) {
+      const p = pts[i];
+      const d = len < 1e-6 ? Math.hypot(p.x - a.x, p.y - a.y) : Math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len;
+      if (d > worstD) { worstD = d; worst = i; }
+    }
+    if (worst >= 0 && worstD > eps) { keep[worst] = true; stack.push([i0, worst], [worst, i1]); }
+  }
+  let out = pts.filter((_, i) => keep[i]);
+  if (out.length > 48) out = resampleN(out, 48);
+  return out.map((p) => ({ x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100, p: p.p }));
+}
+
+/** p5.brush calls that reproduce a shape record in an exported sketch. */
+function shapeCode(rec: ShapeRecord): string[] {
+  const st = rec.style;
+  const out = [`randomSeed(${rec.seed});`, 'brush.noStroke(); brush.noFill(); brush.noHatch(); brush.noMass(); brush.noWash();'];
+  if (st.kind === 'fill') out.push(`brush.fill("${st.color}", ${fmt(st.opacity)}); brush.fillBleed(${fmt(st.bleed?.amount ?? 0.07)}, "${st.bleed?.dir ?? 'out'}"); brush.fillTexture(${fmt(st.texture?.strength ?? 0.4)}, ${fmt(st.texture?.border ?? 0.4)}, ${st.texture?.scatter ?? true});`);
+  else if (st.kind === 'wash') out.push(`brush.wash("${st.color}", ${fmt(st.opacity)});`);
+  else if (st.kind === 'hatch' && st.hatch) out.push(`brush.hatchStyle("${st.hatch.brush}", "${st.color}", ${fmt(st.hatch.weight)}); brush.hatch(${fmt(st.hatch.dist)}, ${fmt(st.hatch.angle)}, { rand: ${st.hatch.rand ?? false}, continuous: ${st.hatch.continuous ?? false}, gradient: ${st.hatch.gradient ?? false} });`);
+  else if (st.kind === 'mass' && st.mass) out.push(`brush.mass("${st.mass.brush}", "${st.color}", { precision: ${fmt(st.mass.precision ?? 0.5)}, strength: ${fmt(st.mass.strength ?? 1)}, gradient: ${fmt(st.mass.gradient ?? 0.1)}, outline: ${st.mass.outline ?? false} });`);
+  const pts = rec.points.map((p) => `[${fmt(p.x)}, ${fmt(p.y)}]`).join(', ');
+  if (st.curvature && st.curvature > 0) out.push(`brush.beginShape(${fmt(st.curvature)}); for (const [x, y] of [${pts}]) brush.vertex(x, y); brush.endShape(true);`);
+  else out.push(`brush.polygon([${pts}]);`);
+  out.push('brush.noFill(); brush.noHatch(); brush.noMass(); brush.noWash();');
+  return out;
+}
+
 const lessonSpec = (t: BrushTemplate): BrushSpec => ({ ...clone(t.spec), opacity: Math.max(t.spec.opacity, LESSON_MIN_OPACITY) });
 /** Room the session chrome (or a docked panel) takes around the lesson box, CSS px. */
 interface Dock { top?: number; right?: number; bottom?: number }
@@ -650,7 +717,9 @@ export class Studio {
   // Brush registration
   // ---------------------------------------------------------------------------
   private ensureRegistered(rec: BrushRecord, zoom = 1): string {
-    let entry = this.registry.get(rec.tipSource);
+    // p5.brush normalises the stamp family when a brush is added, so each family keeps its own entry per tip.
+    const key = rec.spec.type + '|' + rec.tipSource;
+    let entry = this.registry.get(key);
     if (!entry) {
       let name = 'studio-' + this.registry.size;
       if (this.registry.size >= POOL) {
@@ -662,7 +731,7 @@ export class Studio {
       const params: BrushParams = { ...clone(rec.spec), tip: compileTip(rec.tipSource) };
       brush.add(name, params);
       entry = { name, params, tick: 0 };
-      this.registry.set(rec.tipSource, entry);
+      this.registry.set(key, entry);
     }
     entry.tick = ++this.regTick;
     const { params } = entry, sp = rec.spec;
@@ -672,7 +741,77 @@ export class Studio {
     params.spacing = sp.spacing * zoom; params.noise = clamp(sp.noise, 0, 1);
     params.rotate = sp.rotate; params.markerTip = sp.markerTip;
     params.pressure = { type: 'gaussian', mode: 'gaussian', curve: sp.pressure.curve, min_max: sp.pressure.min_max };
+    if (sp.type !== 'custom') { (params as { sharpness?: number }).sharpness = sp.sharpness ?? 0.5; (params as { grain?: number }).grain = sp.grain ?? 0.8; }
     return entry.name;
+  }
+
+  /**
+   * p5.brush's standard brushes (used by hatching and massing) keep their own
+   * weights, which were tuned for a small canvas; the studio draws them at
+   * STD_SCALE times that, scaled with the view like its own brushes. Custom
+   * brushes are unaffected: ensureRegistered() writes their absolute params on
+   * every use.
+   */
+  private static readonly STD_SCALE = 3;
+  private stdScale = 1;
+  private applyStdScale(zoom: number) {
+    const target = Studio.STD_SCALE * zoom;
+    if (Math.abs(target - this.stdScale) < 1e-9) return;
+    brush.scaleBrushes(target / this.stdScale);
+    this.stdScale = target;
+  }
+
+  /**
+   * Renders a shape record: p5.brush's fill (watercolour bleed and texture),
+   * wash (flat), hatch or mass on the closed polygon, in the same frame as the
+   * strokes so everything composites the same way.
+   */
+  private stampShape(rec: ShapeRecord, glW: number, glH: number, dpr: number, view: View) {
+    const st = rec.style, z = view.zoom;
+    const pts = rec.points.map((p) => [p.x * z + view.x, p.y * z + view.y] as [number, number]);
+    if (pts.length < 3) return;
+    this.applyStdScale(z);
+    brush.seed(rec.seed);
+    brush.push();
+    brush.translate(-glW / 2, -glH / 2);
+    brush.scale(dpr);
+    brush.noStroke(); brush.noFill(); brush.noHatch(); brush.noMass(); brush.noWash(); brush.noField();
+    const t0 = performance.now();
+    try {
+      if (st.kind === 'fill') {
+        brush.fill(st.color, st.opacity);
+        brush.fillBleed(st.bleed?.amount ?? 0.07, st.bleed?.dir ?? 'out');
+        brush.fillTexture(st.texture?.strength ?? 0.4, st.texture?.border ?? 0.4, st.texture?.scatter ?? true);
+      } else if (st.kind === 'wash') {
+        brush.wash(st.color, st.opacity);
+      } else if (st.kind === 'hatch' && st.hatch) {
+        const h = st.hatch;
+        brush.hatchStyle(h.brush, st.color, h.weight);
+        brush.hatch(h.dist * z, h.angle, { rand: h.rand ?? false, continuous: h.continuous ?? false, gradient: h.gradient ?? false });
+      } else if (st.kind === 'mass' && st.mass) {
+        const m = st.mass;
+        brush.mass(m.brush, st.color, { precision: m.precision ?? 0.5, strength: m.strength ?? 1, gradient: m.gradient ?? 0.1, outline: m.outline ?? false });
+      }
+      if (st.curvature && st.curvature > 0) {
+        brush.beginShape(st.curvature);
+        for (const [x, y] of pts) brush.vertex(x, y);
+        brush.endShape(true);
+      } else {
+        brush.polygon(pts);
+      }
+    } finally {
+      brush.noFill(); brush.noHatch(); brush.noMass(); brush.noWash();
+      brush.pop();
+    }
+    const t1 = performance.now();
+    brush.render();
+    this.perf.plotMs += t1 - t0; this.perf.compositeMs += performance.now() - t1;
+  }
+
+  /** A brush or shape record at an arbitrary target and view (previews, thumbnails). */
+  private renderAt(rec: BrushRecord | ShapeRecord, W: number, H: number, dpr: number, view: View) {
+    if (rec.tool === 'shape') this.stampShape(rec, W, H, dpr, view);
+    else this.stampRecord(rec, W, H, dpr, view);
   }
 
   private extentFor(tipSource: string): number {
@@ -859,6 +998,15 @@ export class Studio {
   ensureLessonPreviews() {
     if (this.state.lessonPreviews || this.lessonPreviewsQueued || !this.canvas) return;
     this.lessonPreviewsQueued = true;
+    // The thumbnails are deterministic, so they are kept across visits: fills are slow to paint.
+    const cacheKey = 'p5brush-studio:previews:' + previewsHash();
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached) as Record<string, string>;
+        if (parsed && typeof parsed === 'object' && LESSONS.every((l) => typeof parsed[l.id] === 'string')) { this.lessonPreviewsQueued = false; this.emit({ lessonPreviews: parsed }); return; }
+      }
+    } catch { /* no storage: render every visit */ }
     const W = 320, H = 240;
     const c = document.createElement('canvas');
     c.width = W; c.height = H;
@@ -868,12 +1016,20 @@ export class Studio {
     const queue = [...LESSONS];
     const next = () => {
       const lesson = queue.shift();
-      if (!lesson) { this.lessonPreviewsQueued = false; this.emit({ lessonPreviews: out }); return; }
+      if (!lesson) {
+        this.lessonPreviewsQueued = false;
+        this.emit({ lessonPreviews: out });
+        try {
+          for (const k of Object.keys(localStorage)) if (k.startsWith('p5brush-studio:previews:') && k !== cacheKey) localStorage.removeItem(k);
+          localStorage.setItem(cacheKey, JSON.stringify(out));
+        } catch { /* quota or no storage: fine */ }
+        return;
+      }
       if (this.live) { requestAnimationFrame(next); return; } // never steal the engine mid-stroke
       try {
         this.renderOffscreen(c, (clearPaper) => {
           clearPaper();
-          lessonSteps(lesson).forEach((st, i) => this.stampRecord(this.stepRecord(st, i), W, H, 1, view));
+          lessonSteps(lesson).forEach((st, i) => this.renderAt(this.stepRecord(st, i), W, H, 1, view));
           out[lesson.id] = c.toDataURL('image/png');
         });
       } catch (err) {
@@ -888,7 +1044,8 @@ export class Studio {
   // Practice: missions (trainer → guided → perform) and the warm-up
   // ---------------------------------------------------------------------------
   /** Reference stroke of a step as a brush record (world units = lesson units). */
-  private stepRecord(st: LessonStep, i: number): BrushRecord {
+  private stepRecord(st: LessonStep, i: number): BrushRecord | ShapeRecord {
+    if (st.shape) return { tool: 'shape', style: st.shape, points: st.outline ?? shapeOutline(st.points), seed: 7000 + i };
     const t = BRUSH_TEMPLATES.find((x) => x.id === st.template) ?? BRUSH_TEMPLATES[0];
     return {
       tool: 'brush', spec: { ...lessonSpec(t), pressure: STYLUS_ENVELOPE }, tipSource: t.tipSource, size: st.size, color: st.color,
@@ -922,7 +1079,7 @@ export class Studio {
     const extra: Partial<Pick<PracticeState, 'seeing' | 'memoryUntil' | 'overlay'>> = {};
     if (part === 'trainer') {
       const t = TRAINERS[x.trainer!];
-      steps = trainerReps(t, seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed }));
+      steps = trainerReps(t, seed).map((r) => ({ template: r.template, color: r.color, size: r.size, points: r.points, hint: r.hint, speed: r.speed, shape: r.shape }));
       tier = t.tier; mode = 'trainer'; focus = t.focus; subtitle = 'Trainer';
     } else if (x.kind === 'seeing' && x.seeing) {
       // Seeing missions: the rule sets the guide, not the learner; the subject is the guide.
@@ -1129,7 +1286,13 @@ export class Studio {
         this.previewQueued = false;
         this.stampNextChunk(live, rec.points.length, true);
         this.endLiveMask(live);
-        this.pushRecord(rec);
+        if (d.shape) {
+          // The outline was only the pen's path: the shape lands in its place.
+          this.sgl!.blit(this.sgl!.committedTex);
+          this.commitRecord({ tool: 'shape', style: d.shape, points: shapeOutline(rec.points), seed: rec.seed });
+        } else {
+          this.pushRecord(rec);
+        }
         this.demo = null;
         this.emit({ drawing: false, demo: false });
         resolve(true);
@@ -1180,7 +1343,7 @@ export class Studio {
     if (rec.tool !== 'brush') { this.dropLastStroke(); this.syncHistory(); this.toast('Lessons are traced with the brush'); return; }
     const st = pr.steps[pr.step];
     // Seeing missions are about the shape you saw, not the line you traced: the band is wider.
-    const tol = Math.max(10, stepWidth(st) * 0.6 + 4) * (sess.mode === 'seeing' ? 1.8 : 1);
+    const tol = Math.max(10, stepWidth(st) * 0.6 + 4) * (sess.mode === 'seeing' ? 1.8 : st.shape ? 1.6 : 1);
     if (rec.points.length < 2 || pathLength(rec.points) < tol) {
       this.dropLastStroke();
       this.syncHistory();
@@ -1220,6 +1383,7 @@ export class Studio {
       return;
     }
     sess.dims[pr.step] = res.dims;
+    if (st.shape) this.replaceLastWithShape(st.shape, rec.points, 7000 + pr.step);
     this.advancePractice(res.score, feedback, { reveal, note, pressureScored });
   }
 
@@ -1307,7 +1471,7 @@ export class Studio {
       let url: string | null = null;
       this.renderOffscreen(c, (clearPaper) => {
         clearPaper();
-        for (const rec of visibleRecords(records)) if (rec.tool === 'brush') this.stampRecord(rec, W, H, 1, view);
+        for (const rec of visibleRecords(records)) if (rec.tool === 'brush' || rec.tool === 'shape') this.renderAt(rec, W, H, 1, view);
         url = c.toDataURL('image/png');
       });
       return url;
@@ -1363,7 +1527,29 @@ export class Studio {
   private renderRecord(rec: StrokeRecord) {
     if (rec.tool === 'clear') this.sgl!.blit(this.sgl!.paperTex);
     else if (rec.tool === 'eraser') this.sgl!.eraseDabs(this.eraserDabs(rec, 0));
+    else if (rec.tool === 'shape') this.stampShape(rec, this.glW, this.glH, this.dpr, this.committedView);
     else this.renderBrushStroke(rec);
+  }
+
+  /**
+   * A traced shape step: the outline stroke that was just committed makes way
+   * for the shape itself, filled on the learner's own outline.
+   */
+  private replaceLastWithShape(style: ShapeStyle, outline: Point[], seed: number) {
+    this.flushPaint();
+    const sgl = this.sgl!;
+    const n = this.strokes.length - 1;
+    const snap = this.undoSnaps.length && this.undoSnaps[this.undoSnaps.length - 1].count === n ? this.undoSnaps.pop()! : null;
+    this.strokes.pop();
+    if (snap) {
+      this.releaseTexture(sgl.committedTex);
+      sgl.committedTex = snap.tex;
+      sgl.blit(sgl.committedTex);
+      this.truncateCheckpoints(n);
+    } else {
+      this.rebuild();
+    }
+    this.commitRecord({ tool: 'shape', style, points: shapeOutline(outline), seed });
   }
 
   private cullingEnabled = true;
@@ -2477,7 +2663,7 @@ export class Studio {
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const rec of visibleRecords(this.strokes)) {
       if (rec.tool === 'clear') continue;
-      const pad = rec.tool === 'eraser' ? rec.size / 2 : rec.spec.weight * rec.size;
+      const pad = rec.tool === 'eraser' ? rec.size / 2 : rec.tool === 'shape' ? 12 : rec.spec.weight * rec.size;
       for (const p of rec.points) {
         if (p.x - pad < minX) minX = p.x - pad; if (p.x + pad > maxX) maxX = p.x + pad;
         if (p.y - pad < minY) minY = p.y - pad; if (p.y + pad > maxY) maxY = p.y + pad;
@@ -2518,7 +2704,10 @@ export class Studio {
       `  translate(-width / 2 - ${ox}, -height / 2 - ${oy});`,
     ];
     const names = new Map<string, string>();
-    for (const rec of visibleRecords(this.strokes)) {
+    const visible = visibleRecords(this.strokes);
+    if (visible.some((r) => r.tool === 'shape' && (r.style.kind === 'hatch' || r.style.kind === 'mass'))) lines.push(`  brush.scaleBrushes(${Studio.STD_SCALE});`);
+    for (const rec of visible) {
+      if (rec.tool === 'shape') { for (const l of shapeCode(rec)) lines.push('  ' + l); continue; }
       if (rec.tool !== 'brush') { lines.push('  // (eraser stroke omitted)'); continue; }
       const key = JSON.stringify(rec.spec) + '|' + rec.tipSource;
       let name = names.get(key);
@@ -2661,6 +2850,7 @@ export class Studio {
       strokes: () => visibleRecords(this.strokes),
       history: () => this.strokes,
       commit: (points: Point[], overrides?: Partial<BrushRecord>) => this.commitPoints(points, overrides),
+      commitShape: (style: ShapeStyle, points: Point[], seed = 1) => this.commitRecord({ tool: 'shape', style, points: shapeOutline(points), seed }),
       undo: this.undo, redo: this.redo, clear: this.clear, sample: this.drawSampleStroke, cancel: this.cancelStroke,
       sketchCode: () => this.sketchCode(), specCode: () => this.specCode(),
       setPaper: (p: PaperName) => this.setPaper(p), setPressureMode: (m: PressureMode) => this.setPressureMode(m),
@@ -2697,7 +2887,7 @@ export class Studio {
         previews: () => this.ensureLessonPreviews(),
         lessons: LESSONS.map((l) => l.id),
         missions: MISSIONS.map((x) => x.id),
-        steps: (id: string) => lessonSteps(lessonById(id)!).map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed })),
+        steps: (id: string) => lessonSteps(lessonById(id)!).map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed, shape: st.shape })),
         current: () => this.state.practice?.steps.map((st) => ({ template: st.template, color: st.color, size: st.size, points: st.points, speed: st.speed })) ?? null,
         score: (user: Point[], ref: Point[], tol: number) => scoreTrace(user, ref, tol),
         scoreFull: (user: Point[], ref: Point[], opts: Parameters<typeof scoreStroke>[2]) => scoreStroke(user, ref, opts),

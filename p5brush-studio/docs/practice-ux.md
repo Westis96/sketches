@@ -252,8 +252,21 @@ Two rules that came out of walking every mission with screenshots:
   pushed down when it would land on an earlier caption.
 
 Each mission drills in its own brush: wash sweeps for 3.5, pale-then-dark bands for
-5.2, spray rings for 5.3, bristle ridges for 5.5, wash petals for 6.1 and brush-pen
-living lines for 6.2, so the drill's cue line describes the stroke under it.
+5.2, spray rings for 5.3, bristle ridges for 5.5, wash petals for 6.1, brush-pen
+living lines for 6.2, and in the washes levels bleeding fills, glow-and-body, six inks,
+leaf blades, petal folds, wedges, ridges, hatched shapes, wobbly stalks, rays and wind
+streaks, so the drill's cue line describes the move under it. Reference strokes and demos
+carry their pressure as pen input; a stroke committed without `input: 'pen'` gets
+simulated pressure and the shaped tips (petal, culm, leaf) stop responding.
+
+Shape steps (Levels 7 and 8). A step with a `shape` is a fill, wash, hatch or mass on a
+closed polygon. The guide shows it as a translucent filled ghost and the road as its
+outline; the learner traces the outline (a thin pen preview in the shape's colour) back to
+the start and lifts. The outline is scored like any stroke with a wider band, then dropped,
+and the shape is committed on the learner's own polygon (closed, at most 96 vertices), so
+the picture is theirs. Demos with a `shape` do the same on the lesson paper. Lesson
+previews are cached in localStorage keyed by a hash of the lessons' content: fills are the
+slowest thing the engine paints.
 
 ## Changes to the rest of the mission
 

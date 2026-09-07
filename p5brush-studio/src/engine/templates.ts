@@ -200,6 +200,103 @@ _m.circle(0, 0, 90);`,
   _m.circle(_m.cos(a) * r, _m.sin(a) * r, 2.5 + (i % 3));
 }`,
   },
+  // --- From the Sixteen Washes studies -------------------------------------------
+  // The pens and pencils are p5.brush's own standard brushes (its `default` stamp
+  // family: grainy dots along the line) at three times their reference weight,
+  // which is the studio's scale; the three shaped tips are the page's custom brushes.
+  {
+    id: 'pen',
+    name: 'Technical pen',
+    codeName: 'pen',
+    description: "p5.brush's pen: a solid, even ink line with almost no give. Outlines, stems and birds.",
+    spec: {
+      type: 'default', weight: 0.9, scatter: 0.45, opacity: 150, spacing: 0.3, noise: 0.1, sharpness: 0.9, grain: 0.7,
+      pressure: { mode: 'gaussian', curve: [0.15, 0.2], min_max: [1.2, 1] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource: DEFAULT_TIP_SOURCE,
+    filters: { position: { mode: 'kalman', q: 0.2, r: 2 } },
+  },
+  {
+    id: 'hardpencil',
+    name: 'Hard pencil (2H)',
+    codeName: 'pencil2H',
+    description: "p5.brush's 2H: a thin, pale, grainy line that barely darkens under pressure. Guides, hoops, ripples.",
+    spec: {
+      type: 'default', weight: 0.6, scatter: 1.8, opacity: 120, spacing: 0.3, noise: 0.1, sharpness: 0.3, grain: 0.75,
+      pressure: { mode: 'gaussian', curve: [0.15, 0.2], min_max: [1.1, 0.9] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource: DEFAULT_TIP_SOURCE,
+  },
+  {
+    id: 'softpencil',
+    name: 'Soft pencil (2B)',
+    codeName: 'pencil2B',
+    description: "p5.brush's 2B: dark and grainy, the sketching pencil. Twigs, stalks, rays, outlines.",
+    spec: {
+      type: 'default', weight: 0.9, scatter: 2.25, opacity: 180, spacing: 0.3, noise: 0.1, sharpness: 0.45, grain: 0.8,
+      pressure: { mode: 'gaussian', curve: [0.1, 0.3], min_max: [1.1, 0.9] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource: DEFAULT_TIP_SOURCE,
+  },
+  {
+    id: 'cpencil',
+    name: 'Coloured pencil',
+    codeName: 'cpencil',
+    description: "p5.brush's coloured pencil: waxy and grainy, and it keeps its colour when layered. Veins and lines over wash.",
+    spec: {
+      type: 'default', weight: 1.05, scatter: 1.65, opacity: 75, spacing: 0.3, noise: 0.1, sharpness: 0.8, grain: 0.7,
+      pressure: { mode: 'gaussian', curve: [0.15, 0.2], min_max: [0.95, 1.1] },
+      rotate: 'none', markerTip: false,
+    },
+    tipSource: DEFAULT_TIP_SOURCE,
+  },
+  {
+    id: 'petal',
+    name: 'Petal marker',
+    codeName: 'petal',
+    description: 'An oval tip that turns with the stroke and swells under pressure: mandala petals, spiral fills.',
+    spec: {
+      type: 'custom', weight: 17, scatter: 1.0, opacity: 70, spacing: 0.9, noise: 0.3,
+      pressure: { mode: 'gaussian', curve: [0.45, 0.3], min_max: [0.5, 1.6] },
+      rotate: 'natural', markerTip: false,
+    },
+    tipSource:
+`_m.fill(0);
+_m.ellipse(0, 0, 100, 44);`,
+    filters: { pressure: { mode: 'kalman', q: 0.002, r: 0.005 } },
+  },
+  {
+    id: 'culm',
+    name: 'Flat culm',
+    codeName: 'culm',
+    description: 'A flat edge held across the stroke: a broad, even band with square ends, the bamboo culm.',
+    spec: {
+      type: 'custom', weight: 32, scatter: 0, opacity: 95, spacing: 0.3, noise: 0.3,
+      pressure: { mode: 'gaussian', curve: [0.3, 0.3], min_max: [1.0, 1.12] },
+      rotate: 'natural', markerTip: false,
+    },
+    tipSource:
+`_m.fill(0);
+_m.rect(-16, -50, 32, 100);`,
+  },
+  {
+    id: 'blade',
+    name: 'Leaf blade',
+    codeName: 'leaf',
+    description: 'A pointed oval that follows the stroke: thin where you land, wide through the middle, a point where you lift.',
+    spec: {
+      type: 'custom', weight: 24, scatter: 0.4, opacity: 150, spacing: 0.45, noise: 0.3,
+      pressure: { mode: 'gaussian', curve: [0.5, 0.35], min_max: [0.12, 1.3] },
+      rotate: 'natural', markerTip: false,
+    },
+    tipSource:
+`_m.fill(0);
+_m.ellipse(0, 0, 50, 100);`,
+    filters: { pressure: { mode: 'kalman', q: 0.002, r: 0.005 } },
+  },
 ];
 
 /** The template whose spec and tip match exactly, if any. */

@@ -46,6 +46,8 @@
     --lvl-4: #4b5fb3; --lvl-4-deep: #34427f;
     --lvl-5: #8a4b86; --lvl-5-deep: #61325e;
     --lvl-6: #1c1a17; --lvl-6-deep: #000;
+    --lvl-7: #a8382c; --lvl-7-deep: #74241c;
+    --lvl-8: #3f6a8a; --lvl-8-deep: #2a475d;
     --lvl: var(--accent); --lvl-deep: var(--accent-strong);
 
     /* shadcn tokens, expressed in the same palette */

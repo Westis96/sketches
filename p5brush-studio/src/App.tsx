@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { RouterProvider, createHashRouter, useLocation, useNavigate } from 'react-router';
 import { toast } from 'sonner';
 import { Studio } from '@/engine/Studio';
@@ -43,7 +43,7 @@ const router = createHashRouter([{ path: '*', element: <Shell /> }]);
 
 export default function App() {
   // Toasts without an action let the pen through: they sit over the foot of the paper.
-  const [studio] = useState(() => new Studio((msg, opts) => toast(msg, opts?.action ? opts : { ...opts, style: { pointerEvents: 'none', ...(opts?.style ?? {}) } })));
+  const [studio] = useState(() => new Studio((msg, opts) => toast(msg, opts?.action ? opts : { ...opts, style: { pointerEvents: 'none', ...((opts as { style?: CSSProperties } | undefined)?.style ?? {}) } } as typeof opts)));
   return (
     <StudioContext.Provider value={studio}>
       <TooltipProvider delayDuration={250} skipDelayDuration={400}>

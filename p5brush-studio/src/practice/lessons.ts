@@ -4,9 +4,10 @@
  * (an 800×600 box that the studio places at the world origin and zooms to fit).
  * Lessons are built lazily and cached; the geometry is fully deterministic.
  */
-import type { Point } from '@/engine/records';
+import type { Point, ShapeStyle } from '@/engine/records';
 import { BRUSH_TEMPLATES } from '@/engine/templates';
 import { bell, circle, flat, frame, spline, taperIn, taperOut, type Profile, type XY } from './geometry';
+import { WASHES } from './washes';
 
 export interface LessonStep {
   /** Template id from BRUSH_TEMPLATES. */
@@ -18,6 +19,10 @@ export interface LessonStep {
   hint?: string;
   /** Target speed in lesson units per ms (defaults to the scorer's unhurried pull). */
   speed?: number;
+  /** A filled shape: the learner traces `points` as its outline and the shape lands on lift. */
+  shape?: ShapeStyle;
+  /** The shape's own polygon vertices (sparse: a rectangle is four points). p5.brush bleeds in proportion to edge length, so the reference keeps the page's vertices; defaults to a simplified `points`. */
+  outline?: Point[];
 }
 
 export interface Lesson {
@@ -531,6 +536,7 @@ export const LESSONS: Lesson[] = [
   { id: 'portrait', title: 'Portrait line', subtitle: 'Copied upside down', difficulty: 2, build: buildPortrait },
   { id: 'cup', title: 'Cup', subtitle: 'Drawn from memory', difficulty: 2, build: buildCup },
   { id: 'koi', title: 'Koi', subtitle: 'Ten living lines', difficulty: 3, build: buildKoi },
+  ...WASHES,
 ];
 
 const cache = new Map<string, LessonStep[]>();

@@ -13,7 +13,8 @@ export interface GaussianPressure {
 }
 
 export interface BrushSpec {
-  type: 'custom';
+  /** `custom` stamps the tip drawing; the others are p5.brush's own stamp families (a tip is ignored). */
+  type: 'custom' | 'default' | 'spray' | 'marker';
   weight: number;
   scatter: number;
   opacity: number;
@@ -22,6 +23,10 @@ export interface BrushSpec {
   pressure: GaussianPressure;
   rotate: 'none' | 'natural' | 'random';
   markerTip: boolean;
+  /** Default-family brushes only (p5.brush's `definition`): how tightly the grain follows the line, 0..1. */
+  sharpness?: number;
+  /** Default-family brushes only (p5.brush's `quality`): grain density. */
+  grain?: number;
 }
 
 export type PressureMode = 'gaussian' | 'both' | 'stylus';
@@ -98,7 +103,43 @@ export interface EraserRecord {
 /** Clears the paper. Kept in the history so Clear is undoable like any stroke. */
 export interface ClearRecord { tool: 'clear' }
 
-export type StrokeRecord = BrushRecord | EraserRecord | ClearRecord;
+/**
+ * A filled shape, rendered by p5.brush's fill, wash, hatch or mass on the closed
+ * polygon of `points` (world units). Colours and opacities follow p5.brush
+ * (opacity 0..255). Traced in Learn as its outline: the fill lands on lift.
+ */
+export type ShapeKind = 'fill' | 'wash' | 'hatch' | 'mass';
+export interface ShapeStyle {
+  kind: ShapeKind;
+  color: string;
+  /** 0..255. Ignored by mass. */
+  opacity: number;
+  /** fill: watercolour bleed, 0..1, outward or inward. */
+  bleed?: { amount: number; dir: 'in' | 'out' };
+  /** fill: texture strength, border darkening, and whether the texture scatters (p5.brush fillTexture). */
+  texture?: { strength: number; border: number; scatter?: boolean };
+  /** fill: smooth the polygon with p5.brush's beginShape curvature, 0..1. */
+  curvature?: number;
+  /** hatch: line distance (world units), angle in degrees, and the hatching brush (a p5.brush standard brush name). */
+  hatch?: { dist: number; angle: number; brush: string; weight: number; gradient?: number; rand?: number; continuous?: boolean };
+  /** mass: the massing brush (a p5.brush standard brush name) and its options. */
+  mass?: { brush: string; precision?: number; strength?: number; gradient?: number; outline?: boolean };
+}
+export interface ShapeRecord {
+  tool: 'shape';
+  style: ShapeStyle;
+  points: Point[];
+  seed: number;
+}
+
+export type StrokeRecord = BrushRecord | EraserRecord | ClearRecord | ShapeRecord;
+
+/** p5.brush's standard brushes that shapes may hatch or mass with. */
+export const STD_BRUSHES = ['pen', 'rotring', '2B', 'HB', '2H', 'cpencil', 'charcoal', 'crayon', 'spray', 'marker', 'hatch_brush'] as const;
+const isShapeStyle = (st: unknown): st is ShapeStyle => {
+  const x = st as ShapeStyle;
+  return !!x && typeof x === 'object' && (x.kind === 'fill' || x.kind === 'wash' || x.kind === 'hatch' || x.kind === 'mass') && typeof x.color === 'string' && typeof x.opacity === 'number';
+};
 
 /** Records that are currently visible: everything after the last clear. */
 export function visibleRecords<T extends { tool: string }>(records: T[]): T[] {
@@ -114,6 +155,7 @@ export const SAVE_VERSION = 1;
 type SavedRecord =
   | { t: 'b'; spec: BrushSpec; tip: string; size: number; color: string; pm: PressureMode; sens: number; seed: number; pts: number[]; in?: InputKind; ch?: number[]; z?: number; tl?: number[]; fx?: PencilFx; fl?: FilterParams; tm?: number[] }
   | { t: 'e'; size: number; pts: number[] }
+  | { t: 's'; st: ShapeStyle; seed: number; pts: number[] }
   | { t: 'c' };
 
 const packPoints = (pts: Point[]) => pts.flatMap((p) => [p.x, p.y, p.p]);
@@ -141,6 +183,7 @@ export function serializeRecords(records: StrokeRecord[]): SavedRecord[] {
   return records.map((r): SavedRecord => {
     if (r.tool === 'clear') return { t: 'c' };
     if (r.tool === 'eraser') return { t: 'e', size: r.size, pts: packPoints(r.points) };
+    if (r.tool === 'shape') return { t: 's', st: r.style, seed: r.seed, pts: packPoints(r.points) };
     const saved: SavedRecord = { t: 'b', spec: r.spec, tip: r.tipSource, size: r.size, color: r.color, pm: r.pressureMode, sens: r.sensitivity, seed: r.seed, pts: packPoints(r.points) };
     if (r.input) saved.in = r.input;
     if (r.chunks) saved.ch = r.chunks;
@@ -164,6 +207,7 @@ export function deserializeRecords(saved: unknown): StrokeRecord[] {
     if (!Array.isArray(r.pts) || r.pts.length < 3) continue;
     const points = unpackPoints(r.pts, r.t === 'b' && Array.isArray(r.tl) ? r.tl : undefined, r.t === 'b' && Array.isArray(r.tm) ? r.tm : undefined);
     if (r.t === 'e') { out.push({ tool: 'eraser', size: +r.size || 24, points }); continue; }
+    if (r.t === 's') { if (isShapeStyle(r.st) && points.length >= 3) out.push({ tool: 'shape', style: r.st, seed: r.seed | 0, points }); continue; }
     if (r.t === 'b' && r.spec && typeof r.tip === 'string') {
       const rec: BrushRecord = { tool: 'brush', spec: r.spec, tipSource: r.tip, size: +r.size || 1, color: r.color || '#1a1c23', pressureMode: r.pm || 'gaussian', sensitivity: +r.sens || 1.25, seed: r.seed | 0, points };
       if (r.in === 'pen' || r.in === 'touch' || r.in === 'mouse') rec.input = r.in;
@@ -576,7 +620,7 @@ export interface Bounds { minX: number; minY: number; maxX: number; maxY: number
 const boundsCache = new WeakMap<object, Bounds>();
 
 /** Padded world-space bounds of a brush or eraser record; cached per record. */
-export function recordBounds(rec: BrushRecord | EraserRecord): Bounds {
+export function recordBounds(rec: BrushRecord | EraserRecord | ShapeRecord): Bounds {
   const cached = boundsCache.get(rec);
   if (cached) return cached;
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -584,10 +628,12 @@ export function recordBounds(rec: BrushRecord | EraserRecord): Bounds {
     if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
     if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
   }
-  // Generous: full tip footprint at peak pressure plus scatter reach.
+  // Generous: full tip footprint at peak pressure plus scatter reach; a shape's bleed and texture reach.
   const pad = rec.tool === 'eraser'
     ? rec.size / 2 + 2
-    : rec.spec.weight * rec.size * Math.max(1, rec.spec.pressure.min_max[0], rec.spec.pressure.min_max[1]) * 1.5 + rec.spec.scatter * rec.size * 3 + 4;
+    : rec.tool === 'shape'
+      ? Math.max(maxX - minX, maxY - minY) * (0.25 + 0.5 * (rec.style.bleed?.amount ?? 0)) + 12
+      : rec.spec.weight * rec.size * Math.max(1, rec.spec.pressure.min_max[0], rec.spec.pressure.min_max[1]) * 1.5 + rec.spec.scatter * rec.size * 3 + 4;
   const b = { minX: minX - pad, minY: minY - pad, maxX: maxX + pad, maxY: maxY + pad };
   boundsCache.set(rec, b);
   return b;
@@ -602,6 +648,21 @@ export const boundsIntersect = (a: Bounds, b: Bounds) => a.minX <= b.maxX && a.m
 export function specCode(spec: BrushSpec, tipSource: string, name = 'myBrush'): string {
   const p = spec.pressure;
   const tip = tipSource.split('\n').map((l) => l.trim()).filter(Boolean).map((l) => '      ' + l).join('\n');
+  if (spec.type !== 'custom') {
+    return `brush.add("${name}", {
+  type:    "${spec.type}",
+  weight:  ${fmt(spec.weight)},
+  scatter: ${fmt(spec.scatter)},
+  definition: ${fmt(spec.sharpness ?? 0.5)},
+  quality: ${fmt(spec.grain ?? 0.8)},
+  opacity: ${fmt(spec.opacity)},
+  spacing: ${fmt(spec.spacing)},
+  noise:   ${fmt(spec.noise)},
+  pressure: { mode: "gaussian", curve: [${fmt(p.curve[0])}, ${fmt(p.curve[1])}], min_max: [${fmt(p.min_max[0])}, ${fmt(p.min_max[1])}] },
+  rotate:  "${spec.rotate}",
+  markerTip: ${spec.markerTip},
+});`;
+  }
   return `brush.add("${name}", {
   type:    "custom",
   weight:  ${fmt(spec.weight)},
@@ -626,11 +687,19 @@ export function parseSpecCode(text: string): ParsedSpec {
   if (!m) throw new Error('Expected brush.add("name", { ... })');
   // eslint-disable-next-line @typescript-eslint/no-implied-eval, @typescript-eslint/no-explicit-any
   const cfg = new Function(`"use strict"; return (${m[3]});`)() as Record<string, any>;
-  if (cfg.type && cfg.type !== 'custom') throw new Error('Only type: "custom" brushes are supported here');
-  if (typeof cfg.tip !== 'function') throw new Error('Missing tip: (_m) => { ... }');
-  const bodyMatch = /^[^{]*\{([\s\S]*)\}\s*$/.exec(String(cfg.tip));
-  const tipSource = (bodyMatch ? bodyMatch[1] : '').split('\n').map((l) => l.trim()).filter(Boolean).join('\n');
+  const type = cfg.type ?? 'custom';
+  if (type !== 'custom' && type !== 'default' && type !== 'spray' && type !== 'marker') throw new Error('Only type: "custom", "default", "spray" and "marker" brushes are supported here');
+  if (type === 'custom' && typeof cfg.tip !== 'function') throw new Error('Missing tip: (_m) => { ... }');
+  const bodyMatch = typeof cfg.tip === 'function' ? /^[^{]*\{([\s\S]*)\}\s*$/.exec(String(cfg.tip)) : null;
+  const tipSource = type === 'custom' ? (bodyMatch ? bodyMatch[1] : '').split('\n').map((l) => l.trim()).filter(Boolean).join('\n') : DEFAULT_TIP_SOURCE;
   const spec = clone(DEFAULT_SPEC);
+  spec.type = type;
+  if (type !== 'custom') {
+    const sharp = cfg.sharpness ?? cfg.definition, grain = cfg.grain ?? cfg.quality;
+    if (typeof sharp === 'number') spec.sharpness = sharp;
+    if (typeof grain === 'number') spec.grain = grain;
+    spec.markerTip = false;
+  }
   for (const k of ['weight', 'scatter', 'opacity', 'spacing', 'noise'] as const) if (typeof cfg[k] === 'number') spec[k] = cfg[k];
   if (cfg.vibration !== undefined && cfg.scatter === undefined) spec.scatter = cfg.vibration;
   if (cfg.rotate) spec.rotate = cfg.rotate;

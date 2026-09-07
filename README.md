@@ -59,9 +59,16 @@ force changes light. Pen samples record altitude, azimuth and twist, and every s
 the effects and filter parameters it was drawn with, so replays never depend on the current
 settings. A record without parameters replays with the pre-filter behaviour.
 
-Eleven brush presets ship: chisel marker, fine liner, graphite pencil, watercolor wash,
-calligraphy nib, dry bristle, brush pen, flat shader, ballpoint, charcoal stick and spray
-stipple.
+Eighteen brush presets ship: chisel marker, fine liner, graphite pencil, watercolor wash,
+calligraphy nib, dry bristle, brush pen, flat shader, ballpoint, charcoal stick, spray
+stipple, and seven from the Sixteen Washes page: p5.brush's own pen, 2H, 2B and
+coloured pencil (its `default` stamp family, so a template can now be any p5.brush brush
+type, not only a custom tip) and the page's three custom tips, petal (an oval that turns
+with the stroke and swells under pressure), culm (a flat edge held across the stroke) and
+leaf (a pointed oval: thin where you land, wide through the middle, a point where you
+lift). Besides strokes the engine now renders p5.brush shapes: `brush.fill` with bleed and
+texture, flat `wash`, `hatch` and `mass` on a closed polygon, as records of their own that
+undo, save, replay and export like strokes.
 
 On a phone the same interface rearranges itself: the style panel becomes a bottom sheet
 that slides up under the dock (drag the handle down, or flick it, to close), the practice
@@ -83,7 +90,7 @@ Experimental features stay behind switches in the Pencil lab: tilt shading (a fl
 makes a wider, lighter mark), the raw-input overlay and the full per-channel filter card.
 Open the lab with `?lab=1` in the URL, or build it in with `VITE_PENCIL_LAB=1`.
 
-The course is the home: a first visit lands on the Learn path (a winding path of missions in level colours, Duolingo-style), the free canvas is the Sketch mode one tap away, and returning users land where they were last. Learn (`L`, or the graduation-cap button) is the Yousician-style path: seven levels, one
+The course is the home: a first visit lands on the Learn path (a winding path of missions in level colours, Duolingo-style), the free canvas is the Sketch mode one tap away, and returning users land where they were last. Learn (`L`, or the graduation-cap button) is the Yousician-style path: eight levels, one
 skill per mission, each mission a short lesson (slides with the idea, a cue, and demos the engine draws with the real brush, right way and wrong way), a generated drill, a guided piece traced with the
 full guide, then the same piece performed with less guide for stars. Every stroke is
 scored on shape, length, direction, pressure profile, speed and confidence (one pull, no
@@ -93,12 +100,12 @@ you improve (full, centreline, dots, blind), steps back up after two misses and 
 three-stroke loop; Perform gives three tries and a critique at the end with the
 costliest strokes, the dimension that cost the most, and your first Perform of that
 piece next to today's. A three-minute warm-up (lines, arcs, ellipses, waves) sits on the
-Path. Levels 0–5 are built, with 6.1 and 6.2 in Level 6; the last two of Level 6 show as "soon". Level 4 is not tracing: a blind contour hides the ink until you lift, the negative-space piece paints around a chair that is never drawn, the portrait is copied upside down, and the cup is drawn from a ten-second look. Short synthesized sound cues (a note per clean stroke, pitched by the score; a chime and star notes at the results; a tock when the lesson's pen lands) can be turned off from the Learn header. Routes live in the URL hash
+Path. Levels 0–5, 7 and 8 are built, with 6.1 and 6.2 in Level 6; the last two of Level 6 show as "soon". Levels 7 and 8 are the Sixteen Washes: the sixteen p5.brush studies of that page (Red Fuji, Lantern Night, Bamboo, Six Persimmons, Mandala, Koi Pond, Harvest Moon, Seabed Star, Poppies, Ridge, Marigold Vase, Wheat, Sun, Trade Winds, Jellyfish, Leaf) ported shape by shape from their recipes. A fill is a step you trace as its outline: close the shape and lift, and the wash lands, bleeding out or in as the page had it; the page's random is a seeded generator and its flow fields and hand wiggle are baked into the reference points. Each mission drills its move first (bleeding fills, glow and body, six inks, wedges, ridges, hatched shapes, wobbly stalks, streaks) and its lesson shows the fills landing on the paper. Level 4 is not tracing: a blind contour hides the ink until you lift, the negative-space piece paints around a chair that is never drawn, the portrait is copied upside down, and the cup is drawn from a ten-second look. Short synthesized sound cues (a note per clean stroke, pitched by the score; a chime and star notes at the results; a tock when the lesson's pen lands) can be turned off from the Learn header. Routes live in the URL hash
 (`#/learn`, `#/learn/1.2`, `#/learn/1.2/perform`, `#/warmup`, `#/progress`, `#/sketch`), so the
 back button works and links can be shared. Progress is local; older bests migrate. The
 plan is in `p5brush-studio/docs/curriculum-plan.md`, the UX spec in `docs/practice-ux.md`.
 
-`p5brush-studio/docs/gallery/` holds nine studies drawn by the engine itself with the lesson methods (superimposed lines, one-motion waves, corners as full stops, tapers and swells, wash before line, far to near), one per brush family; `tools/draw-gallery.mjs` regenerates them against a built studio.
+`p5brush-studio/docs/gallery/` holds nine studies drawn by the engine itself with the lesson methods (superimposed lines, one-motion waves, corners as full stops, tapers and swells, wash before line, far to near), one per brush family, plus the sixteen washes rendered from their lesson steps exactly as a perfect run draws them; `tools/draw-gallery.mjs` and `tools/render-studies.mjs` regenerate them against a built studio.
 
 WebGL2 is required. Pick one of the brush templates (chisel marker, fine liner,
 graphite pencil, watercolor wash, calligraphy nib, dry bristle, spray stipple; previews are

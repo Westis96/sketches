@@ -121,7 +121,9 @@ export function PracticeGuide() {
         )}
         <g className="guide-layer" style={{ opacity: dim ? 0.35 : 1 }}>
           {steps.map((st, i) => showGhost(i) && (
-            <path key={i} data-guide="ghost" d={d(st.points)} stroke={st.color} strokeWidth={stepWidth(st)} opacity={ghostOpacity} />
+            st.shape
+              ? <path key={i} data-guide="ghost" data-shape={st.shape.kind} d={d(st.points) + 'Z'} fill={st.shape.color} stroke={st.shape.color} strokeWidth={1.5 / z} opacity={ghostOpacity * 0.55} />
+              : <path key={i} data-guide="ghost" d={d(st.points)} stroke={st.color} strokeWidth={stepWidth(st)} opacity={ghostOpacity} />
           ))}
         </g>
         {cur && tier !== 'blind' && (

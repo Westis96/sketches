@@ -79,10 +79,10 @@ try {
   check('a first visit lands on the Learn path', (await page.evaluate(() => location.hash)) === '#/learn' && (await page.locator('[data-testid=path]').count()) === 1, await page.evaluate(() => location.hash));
   await page.evaluate(() => { location.hash = '#/sketch'; });
   // The Learn path renders every piece preview on first paint; on a software renderer that can take seconds.
-  await page.waitForSelector('[data-testid=welcome]', { timeout: 12000 }).catch(() => {});
+  await page.waitForSelector('[data-testid=welcome]', { timeout: 180000 }).catch(() => {});
   // First visit to Sketch: the welcome card shows once and stays dismissed.
   const welcomeShown = (await page.locator('[data-testid=welcome]').count()) === 1;
-  if (welcomeShown) await page.locator('text=Start drawing').click({ timeout: 2000 });
+  if (welcomeShown) await page.locator('text=Start drawing').click({ timeout: 15000 });
   await page.waitForTimeout(100);
   const welcomeGone = (await page.locator('[data-testid=welcome]').count()) === 0;
   const welcomedFlag = await page.evaluate(() => localStorage.getItem('p5brush-studio:welcomed'));
@@ -339,7 +339,7 @@ try {
 
   // The curriculum: all missions declared, Level 0–2 playable, the rest visible.
   const missions = await studio((s) => s.practice.missions);
-  check('the path declares 27 missions across 7 levels', missions.length === 27 && missions[0] === '0.1' && missions.at(-1) === '6.4', missions.join(','));
+  check('the path declares 43 missions across 9 levels', missions.length === 43 && missions[0] === '0.1' && missions.at(-1) === '8.8', missions.join(','));
 
   // Seeing missions: the subject is the guide, the rule sets the tier, and the ink of a blind contour waits for the lift.
   await page.goto(page.url().split('#')[0] + '#/learn/4.1/guided');
@@ -379,6 +379,48 @@ try {
   await page.waitForTimeout(250);
   const ring = await page.evaluate(() => { const el = document.querySelector('[data-testid=brush-cursor]'); return el ? { opacity: getComputedStyle(el).opacity, cursor: getComputedStyle(document.getElementById('ink-canvas')).cursor } : null; });
   check('a session shows the brush cursor over the paper', !!ring && ring.opacity === '1' && ring.cursor === 'none', JSON.stringify(ring));
+
+  // The Sixteen Washes: shape records (fill / wash / hatch / mass) rendered by p5.brush, and the page's own brushes.
+  await page.goto(page.url().split('#')[0] + '#/sketch');
+  await page.waitForTimeout(400);
+  await studio((s) => { s.practice.exit(); s.clear(); });
+  await page.waitForTimeout(200);
+  const washTemplates = await studio((s) => ['pen', 'hardpencil', 'softpencil', 'cpencil', 'petal', 'culm', 'blade'].every((id) => s.templates.includes(id)));
+  check('the page’s brushes ship as templates: pen, 2H, 2B, cpencil, petal, culm, leaf', washTemplates);
+  const blankInk = await checksum();
+  await studio((s) => s.commitShape({ kind: 'fill', color: '#b5452e', opacity: 200, bleed: { amount: 0.25, dir: 'out' }, texture: { strength: 0.6, border: 0.5 } }, [{ x: 200, y: 500, p: 0.6 }, { x: 400, y: 200, p: 0.6 }, { x: 620, y: 500, p: 0.6 }], 12));
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 120000 });
+  await page.waitForTimeout(200);
+  const fillInk = await checksum();
+  const fillRec = await studio((s) => { const r = s.history().at(-1); return { tool: r.tool, kind: r.style?.kind, n: r.points.length }; });
+  check('a fill shape renders through p5.brush and is a record of its own', fillRec.tool === 'shape' && fillRec.kind === 'fill' && fillRec.n === 3 && fillInk.ink > blankInk.ink, JSON.stringify({ fillRec, blank: blankInk.ink, fill: fillInk.ink }));
+  const shapeCode = await studio((s) => s.sketchCode());
+  check('the exported sketch reproduces the fill with brush.fill and brush.polygon', shapeCode.includes('brush.fill("#b5452e", 200)') && shapeCode.includes('brush.fillBleed(0.25, "out")') && shapeCode.includes('brush.polygon(['));
+  await studio((s) => s.saveNow());
+  const savedShape = await page.evaluate(() => { const raw = localStorage.getItem(window.__studio.saveKey); const j = raw ? JSON.parse(raw) : null; const recs = j?.records ?? j?.strokes ?? j; return JSON.stringify(recs).includes('"t":"s"'); });
+  check('shape records are saved with the drawing', savedShape === true);
+  await studio((s) => s.undo());
+  await page.waitForTimeout(300);
+  check('undo removes the shape and restores the paper', (await studio((s) => s.history().length)) === 0 && (await checksum()).ink === blankInk.ink, `${(await checksum()).ink} vs ${blankInk.ink}`);
+  await studio((s) => { s.applyTemplate('softpencil'); s.commit(Array.from({ length: 30 }, (_, k) => ({ x: 150 + k * 16, y: 420 + Math.sin(k / 3) * 12, p: 0.6 })), { input: 'pen', color: '#2a2420', size: 1.2 }); });
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 60000 });
+  await page.waitForTimeout(150);
+  check('a standard-family brush (p5.brush’s 2B) draws', (await checksum()).ink > blankInk.ink && (await studio((s) => s.history().at(-1).spec.type)) === 'default');
+
+  // In a washes mission a shape step is traced as its outline and lands as the fill.
+  await page.goto(page.url().split('#')[0] + '#/learn/7.7/guided');
+  await page.waitForTimeout(700);
+  sp = await studio((s) => s.state.practice);
+  check('Harvest Moon opens on a fill step with a filled ghost in the guide', sp?.part === 'guided' && sp.steps[0]?.shape?.kind === 'fill' && sp.steps[0].template === 'pen' && (await page.locator('[data-guide=ghost][data-shape=fill]').count()) >= 1, JSON.stringify({ part: sp?.part, shape: sp?.steps[0]?.shape?.kind, ghosts: await page.locator('[data-guide=ghost][data-shape]').count() }));
+  const beforeShapeStep = await studio((s) => s.history().length);
+  sp = await traceStep(0);
+  await page.waitForFunction(() => !window.__studio.isPainting(), null, { timeout: 120000 });
+  const landed = await studio((s) => s.history().map((r) => r.tool));
+  check('tracing the outline lands the fill and moves on: no outline stroke is left behind', sp.step === 1 && sp.feedback?.accepted === true && landed.length === beforeShapeStep + 1 && landed.at(-1) === 'shape', JSON.stringify({ step: sp.step, fb: sp.feedback?.score, landed }));
+  await page.goto(page.url().split('#')[0] + '#/learn/7.1/trainer');
+  await page.waitForTimeout(500);
+  sp = await studio((s) => s.state.practice);
+  check('the fill drill’s reps are closed outlines that land as bleeding fills', sp?.part === 'trainer' && sp.steps.length === 6 && sp.steps.every((st) => st.shape?.kind === 'fill' && st.points.length > 20), JSON.stringify({ n: sp?.steps.length, shapes: sp?.steps.map((st) => st.shape?.kind) }));
 
   // The lesson: slides beside the paper, demos drawn by the engine, nothing scored.
   await page.goto(page.url().split('#')[0] + '#/learn/1.1');

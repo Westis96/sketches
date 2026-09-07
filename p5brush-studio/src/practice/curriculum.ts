@@ -7,9 +7,9 @@
  * course, including missions whose piece is not built yet.
  */
 import type React from 'react';
-import type { Point } from '@/engine/records';
+import type { Point, ShapeStyle } from '@/engine/records';
 import { LESSONS, lessonById } from './lessons';
-import { bell, flat, frame, spline, taperOut, type Profile, type XY } from './geometry';
+import { bell, flat, frame, poly, spline, taperOut, type Profile, type XY } from './geometry';
 import type { Dim } from './score';
 import { hasLesson } from './teach';
 
@@ -103,6 +103,26 @@ export const LEVELS: Level[] = [
     m('6.3', 'From a reference', 'composition', 'liner', 'No guide. Your brush. Match the silhouette.', { piece: 'teacup', kind: 'free', planned: true }),
     m('6.4', 'Piece of the week', 'composition', 'liner', 'One piece for everyone, best score kept per week.', { planned: true }),
   ] },
+  { n: 7, theme: 'Washes I', blurb: 'The Sixteen Washes, first eight: fills that bleed, flat washes, massed charcoal, and the page’s own pens.', missions: [
+    m('7.1', 'Red Fuji', 'layering', 'pen', 'Sky, mountain, shadow and cloud as bleeding fills; the snow laid back in as paper-coloured wash; pen birds last.', { trainer: 'blobs', piece: 'fuji', brushLabel: 'fills + wash + pen' }),
+    m('7.2', 'Lantern Night', 'layering', 'pen', 'A plum night, a rose horizon, and three lanterns: glow, body, highlight, hoops, cap, foot and tassel.', { trainer: 'glows', piece: 'lanterns', brushLabel: 'fills + wash + 2H + 2B' }),
+    m('7.3', 'Bamboo', 'pressure', 'culm', 'Culms in square-ended segments with the flat tip; every leaf one thin-wide-point sweep of the blade.', { trainer: 'blades', piece: 'grove', brushLabel: 'culm + leaf + 2B' }),
+    m('7.4', 'Six Persimmons', 'shape', 'softpencil', 'After Mu Qi: six rounds, each filled a different way, from massed charcoal to a bare outline.', { trainer: 'inks', piece: 'persimmons', brushLabel: 'charcoal + crayon + wash + 2B' }),
+    m('7.5', 'Mandala', 'repetition', 'petal', 'Twelve folds of three petal strokes each, round a gold centre that bleeds.', { trainer: 'petalmarks', piece: 'mandala', brushLabel: 'petal + 2H' }),
+    m('7.6', 'Koi Pond', 'composition', 'pen', 'Three koi as bleeding fills in a pale pond, with hard-pencil ripples that sway.', { trainer: 'blobs', piece: 'pond', brushLabel: 'fills + 2H' }),
+    m('7.7', 'Harvest Moon', 'layering', 'pen', 'A near-flat indigo square, a moon that bleeds, four pen clouds.', { trainer: 'blobs', piece: 'harvest', brushLabel: 'fills + pen' }),
+    m('7.8', 'Seabed Star', 'shape', 'cpencil', 'Five wedges of wash from the centre, veined in coloured pencil.', { trainer: 'wedges', piece: 'seastar', brushLabel: 'fills + cpencil + 2B' }),
+  ] },
+  { n: 8, theme: 'Washes II', blurb: 'The Sixteen Washes, second eight: poppies, ridges, a hatched vase, wheat, a sun, wind, a jellyfish and a leaf.', missions: [
+    m('8.1', 'Poppies', 'composition', 'pen', 'Wobbling pen stems, then heads as red bleeds with a darker heart and a black wash centre.', { trainer: 'blobs', piece: 'poppies', brushLabel: 'pen + fills + wash' }),
+    m('8.2', 'Ridge', 'layering', 'pen', 'Three jagged ridgelines, each a darker wash bleeding out over the last.', { trainer: 'ridgefills', piece: 'ridge', brushLabel: 'three fills' }),
+    m('8.3', 'Marigold Vase', 'repetition', 'pen', 'A vase that hatches itself with a gradient, holding three marigolds on pencil stems.', { trainer: 'hatchfills', piece: 'vase', brushLabel: 'fill + rotring hatch + 2B' }),
+    m('8.4', 'Wheat', 'repetition', 'softpencil', 'Fourteen soft-pencil stalks with a hand wobble, a spray head on each.', { trainer: 'stalks', piece: 'wheat', brushLabel: '2B + spray + charcoal' }),
+    m('8.5', 'Sun', 'direction', 'softpencil', 'Two stacked warm bleeds and sixteen pencil rays.', { trainer: 'rays', piece: 'sun', brushLabel: 'fills + 2B' }),
+    m('8.6', 'Trade Winds', 'line', 'hardpencil', 'Streaks released into a noise field, in two blues over a pale sky.', { trainer: 'streaks', piece: 'winds', brushLabel: 'fill + 2H + pen' }),
+    m('8.7', 'Jellyfish', 'shape', 'pen', 'A lilac bell with rounded corners over a deeper dome, trailing pen tentacles.', { trainer: 'blobs', piece: 'jelly', brushLabel: 'fills + pen + 2H' }),
+    m('8.8', 'Leaf', 'shape', 'cpencil', 'One leaf of green wash, a midrib and six pairs of pencil veins.', { trainer: 'ticks', piece: 'washleaf', brushLabel: 'fill + cpencil' }),
+  ] },
 ];
 
 export const MISSIONS: Mission[] = LEVELS.flatMap((l) => l.missions);
@@ -131,6 +151,8 @@ export interface TrainerRep {
   /** Target speed in lesson units per ms. */
   speed: number;
   hint?: string;
+  /** A filled shape: the rep is traced as its outline. */
+  shape?: ShapeStyle;
 }
 export interface Trainer {
   id: string;
@@ -153,6 +175,8 @@ export interface Trainer {
   againHint?: string;
   /** Colour per repeat inside a group (the layering drill: pale, then dark over it). */
   colors?: string[];
+  /** Shape drills: the style each rep lands as, cycling by rep index (null = the rep stays a stroke). */
+  shapes?: Array<ShapeStyle | null>;
 }
 export interface Cell { x: number; y: number; w: number; h: number }
 export type Rng = () => number;
@@ -240,11 +264,60 @@ const petalIn = (c: Cell, r: Rng): Point[] => {
   const bulge = len * between(r, 0.1, 0.2);
   return spline([R(-len / 2, 0), R(0, bulge), R(len / 2, 0)], 16, petal);
 };
+/** A fill style for shape drills. */
+const FILL = (color: string, opacity: number, amount: number, dir: 'in' | 'out', strength: number, border: number): ShapeStyle => ({ kind: 'fill', color, opacity, bleed: { amount, dir }, texture: { strength, border } });
 /** Weight through the middle, lifting away to nothing at the tip. */
 const petal: Profile = (t) => 0.3 + 0.65 * Math.sin(t * Math.PI) * (1 - 0.35 * t);
 /** Thin in, weight through the body, thin out: the living line. */
 const living: Profile = (t) => 0.3 + 0.6 * Math.sin(t * Math.PI);
 const hatchIn = (c: Cell, r: Rng): Point[] => lineIn(c, r, 0.25, flat(0.55));
+/** Land thin, swell, lift to a point: a leaf blade. */
+const blade: Profile = (t) => 0.1 + 0.85 * Math.sin(t * Math.PI);
+/** A short grain tick: from the cell's centre out and up, at a steady angle. */
+const tickIn = (c: Cell, r: Rng): Point[] => {
+  const len = Math.min(c.w, c.h) * between(r, 0.45, 0.6);
+  const a = -Math.PI / 2 + (r() < 0.5 ? -0.62 : 0.62) + between(r, -0.08, 0.08);
+  const x0 = c.x + c.w / 2 - Math.cos(a) * len * 0.5, y0 = c.y + c.h / 2 - Math.sin(a) * len * 0.5;
+  return spline([[x0, y0], [x0 + Math.cos(a) * len * 0.5, y0 + Math.sin(a) * len * 0.5], [x0 + Math.cos(a) * len, y0 + Math.sin(a) * len]], 8, taperOut);
+};
+/** One ray of eight: from the cell's centre outward at the i-th eighth of the circle. */
+const rayIn = (c: Cell, r: Rng, i: number): Point[] => {
+  const len = Math.min(c.w, c.h) * between(r, 0.36, 0.44);
+  const a = -Math.PI / 2 + (i % 8) * (Math.PI / 4);
+  const cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+  return spline([[cx, cy], [cx + Math.cos(a) * len * 0.5, cy + Math.sin(a) * len * 0.5], [cx + Math.cos(a) * len, cy + Math.sin(a) * len]], 10, flat(0.6));
+};
+/** A closed loose round, traced back to its start: the outline of a fill. */
+const blobIn = (c: Cell, r: Rng, wobble = 0.3, squash = 0.85): Point[] => {
+  const rad = Math.min(c.w, c.h) * between(r, 0.3, 0.4), cx = c.x + c.w / 2, cy = c.y + c.h / 2;
+  const f1 = between(r, 0, Math.PI * 2), f2 = between(r, 0, Math.PI * 2), a0 = between(r, 0, Math.PI * 2), sq = between(r, squash, 1);
+  const n = 36, out: Point[] = [];
+  for (let i = 0; i <= n; i++) { const a = a0 + (i / n) * Math.PI * 2; const k = 1 + wobble * 0.2 * (0.6 * Math.sin(2 * a + f1) + 0.4 * Math.sin(3 * a + f2)); out.push({ x: Math.round((cx + Math.cos(a) * rad * k) * 100) / 100, y: Math.round((cy + Math.sin(a) * rad * k * sq) * 100) / 100, p: 0.6 }); }
+  return out;
+};
+/** A long triangle from a point near the cell's foot, traced round and back: one petal of the seabed star. */
+const wedgeIn = (c: Cell, r: Rng): Point[] => {
+  const cx = c.x + c.w / 2, base = c.y + c.h * 0.9, h = c.h * between(r, 0.7, 0.8), hw = Math.min(c.w * 0.3, h * 0.36);
+  const tilt = between(r, -0.25, 0.25);
+  const R = frame(cx, base, tilt);
+  return poly([R(0, 0), R(-hw, -h), R(hw, -h), R(0, 0)], 14, flat(0.6));
+};
+/** A jagged ridge: along a broken crest, down the side and back along the foot. */
+const ridgeIn = (c: Cell, r: Rng): Point[] => {
+  const x0 = c.x + c.w * 0.08, x1 = c.x + c.w * 0.92, foot = c.y + c.h * 0.92, base = c.y + c.h * between(r, 0.45, 0.6), amp = c.h * 0.3;
+  const ctrl: XY[] = [[x0, foot]];
+  const n = 8;
+  for (let i = 0; i <= n; i++) ctrl.push([x0 + ((x1 - x0) * i) / n, base - between(r, 0, amp)]);
+  ctrl.push([x1, foot], [x0, foot]);
+  return poly(ctrl, 5, flat(0.6));
+};
+/** A wheat stalk: up from the cell's foot with a hand's wobble. */
+const stalkIn = (c: Cell, r: Rng): Point[] => {
+  const x0 = c.x + c.w / 2 + between(r, -c.w * 0.15, c.w * 0.15), x1 = x0 + between(r, -c.w * 0.12, c.w * 0.12);
+  const pts = poly([[x0, c.y + c.h * 0.95], [x1, c.y + c.h * between(r, 0.05, 0.25)]], 24, flat(0.6));
+  const f1 = between(r, 0, 6), f2 = between(r, 0, 6);
+  return pts.map((p: Point, i: number) => ({ ...p, x: Math.round((p.x + 4.8 * (0.6 * Math.sin(i * 0.7 + f1) + 0.4 * Math.sin(i * 2.1 + f2))) * 100) / 100 }));
+};
 
 const T = (t: Omit<Trainer, 'gen'> & { gen: Trainer['gen'] }): Trainer => t;
 export const TRAINERS: Record<string, Trainer> = {
@@ -290,6 +363,30 @@ export const TRAINERS: Record<string, Trainer> = {
     gen: (c, r) => waveIn(c, r, bell) }),
   petals: T({ id: 'petals', title: 'Petals', hint: 'One sweep per petal: swell in the middle, lift at the tip.', reps: 8, tier: 'light', focus: 'pressure', template: 'wash', color: '#d86a8a', size: 0.65, speed: 0.45,
     gen: (c, r) => petalIn(c, r) }),
+  blades: T({ id: 'blades', title: 'Leaf blades', hint: 'Land thin, swell through the middle, lift to a point.', reps: 8, tier: 'light', focus: 'pressure', template: 'blade', color: '#2f5a33', size: 0.8, speed: 0.55,
+    gen: (c, r) => curveIn(c, r, blade) }),
+  petalmarks: T({ id: 'petalmarks', title: 'Petal sweeps', hint: 'From the centre out: swell, then lift at the rim.', reps: 8, tier: 'light', focus: 'pressure', template: 'petal', color: '#d8402e', size: 0.95, speed: 0.45,
+    gen: (c, r) => petalIn(c, r) }),
+  ticks: T({ id: 'ticks', title: 'Grain ticks', hint: 'Short and quick, pressing at the start: same length, same angle, every time.', reps: 12, tier: 'dots', focus: 'shape', template: 'cpencil', color: '#c4922c', size: 1.15, speed: 0.65,
+    gen: (c, r) => tickIn(c, r) }),
+  rays: T({ id: 'rays', title: 'Eight rays', hint: 'Start at the dot and pull outward. Each rep is the next eighth of the circle.', reps: 8, tier: 'dots', focus: 'direction', template: 'softpencil', color: '#9c4732', size: 0.9, speed: 0.6,
+    gen: (c, r, i) => rayIn(c, r, i) }),
+  blobs: T({ id: 'blobs', title: 'Bleeding fills', hint: 'Trace the round in one go, back to where you started, and lift. The wash fills it and bleeds outward.', reps: 6, tier: 'light', focus: 'shape', template: 'pen', color: '#b5452e', size: 0.7, speed: 0.5,
+    gen: (c, r) => blobIn(c, r), shapes: [FILL('#b5452e', 200, 0.25, 'out', 0.6, 0.5), FILL('#9fc3d6', 100, 0.35, 'out', 0.45, 0.3), FILL('#e8792f', 150, 0.4, 'out', 0.55, 0.5)] }),
+  glows: T({ id: 'glows', title: 'Glow and body', hint: 'A loose round that bleeds far out: the glow. Then a tighter one that bleeds inward: the body.', reps: 6, tier: 'light', focus: 'shape', template: 'pen', color: '#f2a544', size: 0.7, speed: 0.5,
+    gen: (c, r, i) => blobIn(c, r, i % 2 ? 0.1 : 0.3, i % 2 ? 0.7 : 0.9), shapes: [FILL('#f2a544', 90, 0.55, 'out', 0.5, 0.3), FILL('#f5b942', 215, 0.18, 'in', 0.45, 0.7)] }),
+  inks: T({ id: 'inks', title: 'Six inks', hint: 'The same round six ways: massed charcoal, a dark fill, crayon, a flat wash, a pencil outline, an orange bleed.', reps: 6, tier: 'light', focus: 'shape', template: 'softpencil', color: '#2a2420', size: 1.1, speed: 0.45,
+    gen: (c, r) => blobIn(c, r, 0.1, 0.9), shapes: [{ kind: 'mass', color: '#2a2420', opacity: 255, mass: { brush: 'charcoal', precision: 0.5, strength: 1, gradient: 0.2, outline: true } }, FILL('#2a2420', 200, 0.15, 'in', 0.6, 0.6), { kind: 'mass', color: '#4a4340', opacity: 255, mass: { brush: 'crayon', precision: 0.7, strength: 0.7, gradient: 0.4 } }, { kind: 'wash', color: '#6b625c', opacity: 110 }, null, FILL('#c9582a', 150, 0.3, 'out', 0.6, 0.5)] }),
+  wedges: T({ id: 'wedges', title: 'Petal wedges', hint: 'A long triangle from the point: up one side, across the top, back down. It fills and bleeds.', reps: 6, tier: 'light', focus: 'shape', template: 'pen', color: '#ef9a80', size: 0.7, speed: 0.5,
+    gen: (c, r) => wedgeIn(c, r), shapes: [FILL('#ef9a80', 150, 0.42, 'out', 0.62, 0.4), FILL('#d75f4c', 120, 0.3, 'in', 0.5, 0.5)] }),
+  ridgefills: T({ id: 'ridgefills', title: 'Ridges', hint: 'Along the broken crest, corners sharp, down the side and back along the foot.', reps: 4, tier: 'light', focus: 'shape', template: 'pen', color: '#6f8aa6', size: 0.7, speed: 0.45,
+    gen: (c, r) => ridgeIn(c, r), shapes: [FILL('#b7c6d6', 110, 0.3, 'out', 0.55, 0.45), FILL('#6f8aa6', 130, 0.25, 'out', 0.55, 0.45), FILL('#2f4a63', 150, 0.2, 'out', 0.55, 0.45)] }),
+  hatchfills: T({ id: 'hatchfills', title: 'Hatched shapes', hint: 'Trace the shape once round. It hatches itself, dense on one side and thinning toward the light.', reps: 4, tier: 'light', focus: 'shape', template: 'pen', color: '#2b3a55', size: 0.7, speed: 0.45,
+    gen: (c, r) => blobIn(c, r, 0.2, 0.7), shapes: [{ kind: 'hatch', color: '#2b3a55', opacity: 255, hatch: { dist: 5, angle: 60, brush: 'rotring', weight: 0.8, gradient: 0.6, rand: 0.1, continuous: true } }] }),
+  stalks: T({ id: 'stalks', title: 'Wobbly stalks', hint: 'Soft pencil from the ground up. Let the hand wobble; do not fight it.', reps: 8, tier: 'light', focus: 'shape', template: 'softpencil', color: '#b07a2a', size: 1.3, speed: 0.55,
+    gen: (c, r) => stalkIn(c, r) }),
+  streaks: T({ id: 'streaks', title: 'Wind streaks', hint: 'A slow S-curve that follows the wind. Even speed all the way.', reps: 8, tier: 'light', focus: 'shape', template: 'hardpencil', color: '#7fa6bd', size: 1.1, speed: 0.5,
+    gen: (c, r) => scurveIn(c, r, flat(0.6)) }),
   livinglines: T({ id: 'livinglines', title: 'Living lines', hint: 'Thin in, weight through the body, thin out.', reps: 8, tier: 'light', focus: 'pressure', template: 'brushpen', color: '#8b2d1c', size: 0.9, speed: 0.45,
     gen: (c, r) => scurveIn(c, r, living) }),
 };
@@ -303,7 +400,8 @@ export function trainerReps(t: Trainer, seed: number): TrainerRep[] {
   cells.forEach((c, i) => {
     const points = t.gen(c, r, i);
     for (let k = 0; k < group && out.length < t.reps; k++) {
-      out.push({ points, template: t.template, color: t.colors?.[k % t.colors.length] ?? t.color, size: t.size, speed: t.speed, hint: i === 0 && k === 0 ? t.hint : k === 1 && i === 0 ? t.againHint : k === 0 ? t.hint : undefined });
+      const shape = t.shapes ? t.shapes[i % t.shapes.length] ?? undefined : undefined;
+      out.push({ points, template: t.template, color: shape?.color ?? t.colors?.[k % t.colors.length] ?? t.color, size: t.size, speed: t.speed, hint: i === 0 && k === 0 ? t.hint : k === 1 && i === 0 ? t.againHint : k === 0 ? t.hint : undefined, shape });
     }
   });
   return out;
