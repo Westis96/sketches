@@ -1,35 +1,70 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
   <head>
-    
-    <meta charset="UTF-8">
-    <title>Untitled</title>
-
-    <script src="libraries/p5.js" type="text/javascript"></script>
-    
-    <script src="libraries/p5.dom.js" type="text/javascript"></script>
-    <script src="libraries/p5.sound.js" type="text/javascript"></script>
-
-    <script src="paddle.js" type="text/javascript"></script>
-    <script src="brick.js" type="text/javascript"></script>
-    <script src="ball.js" type="text/javascript"></script>
-
-    <script src="sketch.js" type="text/javascript"></script>
-
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Sketches</title>
     <style>
+      :root {
+        color-scheme: light dark;
+        --paper: #efece6;
+        --ink: #1c1a17;
+        --muted: #6f6a61;
+        --line: rgba(28, 24, 18, 0.14);
+        --accent: #b5451b;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --paper: #171614;
+          --ink: #f2efe9;
+          --muted: #a09a90;
+          --line: rgba(242, 239, 233, 0.16);
+          --accent: #e0733f;
+        }
+      }
+      * { box-sizing: border-box; }
       body {
-        padding: 0; margin: 0;
+        margin: 0;
+        padding: 48px 16px 64px;
+        background: var(--paper);
+        color: var(--ink);
+        font: 16px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       }
-      canvas {
-        vertical-align: top;
+      main { max-width: 42rem; margin: 0 auto; }
+      h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -0.01em; }
+      p.lede { margin: 0 0 32px; color: var(--muted); }
+      a.card {
+        display: block;
+        padding: 18px 20px;
+        margin-bottom: 14px;
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        text-decoration: none;
+        color: inherit;
       }
-      html {
-        font-family: monospace;
-        color: #333;
-        font-size: 20px;
-      }
+      a.card:hover { border-color: var(--accent); }
+      a.card h2 { margin: 0 0 4px; font-size: 17px; color: var(--accent); }
+      a.card p { margin: 0; color: var(--muted); font-size: 14.5px; }
+      footer { margin-top: 32px; font-size: 14px; color: var(--muted); }
+      footer a { color: inherit; }
     </style>
   </head>
   <body>
+    <main>
+      <h1>Sketches</h1>
+      <p class="lede">Two p5.js projects live in this repository.</p>
+
+      <a class="card" href="brickbreaker/">
+        <h2>BrickBreaker CUBED &rarr;</h2>
+        <p>A brick breaker with a twist, based on the Coding Train original. Runs straight from this page.</p>
+      </a>
+
+      <a class="card" href="https://github.com/Westis96/sketches/tree/master/p5brush-studio">
+        <h2>p5.brush Realtime Studio &rarr;</h2>
+        <p>A freehand drawing canvas rendered by the real p5.brush engine, with a drawing course beside it. Needs a build step, so the source and instructions are on GitHub.</p>
+      </a>
+
+      <footer><a href="https://github.com/Westis96/sketches">Westis96/sketches</a> on GitHub</footer>
+    </main>
   </body>
 </html>
